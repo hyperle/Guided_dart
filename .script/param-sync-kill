@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+PATTERN='python3 .*/Host_tools/guidance/guidance_param_sync\.py.*--watch'
+
+if ! pgrep -af "${PATTERN}" >/dev/null; then
+    echo "param-sync watcher is not running"
+    exit 0
+fi
+
+pkill -f "${PATTERN}"
+echo "param-sync watcher stopped"

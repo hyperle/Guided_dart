@@ -1,0 +1,205 @@
+# Shared guidance frame and parameter protocol definition.
+# Host-side tools read this schema directly.
+# STM32 consumes the generated header emitted from the same schema.
+
+frame:
+  header_0: 165
+  header_1: 90
+
+message_types:
+  guidance_telemetry:
+    macro: ESP32_LINK_MESSAGE_TYPE_GUIDANCE_TELEMETRY
+    value: 1
+  param_command:
+    macro: ESP32_LINK_MESSAGE_TYPE_PARAM_COMMAND
+    value: 2
+  param_ack:
+    macro: ESP32_LINK_MESSAGE_TYPE_PARAM_ACK
+    value: 3
+
+param_status:
+  applied:
+    macro: ESP32_LINK_PARAM_STATUS_APPLIED
+    value: 0
+  unknown_key:
+    macro: ESP32_LINK_PARAM_STATUS_UNKNOWN_KEY
+    value: 1
+  invalid_value:
+    macro: ESP32_LINK_PARAM_STATUS_INVALID_VALUE
+    value: 2
+  invalid_length:
+    macro: ESP32_LINK_PARAM_STATUS_INVALID_LENGTH
+    value: 3
+  relay_failed:
+    macro: ESP32_LINK_PARAM_STATUS_RELAY_FAILED
+    value: 4
+  relay_timeout:
+    macro: ESP32_LINK_PARAM_STATUS_RELAY_TIMEOUT
+    value: 5
+
+params:
+  green_light.setpoint_x:
+    macro: ESP32_LINK_PARAM_KEY_SETPOINT_X
+    value_type: u32
+    key: 1
+  green_light.setpoint_y:
+    macro: ESP32_LINK_PARAM_KEY_SETPOINT_Y
+    value_type: u32
+    key: 2
+  # Legacy compatibility keys. These are forwarded to OpenMV as aliases.
+  green_light.detector_min_green_channel:
+    macro: ESP32_LINK_PARAM_KEY_DETECTOR_MIN_GREEN_CHANNEL
+    value_type: u32
+    key: 16
+  green_light.detector_min_green_dominance:
+    macro: ESP32_LINK_PARAM_KEY_DETECTOR_MIN_GREEN_DOMINANCE
+    value_type: u32
+    key: 17
+  green_light.detector_min_blob_pixels:
+    macro: ESP32_LINK_PARAM_KEY_DETECTOR_MIN_BLOB_PIXELS
+    value_type: u32
+    key: 18
+  green_light.detector_max_blob_pixels:
+    macro: ESP32_LINK_PARAM_KEY_DETECTOR_MAX_BLOB_PIXELS
+    value_type: u32
+    key: 19
+  green_light.detector_small_blob_pixels:
+    macro: ESP32_LINK_PARAM_KEY_DETECTOR_SMALL_BLOB_PIXELS
+    value_type: u32
+    key: 20
+  green_light.detector_min_fill_ratio_small_x100:
+    macro: ESP32_LINK_PARAM_KEY_DETECTOR_MIN_FILL_RATIO_SMALL_X100
+    value_type: u32
+    key: 21
+  green_light.detector_min_fill_ratio_large_x100:
+    macro: ESP32_LINK_PARAM_KEY_DETECTOR_MIN_FILL_RATIO_LARGE_X100
+    value_type: u32
+    key: 22
+  green_light.detector_track_window_radius_px:
+    macro: ESP32_LINK_PARAM_KEY_DETECTOR_TRACK_WINDOW_RADIUS_PX
+    value_type: u32
+    key: 23
+  green_light.detector_center_filter_gain_x100:
+    macro: ESP32_LINK_PARAM_KEY_DETECTOR_CENTER_FILTER_GAIN_X100
+    value_type: u32
+    key: 24
+  green_light.detector_max_missed_frames:
+    macro: ESP32_LINK_PARAM_KEY_DETECTOR_MAX_MISSED_FRAMES
+    value_type: u32
+    key: 25
+  green_light.openmv_threshold_l_min:
+    macro: ESP32_LINK_PARAM_KEY_OPENMV_THRESHOLD_L_MIN
+    value_type: u32
+    key: 48
+  green_light.openmv_threshold_l_max:
+    macro: ESP32_LINK_PARAM_KEY_OPENMV_THRESHOLD_L_MAX
+    value_type: u32
+    key: 49
+  green_light.openmv_threshold_a_min:
+    macro: ESP32_LINK_PARAM_KEY_OPENMV_THRESHOLD_A_MIN
+    value_type: u32
+    key: 50
+  green_light.openmv_threshold_a_max:
+    macro: ESP32_LINK_PARAM_KEY_OPENMV_THRESHOLD_A_MAX
+    value_type: u32
+    key: 51
+  green_light.openmv_threshold_b_min:
+    macro: ESP32_LINK_PARAM_KEY_OPENMV_THRESHOLD_B_MIN
+    value_type: u32
+    key: 52
+  green_light.openmv_threshold_b_max:
+    macro: ESP32_LINK_PARAM_KEY_OPENMV_THRESHOLD_B_MAX
+    value_type: u32
+    key: 53
+  green_light.openmv_min_area:
+    macro: ESP32_LINK_PARAM_KEY_OPENMV_MIN_AREA
+    value_type: u32
+    key: 54
+  green_light.openmv_max_area:
+    macro: ESP32_LINK_PARAM_KEY_OPENMV_MAX_AREA
+    value_type: u32
+    key: 55
+  green_light.openmv_roundness_min_x1000:
+    macro: ESP32_LINK_PARAM_KEY_OPENMV_ROUNDNESS_MIN_X1000
+    value_type: u32
+    key: 56
+  green_light.openmv_merge_margin:
+    macro: ESP32_LINK_PARAM_KEY_OPENMV_MERGE_MARGIN
+    value_type: u32
+    key: 57
+  green_light.openmv_track_window_radius_px:
+    macro: ESP32_LINK_PARAM_KEY_OPENMV_TRACK_WINDOW_RADIUS_PX
+    value_type: u32
+    key: 58
+  green_light.openmv_center_filter_gain_x100:
+    macro: ESP32_LINK_PARAM_KEY_OPENMV_CENTER_FILTER_GAIN_X100
+    value_type: u32
+    key: 59
+  green_light.openmv_max_missed_frames:
+    macro: ESP32_LINK_PARAM_KEY_OPENMV_MAX_MISSED_FRAMES
+    value_type: u32
+    key: 60
+  controller.control_mode:
+    macro: ESP32_LINK_PARAM_KEY_CONTROLLER_CONTROL_MODE
+    value_type: u32
+    key: 32
+  controller.pid_kp:
+    macro: ESP32_LINK_PARAM_KEY_CONTROLLER_PID_KP
+    value_type: f32
+    key: 33
+  controller.pid_ki:
+    macro: ESP32_LINK_PARAM_KEY_CONTROLLER_PID_KI
+    value_type: f32
+    key: 34
+  controller.pid_kd:
+    macro: ESP32_LINK_PARAM_KEY_CONTROLLER_PID_KD
+    value_type: f32
+    key: 35
+  controller.pid_integral_limit:
+    macro: ESP32_LINK_PARAM_KEY_CONTROLLER_PID_INTEGRAL_LIMIT
+    value_type: f32
+    key: 36
+  controller.pid_output_limit_us:
+    macro: ESP32_LINK_PARAM_KEY_CONTROLLER_PID_OUTPUT_LIMIT_US
+    value_type: f32
+    key: 37
+  controller.pid_invert_output:
+    macro: ESP32_LINK_PARAM_KEY_CONTROLLER_PID_INVERT_OUTPUT
+    value_type: bool
+    key: 38
+  controller.zero_pulse_us_0:
+    macro: ESP32_LINK_PARAM_KEY_CONTROLLER_ZERO_PULSE_US_0
+    value_type: u32
+    key: 39
+  controller.zero_pulse_us_1:
+    macro: ESP32_LINK_PARAM_KEY_CONTROLLER_ZERO_PULSE_US_1
+    value_type: u32
+    key: 40
+  controller.zero_pulse_us_2:
+    macro: ESP32_LINK_PARAM_KEY_CONTROLLER_ZERO_PULSE_US_2
+    value_type: u32
+    key: 41
+  controller.zero_pulse_us_3:
+    macro: ESP32_LINK_PARAM_KEY_CONTROLLER_ZERO_PULSE_US_3
+    value_type: u32
+    key: 42
+  imu.accel_trust_delta_g:
+    macro: ESP32_LINK_PARAM_KEY_IMU_ACCEL_TRUST_DELTA_G
+    value_type: f32
+    key: 112
+  imu.accel_pulse_threshold_g:
+    macro: ESP32_LINK_PARAM_KEY_IMU_ACCEL_PULSE_THRESHOLD_G
+    value_type: f32
+    key: 113
+  imu.accel_axis_saturation_ratio:
+    macro: ESP32_LINK_PARAM_KEY_IMU_ACCEL_AXIS_SATURATION_RATIO
+    value_type: f32
+    key: 114
+  imu.recovery_delay_ms:
+    macro: ESP32_LINK_PARAM_KEY_IMU_RECOVERY_DELAY_MS
+    value_type: u32
+    key: 115
+  system.openmv_passthrough:
+    macro: ESP32_LINK_PARAM_KEY_SYSTEM_OPENMV_PASSTHROUGH
+    value_type: bool
+    key: 120

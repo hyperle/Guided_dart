@@ -1,0 +1,13 @@
+CompileFlags:
+  CompilationDatabase: .
+  Compiler: /home/hyperlee/.platformio/packages/toolchain-riscv32-esp/bin/riscv32-esp-elf-g++
+  BuiltinHeaders: QueryDriver
+  Add:
+    - -ferror-limit=0
+  Remove:
+    - -fno-var-tracking-assignments
+    - -fstrict-volatile-bitfields
+    - -fno-tree-switch-conversion
+Diagnostics:
+  Suppress:
+    - unused-includes

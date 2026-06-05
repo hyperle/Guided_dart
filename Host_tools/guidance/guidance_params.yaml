@@ -1,0 +1,65 @@
+# Host-side guidance parameter file.
+# This file intentionally keeps to a small YAML subset:
+# - section:
+#     key: value
+# - scalar values only (int / float / bool / string)
+
+transport:
+  mode: ble
+
+sync:
+  ack_timeout_ms: 300
+  watch_interval_ms: 200
+
+serial:
+  port: /dev/ttyUSB0
+  baudrate: 115200
+
+ble:
+  device_name: ESP32_BLE_Server
+  address: ""
+  connect_timeout_ms: 8000
+  service_uuid: 4fafc201-1fb5-459e-8fcc-c5c9c331914b
+  downlink_char_uuid: beb5483e-36e1-4688-b7f5-ea07361b26a8
+  uplink_char_uuid: 9f6c1db5-0b3b-4d1d-8a4d-11dd5c3a4f21
+
+viewer:
+  fallback_image_width: 320
+  fallback_image_height: 240
+  refresh_ms: 50
+
+green_light:
+  setpoint_x: 160
+  setpoint_y: 120
+  openmv_threshold_l_min: 20
+  openmv_threshold_l_max: 70
+  openmv_threshold_a_min: -77
+  openmv_threshold_a_max: -19
+  openmv_threshold_b_min: -19
+  openmv_threshold_b_max: 38
+  openmv_min_area: 20
+  openmv_max_area: 2000
+  openmv_roundness_min_x1000: 700
+  openmv_merge_margin: 5
+  openmv_track_window_radius_px: 80
+  openmv_center_filter_gain_x100: 70
+  openmv_max_missed_frames: 2
+
+controller:
+  control_mode: 1
+  pid_kp: 1.5
+  pid_ki: 0.2
+  pid_kd: 0.0
+  pid_integral_limit: 1000.0
+  pid_output_limit_us: 600.0
+  pid_invert_output: false
+  zero_pulse_us_0: 1500
+  zero_pulse_us_1: 1500
+  zero_pulse_us_2: 1500
+  zero_pulse_us_3: 1500
+
+imu:
+  accel_trust_delta_g: 0.35
+  accel_pulse_threshold_g: 2.0
+  accel_axis_saturation_ratio: 0.98
+  recovery_delay_ms: 150

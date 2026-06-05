@@ -1,0 +1,60 @@
+# Editors and OS files
+.vscode/
+.idea/
+.cache/
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# Python caches and virtual environments
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# CMake and native build output
+build/
+cmake-build-*/
+install/
+log/
+CMakeFiles/
+CMakeCache.txt
+compile_commands.json
+CTestTestfile.cmake
+Testing/
+cmake_install.cmake
+install_manifest.txt
+build.ninja
+rules.ninja
+.ninja_deps
+.ninja_log
+CMakeLists.txt.user
+
+# Embedded firmware artifacts
+*.elf
+*.hex
+*.bin
+*.map
+*.lst
+*.list
+*.o
+*.obj
+*.d
+*.su
+*.log
+mx.scratch
+
+# PlatformIO
+.pio/
+.pioenvs/
+.piolibdeps/
+
+# Local-only files
+id_rsa
+id_rsa.pub
+record/
