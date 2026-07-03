@@ -101,7 +101,8 @@ class FrameCodec:
         self._reset_parser()
 
     def build_param_frame(self, key, value_u32):
-        payload = struct.pack("<HBI", self._sequence, key, value_u32)
+        sequence = self._sequence
+        payload = struct.pack("<HBI", sequence, key, value_u32)
         self._sequence = (self._sequence + 1) & 0xFFFF
 
         frame = bytearray()
@@ -111,9 +112,9 @@ class FrameCodec:
         frame.append(len(payload))
         frame.extend(payload)
         frame.append(sum(frame) & 0xFF)
-        return bytes(frame)
+        return bytes(frame), sequence
 
-    def decode_param_ack(self, frame, expected_key):
+    def decode_param_ack(self, frame, expected_key=None, expected_sequence=None):
         if len(frame) != 13:
             raise ValueError(f"unexpected ack frame size: {len(frame)}")
         if frame[0] != self._frame_header_0 or frame[1] != self._frame_header_1:
@@ -126,10 +127,22 @@ class FrameCodec:
             raise ValueError("bad frame checksum")
 
         sequence, key, status, value_u32 = struct.unpack("<HBBI", frame[4:12])
-        if key != expected_key:
+        if (expected_key is not None) and (key != expected_key):
             raise ValueError(f"unexpected ack key: 0x{key:02X}, expected 0x{expected_key:02X}")
+        if (expected_sequence is not None) and (sequence != expected_sequence):
+            raise ValueError(
+                f"unexpected ack sequence: {sequence}, expected {expected_sequence}"
+            )
 
         return {"sequence": sequence, "key": key, "status": status, "value": value_u32}
+
+    def is_param_ack_frame(self, frame):
+        return (
+            len(frame) >= 5 and
+            frame[0] == self._frame_header_0 and
+            frame[1] == self._frame_header_1 and
+            frame[2] == self._message_type_param_ack
+        )
 
     def consume_byte(self, byte_value):
         if self._state == 0:
@@ -266,23 +279,41 @@ class SerialTransport:
 
         raise TimeoutError("serial receive timeout")
 
+    def recv_param_ack(self, timeout_ms, expected_key=None, expected_sequence=None):
+        deadline = time.monotonic() + (timeout_ms / 1000.0)
+
+        while time.monotonic() < deadline:
+            frame = self.recv_frame(max(int((deadline - time.monotonic()) * 1000.0), 1))
+            if not self._codec.is_param_ack_frame(frame):
+                continue
+
+            ack = self._codec.decode_param_ack(frame, expected_key, expected_sequence)
+            return frame, ack
+
+        raise TimeoutError("serial ack timeout")
+
 
 class BleTransport:
     def __init__(self,
+                 protocol,
                  address,
                  device_name,
                  connect_timeout_ms,
                  service_uuid,
                  downlink_char_uuid,
-                 uplink_char_uuid):
+                 uplink_char_uuid,
+                 ack_char_uuid=""):
+        self._codec = FrameCodec(protocol)
         self._address = address
         self._device_name = device_name
         self._connect_timeout_ms = connect_timeout_ms
         self._service_uuid = service_uuid.lower()
         self._downlink_char_uuid = downlink_char_uuid.lower()
         self._uplink_char_uuid = uplink_char_uuid.lower()
+        self._ack_char_uuid = ack_char_uuid.lower() if ack_char_uuid else ""
         self._client = None
         self._notify_queue = queue.Queue()
+        self._ack_queue = queue.Queue()
         self._bleak_module = None
 
     def open(self):
@@ -302,6 +333,25 @@ class BleTransport:
         except queue.Empty as exc:
             raise TimeoutError("ble receive timeout") from exc
 
+    def recv_param_ack(self, timeout_ms, expected_key=None, expected_sequence=None):
+        queue_ref = self._ack_queue if self._ack_char_uuid else self._notify_queue
+        deadline = time.monotonic() + (timeout_ms / 1000.0)
+
+        while time.monotonic() < deadline:
+            try:
+                frame = queue_ref.get(timeout=max(deadline - time.monotonic(), 0.001))
+            except queue.Empty as exc:
+                raise TimeoutError("ble ack timeout") from exc
+
+            try:
+                ack = self._codec.decode_param_ack(frame, expected_key, expected_sequence)
+            except ValueError:
+                continue
+
+            return frame, ack
+
+        raise TimeoutError("ble ack timeout")
+
     def _load_bleak(self):
         if self._bleak_module is not None:
             return
@@ -317,27 +367,67 @@ class BleTransport:
         BleakClient = self._bleak_module.BleakClient
         BleakScanner = self._bleak_module.BleakScanner
 
-        target = self._address
         timeout_s = self._connect_timeout_ms / 1000.0
+        device = None
 
-        if not target:
-            devices = await BleakScanner.discover(timeout=timeout_s)
-            for device in devices:
-                if device.name == self._device_name:
-                    target = device.address
-                    break
-            if not target:
-                raise RuntimeError(f"BLE device not found: {self._device_name}")
+        if self._address:
+            device = await self._scan_for_device(
+                BleakScanner, timeout_s,
+                address=self._address
+            )
 
-        self._client = BleakClient(target, timeout=timeout_s)
+        if device is None:
+            device = await self._scan_for_device(
+                BleakScanner, timeout_s,
+                device_name=self._device_name
+            )
+
+        if device is None:
+            raise RuntimeError(
+                f"BLE device not found: address={self._address or 'auto'}, "
+                f"name={self._device_name}"
+            )
+
+        self._client = BleakClient(device, timeout=timeout_s)
         await self._client.connect()
         await self._client.start_notify(self._uplink_char_uuid, self._handle_notify)
+        if self._ack_char_uuid:
+            await self._client.start_notify(self._ack_char_uuid, self._handle_ack_notify)
+
+    async def _scan_for_device(self, BleakScanner, timeout, address=None, device_name=None):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                devices = await BleakScanner.discover(
+                    timeout=min(2.0, max(0.5, deadline - time.monotonic())),
+                    return_adv=True,
+                )
+            except Exception:
+                await asyncio.sleep(0.5)
+                continue
+
+            for dev, adv in devices.values():
+                if address and dev.address.lower() == address.lower():
+                    return dev
+                if device_name:
+                    name = dev.name or getattr(adv, "local_name", None) or ""
+                    if device_name.lower() == name.lower():
+                        return dev
+
+            await asyncio.sleep(0.2)
+
+        return None
 
     async def _async_close(self):
         try:
             await self._client.stop_notify(self._uplink_char_uuid)
         except Exception:
             pass
+        if self._ack_char_uuid:
+            try:
+                await self._client.stop_notify(self._ack_char_uuid)
+            except Exception:
+                pass
         try:
             await self._client.disconnect()
         finally:
@@ -352,20 +442,72 @@ class BleTransport:
         del characteristic
         self._notify_queue.put(bytes(data))
 
+    def _handle_ack_notify(self, characteristic, data):
+        del characteristic
+        self._ack_queue.put(bytes(data))
+
+
+class PipeTransport:
+    def __init__(self, protocol, pipe_path):
+        self._codec = FrameCodec(protocol)
+        self._pipe_path = pipe_path
+        self._fd = None
+
+    def open(self):
+        try:
+            self._fd = os.open(self._pipe_path, os.O_RDONLY | os.O_NONBLOCK)
+        except FileNotFoundError:
+            raise RuntimeError(f"Pipe not found: {self._pipe_path} (start ble-connect --pipe first)")
+        except PermissionError:
+            raise RuntimeError(f"Permission denied: {self._pipe_path}")
+
+    def close(self):
+        if self._fd is not None:
+            os.close(self._fd)
+            self._fd = None
+
+    def recv_frame(self, timeout_ms):
+        if self._fd is None:
+            raise RuntimeError("PipeTransport not open")
+
+        deadline = time.monotonic() + (timeout_ms / 1000.0)
+        while time.monotonic() < deadline:
+            remaining = max(0.001, deadline - time.monotonic())
+            ready, _, _ = select.select([self._fd], [], [], min(remaining, 0.1))
+            if not ready:
+                continue
+            try:
+                data = os.read(self._fd, 1024)
+            except BlockingIOError:
+                continue
+            if not data:
+                raise TimeoutError("pipe closed (ble-connect disconnected)")
+            for byte_val in data:
+                frame = self._codec.consume_byte(byte_val)
+                if frame is not None:
+                    return frame
+        raise TimeoutError("pipe receive timeout")
+
 
 class GuidanceTransportFactory:
     def __init__(self, protocol):
         self._protocol = protocol
 
     def create(self, args, transport_mode, serial_cfg, ble_cfg):
+        pipe_path = getattr(args, "pipe", "")
+        if pipe_path:
+            return PipeTransport(self._protocol, pipe_path)
+
         if transport_mode == "ble":
             return BleTransport(
+                self._protocol,
                 address=args.ble_address or str(ble_cfg.get("address", "")),
-                device_name=args.ble_device_name or str(ble_cfg.get("device_name", "Dart_Guidance_Bridge")),
+                device_name=args.ble_device_name or str(ble_cfg.get("device_name", "Dart_1")),
                 connect_timeout_ms=int(args.ble_connect_timeout_ms or ble_cfg.get("connect_timeout_ms", 8000)),
                 service_uuid=args.ble_service_uuid or str(ble_cfg.get("service_uuid", "4fafc201-1fb5-459e-8fcc-c5c9c331914b")),
                 downlink_char_uuid=args.ble_downlink_char_uuid or str(ble_cfg.get("downlink_char_uuid", "beb5483e-36e1-4688-b7f5-ea07361b26a8")),
                 uplink_char_uuid=args.ble_uplink_char_uuid or str(ble_cfg.get("uplink_char_uuid", "9f6c1db5-0b3b-4d1d-8a4d-11dd5c3a4f21")),
+                ack_char_uuid=getattr(args, "ble_ack_char_uuid", "") or str(ble_cfg.get("ack_char_uuid", "de24d570-5f81-4d6b-8e4d-2f1309367d91")),
             )
 
         port = args.port or serial_cfg.get("port")

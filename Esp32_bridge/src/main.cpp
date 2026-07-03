@@ -1,9 +1,6 @@
 #include <Arduino.h>
-
-#include <BLE2902.h>
-#include <BLEDevice.h>
-#include <BLEServer.h>
-#include <BLEUtils.h>
+#include <NimBLEDevice.h>
+#include <esp_log.h>
 
 #include <cstring>
 #include <string>
@@ -30,24 +27,14 @@ public:
 #endif
 
   void Setup() {
-    Serial.begin(kUsbSerialBaud);
-    const uint32_t wait_start_ms = millis();
-    while (!Serial && (millis() - wait_start_ms < 3000U)) {
-      delay(10);
-    }
-
-    Serial.println();
-    Serial.println("Starting ESP32 BLE/UART guidance bridge...");
+    esp_log_level_set("*", ESP_LOG_NONE);
 
     BeginBridgeUart();
     SetupBle();
     SetStatus("bridge ready", false);
-
-    Serial.println("BLE bridge ready");
   }
 
   void Loop() {
-    ProcessPendingDownlink();
     ProcessBridgeUart();
     MaintainAdvertising();
     PublishPeriodicStatus();
@@ -55,30 +42,32 @@ public:
   }
 
 private:
-  static constexpr char kDeviceName[] = "Dart_Guidance_Bridge";
+  static constexpr char kDeviceName[] = "Dart_1";
   static constexpr char kServiceUuid[] = "4fafc201-1fb5-459e-8fcc-c5c9c331914b";
   static constexpr char kDownlinkCharacteristicUuid[] = "beb5483e-36e1-4688-b7f5-ea07361b26a8";
   static constexpr char kUplinkCharacteristicUuid[] = "9f6c1db5-0b3b-4d1d-8a4d-11dd5c3a4f21";
+  static constexpr char kAckCharacteristicUuid[] = "de24d570-5f81-4d6b-8e4d-2f1309367d91";
   static constexpr char kStatusCharacteristicUuid[] = "3d7f7b30-5602-4f2d-9d45-1f1be1b4c001";
   static constexpr uint32_t kUsbSerialBaud = 115200U;
   static constexpr uint32_t kStatusUpdateIntervalMs = 1000U;
   static constexpr uint32_t kDisconnectRestartDelayMs = 300U;
-  static constexpr size_t kMaxBlePacketSize = 32U;
-  static constexpr size_t kMaxUplinkFrameSize = 32U;
+  static constexpr size_t kMaxBlePacketSize = 256U;
+  static constexpr size_t kMaxUplinkFrameSize = 256U;
   static constexpr uint8_t kFrameHeader0 = 0xA5U;
   static constexpr uint8_t kFrameHeader1 = 0x5AU;
+  static constexpr uint8_t kMessageTypeParamAck = 0x03U;
 
-  class ServerCallbacks : public BLEServerCallbacks {
+  class ServerCallbacks : public NimBLEServerCallbacks {
   public:
     explicit ServerCallbacks(Esp32BridgeApp* app) : app_(app) {}
 
-    void onConnect(BLEServer* server) override {
-      (void)server;
+    void onConnect(NimBLEServer* server, ble_gap_conn_desc* desc) override {
+      (void)server; (void)desc;
       app_->HandleBleConnected();
     }
 
-    void onDisconnect(BLEServer* server) override {
-      (void)server;
+    void onDisconnect(NimBLEServer* server, ble_gap_conn_desc* desc) override {
+      (void)server; (void)desc;
       app_->HandleBleDisconnected();
     }
 
@@ -86,11 +75,12 @@ private:
     Esp32BridgeApp* app_;
   };
 
-  class DownlinkCallbacks : public BLECharacteristicCallbacks {
+  class DownlinkCallbacks : public NimBLECharacteristicCallbacks {
   public:
     explicit DownlinkCallbacks(Esp32BridgeApp* app) : app_(app) {}
 
-    void onWrite(BLECharacteristic* characteristic) override {
+    void onWrite(NimBLECharacteristic* characteristic, ble_gap_conn_desc* desc) override {
+      (void)desc;
       app_->HandleBleWrite(characteristic);
     }
 
@@ -111,18 +101,15 @@ private:
   };
 
   HardwareSerial bridge_uart_;
-  BLEServer* ble_server_ = nullptr;
-  BLECharacteristic* downlink_characteristic_ = nullptr;
-  BLECharacteristic* uplink_characteristic_ = nullptr;
-  BLECharacteristic* status_characteristic_ = nullptr;
+  NimBLEServer* ble_server_ = nullptr;
+  NimBLECharacteristic* downlink_characteristic_ = nullptr;
+  NimBLECharacteristic* uplink_characteristic_ = nullptr;
+  NimBLECharacteristic* ack_characteristic_ = nullptr;
+  NimBLECharacteristic* status_characteristic_ = nullptr;
   bool ble_connected_ = false;
   bool was_ble_connected_ = false;
   uint32_t last_status_update_ms_ = 0U;
   uint32_t disconnect_timestamp_ms_ = 0U;
-
-  uint8_t pending_downlink_[kMaxBlePacketSize] = {0U};
-  size_t pending_downlink_size_ = 0U;
-  bool pending_downlink_ready_ = false;
 
   uint8_t uplink_frame_[kMaxUplinkFrameSize] = {0U};
   size_t uplink_frame_index_ = 0U;
@@ -137,68 +124,73 @@ private:
                        SERIAL_8N1,
                        BRIDGE_RX_PIN,
                        BRIDGE_TX_PIN);
-    Serial.printf("Bridge UART started: RX=%d TX=%d BAUD=%d\n",
-                  BRIDGE_RX_PIN,
-                  BRIDGE_TX_PIN,
-                  BRIDGE_UART_BAUD);
+    if (Serial) {
+      Serial.printf("Bridge UART started: RX=%d TX=%d BAUD=%d\n",
+                    BRIDGE_RX_PIN,
+                    BRIDGE_TX_PIN,
+                    BRIDGE_UART_BAUD);
+    }
   }
 
   void SetupBle() {
-    BLEDevice::init(kDeviceName);
-    BLEDevice::setMTU(64);
+    NimBLEDevice::init(kDeviceName);
+    NimBLEDevice::setMTU(247);
 
-    ble_server_ = BLEDevice::createServer();
+    ble_server_ = NimBLEDevice::createServer();
     ble_server_->setCallbacks(&server_callbacks_);
 
-    BLEService* service = ble_server_->createService(kServiceUuid);
+    NimBLEService* service = ble_server_->createService(kServiceUuid);
 
     downlink_characteristic_ = service->createCharacteristic(
         kDownlinkCharacteristicUuid,
-        BLECharacteristic::PROPERTY_READ |
-            BLECharacteristic::PROPERTY_WRITE |
-            BLECharacteristic::PROPERTY_WRITE_NR);
-    downlink_characteristic_->addDescriptor(new BLE2902());
+        NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR | NIMBLE_PROPERTY::NOTIFY);
     downlink_characteristic_->setCallbacks(&downlink_callbacks_);
-    downlink_characteristic_->setValue("downlink ready");
+    downlink_characteristic_->setValue((const uint8_t*)"downlink ready", 13);
 
     uplink_characteristic_ = service->createCharacteristic(
         kUplinkCharacteristicUuid,
-        BLECharacteristic::PROPERTY_READ |
-            BLECharacteristic::PROPERTY_NOTIFY);
-    uplink_characteristic_->addDescriptor(new BLE2902());
+        NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
     uplink_characteristic_->setValue(std::string());
+
+    ack_characteristic_ = service->createCharacteristic(
+        kAckCharacteristicUuid,
+        NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
+    ack_characteristic_->setValue(std::string());
 
     status_characteristic_ = service->createCharacteristic(
         kStatusCharacteristicUuid,
-        BLECharacteristic::PROPERTY_READ |
-            BLECharacteristic::PROPERTY_NOTIFY);
-    status_characteristic_->addDescriptor(new BLE2902());
-    status_characteristic_->setValue("status init");
+        NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
+    status_characteristic_->setValue((const uint8_t*)"status init", 11);
 
     service->start();
 
-    BLEAdvertising* advertising = BLEDevice::getAdvertising();
+    NimBLEAdvertising* advertising = NimBLEDevice::getAdvertising();
     advertising->addServiceUUID(kServiceUuid);
     advertising->setScanResponse(false);
-    advertising->setMinPreferred(0x0);
-    BLEDevice::startAdvertising();
+    advertising->setMinPreferred(0x20);
+    advertising->setMaxPreferred(0x40);
+    advertising->start();
   }
 
   void HandleBleConnected() {
     ble_connected_ = true;
     was_ble_connected_ = true;
-    Serial.println("BLE client connected");
+    if (Serial) {
+      Serial.println("BLE client connected");
+    }
     SetStatus("ble connected", true);
   }
 
   void HandleBleDisconnected() {
     ble_connected_ = false;
     disconnect_timestamp_ms_ = millis();
-    Serial.println("BLE client disconnected");
+    if (Serial) {
+      Serial.println("BLE client disconnected");
+    }
     SetStatus("ble disconnected", false);
   }
 
-  void HandleBleWrite(BLECharacteristic* characteristic) {
+  void HandleBleWrite(NimBLECharacteristic* characteristic) {
     const std::string value = characteristic->getValue();
     if (value.empty()) {
       return;
@@ -206,49 +198,43 @@ private:
 
     if (value.size() > kMaxBlePacketSize) {
       stats_.dropped_ble_packets += 1U;
-      Serial.printf("Dropped BLE packet: %u bytes exceeds %u\n",
-                    static_cast<unsigned>(value.size()),
-                    static_cast<unsigned>(kMaxBlePacketSize));
+      if (Serial) {
+        Serial.printf("Dropped BLE packet: %u bytes exceeds %u\n",
+                      static_cast<unsigned>(value.size()),
+                      static_cast<unsigned>(kMaxBlePacketSize));
+      }
       SetStatus("ble packet too large", true);
       return;
     }
 
-    if (pending_downlink_ready_) {
-      stats_.dropped_ble_packets += 1U;
-      Serial.println("Dropped BLE packet: pending buffer busy");
-      SetStatus("ble packet dropped: busy", true);
-      return;
-    }
-
-    memcpy(pending_downlink_, value.data(), value.size());
-    pending_downlink_size_ = value.size();
-    pending_downlink_ready_ = true;
+    ForwardBlePacketToUart(reinterpret_cast<const uint8_t*>(value.data()), value.size());
   }
 
-  void ProcessPendingDownlink() {
-    if (!pending_downlink_ready_) {
+  void ForwardBlePacketToUart(const uint8_t* packet, size_t packet_size) {
+    if ((packet == nullptr) || (packet_size == 0U)) {
       return;
     }
 
-    const size_t written = bridge_uart_.write(pending_downlink_, pending_downlink_size_);
+    const size_t written = bridge_uart_.write(packet, packet_size);
     bridge_uart_.flush();
 
-    if (written == pending_downlink_size_) {
+    if (written == packet_size) {
       stats_.downlink_packets += 1U;
       stats_.downlink_bytes += static_cast<uint32_t>(written);
       stats_.last_downlink_ms = millis();
-      Serial.printf("Forwarded BLE->UART packet: %u bytes\n",
-                    static_cast<unsigned>(written));
+      if (Serial) {
+        Serial.printf("Forwarded BLE->UART packet: %u bytes\n",
+                      static_cast<unsigned>(written));
+      }
     } else {
       stats_.dropped_ble_packets += 1U;
-      Serial.printf("Partial BLE->UART write: %u/%u bytes\n",
-                    static_cast<unsigned>(written),
-                    static_cast<unsigned>(pending_downlink_size_));
+      if (Serial) {
+        Serial.printf("Partial BLE->UART write: %u/%u bytes\n",
+                      static_cast<unsigned>(written),
+                      static_cast<unsigned>(packet_size));
+      }
       SetStatus("uart write partial", true);
     }
-
-    pending_downlink_size_ = 0U;
-    pending_downlink_ready_ = false;
   }
 
   void ProcessBridgeUart() {
@@ -304,7 +290,9 @@ private:
   void HandleCompletedUartFrame() {
     if (!FrameChecksumIsValid(uplink_frame_, uplink_expected_size_)) {
       stats_.checksum_errors += 1U;
-      Serial.println("UART frame checksum error");
+      if (Serial) {
+        Serial.println("UART frame checksum error");
+      }
       SetStatus("uart checksum error", true);
       return;
     }
@@ -313,15 +301,26 @@ private:
     stats_.uplink_bytes += static_cast<uint32_t>(uplink_expected_size_);
     stats_.last_uplink_ms = millis();
 
-    Serial.printf("Forwarded UART->BLE frame: type=0x%02X size=%u\n",
-                  static_cast<unsigned>(uplink_frame_[2]),
-                  static_cast<unsigned>(uplink_expected_size_));
+    if (Serial) {
+      Serial.printf("Forwarded UART->BLE frame: type=0x%02X size=%u\n",
+                    static_cast<unsigned>(uplink_frame_[2]),
+                    static_cast<unsigned>(uplink_expected_size_));
+    }
 
-    if (uplink_characteristic_ != nullptr) {
-      uplink_characteristic_->setValue(uplink_frame_, uplink_expected_size_);
-      if (ble_connected_) {
-        uplink_characteristic_->notify();
-      }
+    NotifyFrame(uplink_characteristic_, uplink_frame_, uplink_expected_size_);
+    if (uplink_frame_[2] == kMessageTypeParamAck) {
+      NotifyFrame(ack_characteristic_, uplink_frame_, uplink_expected_size_);
+    }
+  }
+
+  void NotifyFrame(NimBLECharacteristic* characteristic, const uint8_t* frame, size_t frame_size) {
+    if ((characteristic == nullptr) || (frame == nullptr) || (frame_size == 0U)) {
+      return;
+    }
+
+    characteristic->setValue(frame, frame_size);
+    if (ble_connected_) {
+      characteristic->notify();
     }
   }
 
@@ -347,7 +346,9 @@ private:
       if (millis() - disconnect_timestamp_ms_ >= kDisconnectRestartDelayMs) {
         ble_server_->startAdvertising();
         was_ble_connected_ = false;
-        Serial.println("BLE advertising restarted");
+        if (Serial) {
+          Serial.println("BLE advertising restarted");
+        }
       }
     }
   }
@@ -394,7 +395,7 @@ private:
       return;
     }
 
-    status_characteristic_->setValue(message.c_str());
+    status_characteristic_->setValue(message);
     if (notify_client && ble_connected_) {
       status_characteristic_->notify();
     }
@@ -405,6 +406,7 @@ constexpr char Esp32BridgeApp::kDeviceName[];
 constexpr char Esp32BridgeApp::kServiceUuid[];
 constexpr char Esp32BridgeApp::kDownlinkCharacteristicUuid[];
 constexpr char Esp32BridgeApp::kUplinkCharacteristicUuid[];
+constexpr char Esp32BridgeApp::kAckCharacteristicUuid[];
 constexpr char Esp32BridgeApp::kStatusCharacteristicUuid[];
 
 Esp32BridgeApp g_esp32_bridge_app;

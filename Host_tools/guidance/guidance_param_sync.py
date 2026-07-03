@@ -69,6 +69,7 @@ class GuidanceParamSyncTool:
         parser.add_argument("--ble-service-uuid", default="", help="override ble.service_uuid from config")
         parser.add_argument("--ble-downlink-char-uuid", default="", help="override ble.downlink_char_uuid")
         parser.add_argument("--ble-uplink-char-uuid", default="", help="override ble.uplink_char_uuid")
+        parser.add_argument("--ble-ack-char-uuid", default="", help="override ble.ack_char_uuid")
         parser.add_argument("--watch", action="store_true", help="watch config file and hot-push changed values")
         return parser
 
@@ -95,15 +96,22 @@ class GuidanceParamSyncTool:
                 if (previous is not None) and (previous["value"] == item["value"]):
                     continue
 
-            frame = protocol_ctx.frame_codec.build_param_frame(item["key"], item["value"])
+            frame, sequence = protocol_ctx.frame_codec.build_param_frame(item["key"], item["value"])
             transport.send_frame(frame)
-            ack_frame = transport.recv_frame(ack_timeout_ms)
-            ack = protocol_ctx.frame_codec.decode_param_ack(ack_frame, item["key"])
+            ack_frame, ack = transport.recv_param_ack(ack_timeout_ms, item["key"], sequence)
+            if ack is None:
+                ack = protocol_ctx.frame_codec.decode_param_ack(ack_frame, item["key"], sequence)
+
             ack_value = protocol_ctx.param_registry.format_ack_value(item["type"], ack["value"])
             status_text = protocol_ctx.param_registry.status_text(ack["status"])
-            print(f"{item['name']}: {status_text} -> {ack_value}")
+            requested_value = protocol_ctx.param_registry.format_ack_value(item["type"], item["value"])
+            print(f"{item['name']}: request={requested_value} status={status_text} applied={ack_value}")
             if ack["status"] != applied_status_code:
                 raise RuntimeError(f"{item['name']} apply failed: {status_text}")
+            if ack["value"] != item["value"]:
+                raise RuntimeError(
+                    f"{item['name']} applied value mismatch: requested={requested_value}, applied={ack_value}"
+                )
 
         return current_map
 

@@ -43,12 +43,13 @@ def send_passthrough_enable(config, args, protocol_ctx):
     serial_cfg = config.get('serial', {})
     transport = protocol_ctx.transport_factory.create(args, 'serial', serial_cfg, {})
     key = find_param_key(protocol_ctx.protocol)
-    frame = protocol_ctx.frame_codec.build_param_frame(key, OPENMV_PASSTHROUGH_ENABLE)
+    frame, sequence = protocol_ctx.frame_codec.build_param_frame(key, OPENMV_PASSTHROUGH_ENABLE)
     transport.open()
     try:
         transport.send_frame(frame)
-        ack_frame = transport.recv_frame(1000)
-        ack = protocol_ctx.frame_codec.decode_param_ack(ack_frame, key)
+        ack_frame, ack = transport.recv_param_ack(1000, key, sequence)
+        if ack is None:
+            ack = protocol_ctx.frame_codec.decode_param_ack(ack_frame, key, sequence)
         if ack['status'] != protocol_ctx.param_registry.applied_status_code():
             raise RuntimeError(f'passthrough rejected with status={ack["status"]}')
     finally:

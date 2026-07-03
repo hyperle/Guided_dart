@@ -5,7 +5,6 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 PIPE="${DART_PIPE:-/tmp/dart_fifo}"
 
-exec python3 "${REPO_ROOT}/Host_tools/guidance/guidance_terminal_viewer.py" \
-    --config "${REPO_ROOT}/Host_tools/guidance/guidance_params.yaml" \
+exec python3 "${REPO_ROOT}/Host_tools/ble_client.py" \
     --pipe "${PIPE}" \
     "$@"

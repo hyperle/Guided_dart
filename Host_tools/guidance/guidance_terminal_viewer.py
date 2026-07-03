@@ -136,7 +136,7 @@ class TerminalRenderer:
         sys.stdout.write("\x1b[?25h\x1b[0m\n")
         sys.stdout.flush()
 
-    def render(self, telemetry):
+    def render(self, telemetry, yaw_deg=0.0, yaw_delta=0.0, pitch_delta=0.0):
         columns, lines = shutil.get_terminal_size(fallback=(120, 40))
         image_width = max(1, telemetry.image_width)
         image_height = max(1, telemetry.image_height)
@@ -161,20 +161,21 @@ class TerminalRenderer:
             plot_height,
         )
 
-        reticle_radius = max(2, min(4, min(plot_width, plot_height) // 8))
+        box_half = max(3, min(6, min(plot_width, plot_height) // 8))
         horizontal_radius = self._scale_radius(telemetry.measurement_radius_px, image_width, plot_width)
 
-        self._draw_quadrant_arc(grid, setpoint_cell[0], setpoint_cell[1], reticle_radius, 0.0, 90.0)
-        self._draw_quadrant_arc(grid, setpoint_cell[0], setpoint_cell[1], reticle_radius, 180.0, 270.0)
-        self._draw_vertical_diameter(grid, setpoint_cell[0], setpoint_cell[1], reticle_radius)
+        self._draw_box_corner(grid, setpoint_cell[0], setpoint_cell[1], box_half, "tl")
+        self._draw_box_corner(grid, setpoint_cell[0], setpoint_cell[1], box_half, "br")
+        self._draw_vertical_diameter(grid, setpoint_cell[0], setpoint_cell[1], box_half)
         self._draw_center(grid, setpoint_cell[0], setpoint_cell[1])
 
-        self._draw_quadrant_arc(grid, measurement_cell[0], measurement_cell[1], reticle_radius, 90.0, 180.0)
-        self._draw_quadrant_arc(grid, measurement_cell[0], measurement_cell[1], reticle_radius, 270.0, 360.0)
+        self._draw_box_corner(grid, measurement_cell[0], measurement_cell[1], box_half, "tr")
+        self._draw_box_corner(grid, measurement_cell[0], measurement_cell[1], box_half, "bl")
         self._draw_horizontal_diameter(grid, measurement_cell[0], measurement_cell[1], horizontal_radius)
         self._draw_center(grid, measurement_cell[0], measurement_cell[1])
-        self._overlay_text(grid, 2, 1, f"dPitch:{telemetry.relative_pitch_deg:+.2f}")
-        self._overlay_text(grid, 2, 2, f"dRoll :{telemetry.relative_roll_deg:+.2f}")
+
+        self._overlay_text(grid, 2, 1, f"Yaw {yaw_deg:+7.1f}  dYaw{yaw_delta:+7.1f}")
+        self._overlay_text(grid, 2, 2, f"dPitch{pitch_delta:+7.1f}  Roll{telemetry.relative_roll_deg:+7.1f}")
 
         output_lines = self._build_status_lines(telemetry, setpoint_px, measurement_px)
         output_lines.extend("".join(row) for row in grid)
@@ -277,6 +278,28 @@ class TerminalRenderer:
         scaled = int(round((float(radius_px) * float(plot_width - 1)) / float(image_width - 1)))
         return max(1, scaled)
 
+    def _draw_box_corner(self, grid, center_x, center_y, half, corner):
+        if corner == "tl":
+            for dx in range(-half, 1):
+                self._plot(grid, center_x + dx, center_y - half, "-")
+            for dy in range(-half, 1):
+                self._plot(grid, center_x - half, center_y + dy, "|")
+        elif corner == "tr":
+            for dx in range(0, half + 1):
+                self._plot(grid, center_x + dx, center_y - half, "-")
+            for dy in range(-half, 1):
+                self._plot(grid, center_x + half, center_y + dy, "|")
+        elif corner == "bl":
+            for dx in range(-half, 1):
+                self._plot(grid, center_x + dx, center_y + half, "-")
+            for dy in range(0, half + 1):
+                self._plot(grid, center_x - half, center_y + dy, "|")
+        elif corner == "br":
+            for dx in range(0, half + 1):
+                self._plot(grid, center_x + dx, center_y + half, "-")
+            for dy in range(0, half + 1):
+                self._plot(grid, center_x + half, center_y + dy, "|")
+
     def _draw_vertical_diameter(self, grid, center_x, center_y, radius):
         for offset in range(-radius, radius + 1):
             self._plot(grid, center_x, center_y + offset, "|")
@@ -284,18 +307,6 @@ class TerminalRenderer:
     def _draw_horizontal_diameter(self, grid, center_x, center_y, radius):
         for offset in range(-radius, radius + 1):
             self._plot(grid, center_x + offset, center_y, "-")
-
-    def _draw_quadrant_arc(self, grid, center_x, center_y, radius, start_deg, end_deg):
-        if radius <= 0:
-            return
-
-        steps = max(6, radius * 6)
-        for index in range(steps + 1):
-            angle_deg = start_deg + ((end_deg - start_deg) * float(index) / float(steps))
-            angle_rad = math.radians(angle_deg)
-            x = center_x + int(round(math.cos(angle_rad) * radius))
-            y = center_y - int(round(math.sin(angle_rad) * radius))
-            self._plot(grid, x, y, "o")
 
     def _draw_center(self, grid, center_x, center_y):
         self._plot(grid, center_x, center_y, "+")
@@ -334,6 +345,29 @@ class TerminalRenderer:
             grid[y][x] = char
 
 
+def _default_telemetry(image_width: int, image_height: int) -> GuidanceTelemetry:
+    return GuidanceTelemetry(
+        sequence=0,
+        protocol_version=0,
+        target_detected=False,
+        task_finished=False,
+        task_success=False,
+        measurement_x=NO_TARGET_COORDINATE,
+        measurement_y=NO_TARGET_COORDINATE,
+        measurement_area=0,
+        delta_x=0,
+        delta_y=0,
+        setpoint_x=NO_TARGET_COORDINATE,
+        setpoint_y=NO_TARGET_COORDINATE,
+        image_width=image_width,
+        image_height=image_height,
+        measurement_radius_px=0,
+        relative_pitch_deg=0.0,
+        relative_roll_deg=0.0,
+        received_at_s=0.0,
+    )
+
+
 class GuidanceTerminalViewer:
     def __init__(self):
         self._parser = YamlLiteParser()
@@ -362,24 +396,38 @@ class GuidanceTerminalViewer:
         try:
             last_render_s = 0.0
             latest = None
+            prev_pitch = None
+            prev_yaw = None
 
             while True:
                 try:
                     frame = transport.recv_frame(refresh_ms)
                 except TimeoutError:
-                    if latest is not None and (time.monotonic() - last_render_s) * 1000.0 >= refresh_ms:
-                        renderer.render(latest)
-                        last_render_s = time.monotonic()
+                    now_s = time.monotonic()
+                    if (now_s - last_render_s) * 1000.0 >= refresh_ms:
+                        if latest is not None:
+                            renderer.render(latest)
+                        else:
+                            renderer.render(_default_telemetry(image_width, image_height))
+                        last_render_s = now_s
                     continue
 
                 telemetry = decoder.decode(frame)
                 if telemetry is None:
                     continue
 
+                pitch = telemetry.relative_pitch_deg
+                yaw = 0.0
+
+                pitch_delta = pitch - prev_pitch if prev_pitch is not None else 0.0
+                yaw_delta = yaw - prev_yaw if prev_yaw is not None else 0.0
+                prev_pitch = pitch
+                prev_yaw = yaw
+
                 latest = telemetry
                 now_s = time.monotonic()
                 if (now_s - last_render_s) * 1000.0 >= refresh_ms:
-                    renderer.render(latest)
+                    renderer.render(latest, yaw_deg=yaw, yaw_delta=yaw_delta, pitch_delta=pitch_delta)
                     last_render_s = now_s
         except KeyboardInterrupt:
             return 0
@@ -389,6 +437,11 @@ class GuidanceTerminalViewer:
 
     def _build_arg_parser(self):
         parser = argparse.ArgumentParser(description="Render guidance telemetry as a terminal reticle animation")
+        parser.add_argument(
+            "--pipe",
+            default="",
+            help="read telemetry from a pipe (created by ble-connect --pipe), skip BLE connection",
+        )
         parser.add_argument(
             "--config",
             default=GuidanceHostPaths.default_config_path(),
@@ -413,6 +466,7 @@ class GuidanceTerminalViewer:
         parser.add_argument("--ble-service-uuid", default="", help="override ble.service_uuid from config")
         parser.add_argument("--ble-downlink-char-uuid", default="", help="override ble.downlink_char_uuid")
         parser.add_argument("--ble-uplink-char-uuid", default="", help="override ble.uplink_char_uuid")
+        parser.add_argument("--ble-ack-char-uuid", default="", help="override ble.ack_char_uuid")
         parser.add_argument("--image-width", type=int, default=0, help="fallback image width for legacy telemetry")
         parser.add_argument("--image-height", type=int, default=0, help="fallback image height for legacy telemetry")
         parser.add_argument("--refresh-ms", type=int, default=0, help="limit terminal redraw cadence")

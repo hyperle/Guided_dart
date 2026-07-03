@@ -2,6 +2,15 @@ import sensor
 import time
 from pyb import UART
 
+time.sleep(3)
+
+try:
+    from pyb import LED
+    _has_led = True
+except (ImportError, AttributeError):
+    LED = None
+    _has_led = False
+
 from green_light_detector import GreenLightDetector
 from video_recorder import RollingMjpegRecorder
 
@@ -29,6 +38,20 @@ sensor.set_auto_exposure(False, exposure_us=2500)
 uart = UART(UART_PORT, UART_BAUDRATE, timeout_char=1000)
 clock = time.clock()
 detector = GreenLightDetector()
+if _has_led:
+    red_led = LED(1)
+    green_led = LED(2)
+    green_led.on()
+else:
+    red_led = None
+    green_led = None
+
+try:
+    from stream_debug import DebugStreamer
+    debug_streamer = DebugStreamer()
+except (ImportError, RuntimeError):
+    debug_streamer = None
+
 recorder = RollingMjpegRecorder(
     segment_duration_ms=RECORDING_SEGMENT_DURATION_MS,
     max_segments=RECORDING_MAX_SEGMENTS,
@@ -37,7 +60,10 @@ recorder = RollingMjpegRecorder(
     min_free_bytes=RECORDING_MIN_FREE_BYTES,
 )
 
+heartbeat = False
 while True:
+    if debug_streamer is not None:
+        debug_streamer.poll()
     detector.poll_params(uart)
 
     clock.tick()
@@ -49,9 +75,21 @@ while True:
     if result is None:
         detector.send_measurement(uart, 0xFFFF, 0xFFFF, 0)
         print(clock.fps())
+        heartbeat = not heartbeat
+        if red_led is not None:
+            if heartbeat:
+                red_led.on()
+            else:
+                red_led.off()
+        if debug_streamer is not None:
+            debug_streamer.send_frame(img)
         continue
 
+    if red_led is not None:
+        red_led.on()
     img.draw_circle(result["center_x"], result["center_y"], result["radius"], color=(0, 255, 0))
     img.draw_string(result["center_x"] - 20, result["center_y"] - 20, "LED", color=(0, 255, 0))
     detector.send_measurement(uart, result["center_x"], result["center_y"], result["area"])
     print(clock.fps())
+    if debug_streamer is not None:
+        debug_streamer.send_frame(img)

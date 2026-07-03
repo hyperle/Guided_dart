@@ -46,7 +46,11 @@ Characteristics:
 
 - uplink notify characteristic:
   `9f6c1db5-0b3b-4d1d-8a4d-11dd5c3a4f21`
-  ESP32 parses complete UART frames from STM32 and notifies them to the host unchanged.
+  ESP32 continuously notifies complete STM32 uplink frames here. This keeps telemetry on a dedicated always-on stream.
+
+- ack notify characteristic:
+  `de24d570-5f81-4d6b-8e4d-2f1309367d91`
+  ESP32 duplicates `0x03` parameter ack frames here so host-side `param-push` can wait for deterministic confirmations without competing with telemetry.
 
 - status read/notify characteristic:
   `3d7f7b30-5602-4f2d-9d45-1f1be1b4c001`
@@ -64,10 +68,14 @@ Characteristics:
 
 - Downlink write characteristic:
   Host writes one complete STM32 parameter frame per BLE write.
-  ESP32 forwards the frame to UART unchanged.
+  ESP32 forwards the frame to UART immediately from the BLE write callback. There is no periodic downlink polling loop.
 
 - Uplink notify characteristic:
   ESP32 assembles one complete STM32 UART frame and notifies it to the host unchanged.
+
+- Ack notify characteristic:
+  ESP32 mirrors only parameter ack frames (`0x03`) to a dedicated notify channel.
+  Telemetry remains on the general uplink channel.
 
 - Status characteristic:
   Debug-only human-readable bridge state.
@@ -119,7 +127,7 @@ value    : uint32 little-endian
 - One BLE write carries exactly one complete STM32 frame
 - One BLE notify carries exactly one complete STM32 frame
 - No fragmentation is implemented in the current bridge
-- Host should use a strict request/ack flow: send one parameter frame, then wait for one `0x03` ack frame
+- Host should use a strict request/ack flow: send one parameter frame, then wait for the matching `0x03` ack frame with the same sequence and key
 - Current guidance telemetry and parameter frames are all within the bridge limits and do not require BLE fragmentation
 
 ### Host Tool Mapping
@@ -134,6 +142,10 @@ In BLE mode it writes binary parameter frames to:
 - `beb5483e-36e1-4688-b7f5-ea07361b26a8`
 
 and waits for `0x03` ack frames from:
+
+- `de24d570-5f81-4d6b-8e4d-2f1309367d91`
+
+Viewer-style tools should keep consuming telemetry from:
 
 - `9f6c1db5-0b3b-4d1d-8a4d-11dd5c3a4f21`
 

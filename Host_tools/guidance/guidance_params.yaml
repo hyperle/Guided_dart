@@ -5,7 +5,7 @@
 # - scalar values only (int / float / bool / string)
 
 transport:
-  mode: ble
+  mode: serial
 
 sync:
   ack_timeout_ms: 300
@@ -16,12 +16,13 @@ serial:
   baudrate: 115200
 
 ble:
-  device_name: ESP32_BLE_Server
-  address: ""
+  device_name: Dart_1
+  address: "14:63:93:C6:F0:DE"
   connect_timeout_ms: 8000
   service_uuid: 4fafc201-1fb5-459e-8fcc-c5c9c331914b
   downlink_char_uuid: beb5483e-36e1-4688-b7f5-ea07361b26a8
   uplink_char_uuid: 9f6c1db5-0b3b-4d1d-8a4d-11dd5c3a4f21
+  ack_char_uuid: de24d570-5f81-4d6b-8e4d-2f1309367d91
 
 viewer:
   fallback_image_width: 320
