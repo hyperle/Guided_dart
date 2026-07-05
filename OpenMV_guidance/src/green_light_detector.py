@@ -42,6 +42,13 @@ KEY_OPENMV_RING_CENTER_SAMPLE_RATIO_X100 = 0x43
 KEY_OPENMV_RING_CENTER_MIN_BRIGHTNESS = 0x44
 KEY_OPENMV_RING_CENTER_MAX_CHANNEL_DELTA = 0x45
 KEY_OPENMV_RING_MIN_OUTER_DIAMETER_PX = 0x46
+KEY_OPENMV_THRESHOLD_SMALL_L_MIN = 0x47
+KEY_OPENMV_THRESHOLD_SMALL_L_MAX = 0x48
+KEY_OPENMV_THRESHOLD_SMALL_A_MIN = 0x49
+KEY_OPENMV_THRESHOLD_SMALL_A_MAX = 0x4A
+KEY_OPENMV_THRESHOLD_SMALL_B_MIN = 0x4B
+KEY_OPENMV_THRESHOLD_SMALL_B_MAX = 0x4C
+KEY_OPENMV_THRESHOLD_SMALL_AREA_MAX = 0x4D
 
 
 def clamp(value, min_value, max_value):
@@ -81,28 +88,37 @@ class GreenLightDetector:
             "threshold_a_max": -19,
             "threshold_b_min": -19,
             "threshold_b_max": 38,
-            "min_area": 1,
-            "max_area": 36000,
-            "roundness_min_x1000": 700,
+            "min_area": 9,
+            "max_area": 3600,
+            "roundness_min_x1000": 1000,
             "merge_margin": 5,
             "track_window_radius_px": 80,
             "center_filter_gain_x100": 70,
-            "max_missed_frames": 8,
+            "max_missed_frames": 4,
             "ring_detection_enabled": 1,
             "ring_min_roundness_x1000": 350,
             "ring_min_aspect_x100": 65,
-            "ring_min_fill_x100": 8,
-            "ring_max_fill_x100": 76,
+            "ring_min_fill_x100": 10,
+            "ring_max_fill_x100": 70,
             "ring_min_center_white_x100": 20,
             "ring_center_sample_ratio_x100": 35,
             "ring_center_min_brightness": 220,
             "ring_center_max_channel_delta": 80,
             "ring_min_outer_diameter_px": 12,
+            "threshold_small_l_min": 20,
+            "threshold_small_l_max": 70,
+            "threshold_small_a_min": -77,
+            "threshold_small_a_max": -19,
+            "threshold_small_b_min": -19,
+            "threshold_small_b_max": 38,
+            "threshold_small_area_max": 4,
         }
         self._param_rx_state = 0
         self._param_rx_buffer = bytearray()
         self._last_center = None
+        self._last_radius = None
         self._missed_frames = 0
+        self._last_area = None
 
     def threshold_tuple(self):
         return (
@@ -114,15 +130,30 @@ class GreenLightDetector:
             self.params["threshold_b_max"],
         )
 
+    def threshold_tuple_small(self):
+        return (
+            self.params["threshold_small_l_min"],
+            self.params["threshold_small_l_max"],
+            self.params["threshold_small_a_min"],
+            self.params["threshold_small_a_max"],
+            self.params["threshold_small_b_min"],
+            self.params["threshold_small_b_max"],
+        )
+
+    def _active_threshold(self):
+        if self._last_area is not None and self._last_area < self.params["threshold_small_area_max"]:
+            return self.threshold_tuple_small()
+        return self.threshold_tuple()
+
     def _resolve_roi(self, image_width, image_height):
-        if self._last_center is None:
+        if self._last_center is None or self._last_radius is None:
             return None
-        radius = self.params["track_window_radius_px"]
+        half = min(4 * self._last_radius, 80)
         center_x, center_y = self._last_center
-        start_x = clamp(center_x - radius, 0, image_width - 1)
-        start_y = clamp(center_y - radius, 0, image_height - 1)
-        end_x = clamp(center_x + radius, 0, image_width - 1)
-        end_y = clamp(center_y + radius, 0, image_height - 1)
+        start_x = clamp(center_x - half, 0, image_width - 1)
+        start_y = clamp(center_y - half, 0, image_height - 1)
+        end_x = clamp(center_x + half, 0, image_width - 1)
+        end_y = clamp(center_y + half, 0, image_height - 1)
         return (start_x, start_y, end_x - start_x + 1, end_y - start_y + 1)
 
     def send_measurement(self, uart, x, y, area, image_width=0, image_height=0):
@@ -228,6 +259,28 @@ class GreenLightDetector:
         if key == KEY_OPENMV_RING_MIN_OUTER_DIAMETER_PX:
             self.params["ring_min_outer_diameter_px"] = clamp(value_u32, 1, 240)
             return STATUS_APPLIED, self.params["ring_min_outer_diameter_px"]
+
+        if key == KEY_OPENMV_THRESHOLD_SMALL_L_MIN:
+            self.params["threshold_small_l_min"] = clamp(signed_value, 0, 100)
+            return STATUS_APPLIED, self.params["threshold_small_l_min"]
+        if key == KEY_OPENMV_THRESHOLD_SMALL_L_MAX:
+            self.params["threshold_small_l_max"] = clamp(signed_value, 0, 100)
+            return STATUS_APPLIED, self.params["threshold_small_l_max"]
+        if key == KEY_OPENMV_THRESHOLD_SMALL_A_MIN:
+            self.params["threshold_small_a_min"] = clamp(signed_value, -128, 127)
+            return STATUS_APPLIED, self.params["threshold_small_a_min"] & 0xFFFFFFFF
+        if key == KEY_OPENMV_THRESHOLD_SMALL_A_MAX:
+            self.params["threshold_small_a_max"] = clamp(signed_value, -128, 127)
+            return STATUS_APPLIED, self.params["threshold_small_a_max"] & 0xFFFFFFFF
+        if key == KEY_OPENMV_THRESHOLD_SMALL_B_MIN:
+            self.params["threshold_small_b_min"] = clamp(signed_value, -128, 127)
+            return STATUS_APPLIED, self.params["threshold_small_b_min"] & 0xFFFFFFFF
+        if key == KEY_OPENMV_THRESHOLD_SMALL_B_MAX:
+            self.params["threshold_small_b_max"] = clamp(signed_value, -128, 127)
+            return STATUS_APPLIED, self.params["threshold_small_b_max"] & 0xFFFFFFFF
+        if key == KEY_OPENMV_THRESHOLD_SMALL_AREA_MAX:
+            self.params["threshold_small_area_max"] = clamp(value_u32, 1, 50000)
+            return STATUS_APPLIED, self.params["threshold_small_area_max"]
 
         return STATUS_UNKNOWN_KEY, 0
 
@@ -381,9 +434,6 @@ class GreenLightDetector:
 
         center_x = x + (width // 2)
         center_y = y + (height // 2)
-        center_white_x100 = self._center_white_ratio_x100(img, center_x, center_y, outer_diameter)
-        if center_white_x100 < self.params["ring_min_center_white_x100"]:
-            return None
 
         return {
             "blob": blob,
@@ -394,7 +444,7 @@ class GreenLightDetector:
             "radius": int(outer_diameter / 2),
             "roundness_x1000": roundness_x1000,
             "green_fill_x100": green_fill_x100,
-            "center_white_x100": center_white_x100,
+            "center_white_x100": 0,
         }
 
     def _target_from_blob(self, img, blob):
@@ -441,6 +491,8 @@ class GreenLightDetector:
                 self._missed_frames += 1
             else:
                 self._last_center = None
+                self._last_radius = None
+                self._last_area = None
             return None
 
         if self._last_center is None:
@@ -456,14 +508,15 @@ class GreenLightDetector:
         return self._last_center
 
     def process_frame(self, img):
+        threshold = self._active_threshold()
         roi = self._resolve_roi(img.width(), img.height())
         if roi is None:
-            blobs = img.find_blobs([self.threshold_tuple()],
+            blobs = img.find_blobs([threshold],
                                    pixels_threshold=max(self.params["min_area"], 1),
                                    merge=True,
                                    margin=self.params["merge_margin"])
         else:
-            blobs = img.find_blobs([self.threshold_tuple()],
+            blobs = img.find_blobs([threshold],
                                    roi=roi,
                                    pixels_threshold=max(self.params["min_area"], 1),
                                    merge=True,
@@ -471,7 +524,7 @@ class GreenLightDetector:
 
         best_target = self._find_best_target(img, blobs)
         if best_target is None and roi is not None:
-            blobs = img.find_blobs([self.threshold_tuple()],
+            blobs = img.find_blobs([threshold],
                                    pixels_threshold=max(self.params["min_area"], 1),
                                    merge=True,
                                    margin=self.params["merge_margin"])
@@ -482,6 +535,8 @@ class GreenLightDetector:
             return None
 
         filtered_center = self._update_track((best_target["center_x"], best_target["center_y"]))
+        self._last_radius = best_target["radius"]
+        self._last_area = best_target["area"]
         return {
             "center_x": filtered_center[0],
             "center_y": filtered_center[1],

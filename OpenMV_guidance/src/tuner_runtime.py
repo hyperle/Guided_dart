@@ -239,7 +239,7 @@ def print_sequence_results(directory, params, expected_roi=None):
         raw_center = result["raw_center"] if result["raw_center"] is not None else (-1, -1)
         filtered_center = result["filtered_center"] if result["filtered_center"] is not None else (-1, -1)
         print(
-            "frame|%d|%s|%d|%d|%d|%d|%d|%d|%d|%d|%d|%s" % (
+            "frame|%d|%s|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%s" % (
                 index,
                 name,
                 1 if result["detected"] else 0,
@@ -251,6 +251,7 @@ def print_sequence_results(directory, params, expected_roi=None):
                 filtered_center[1],
                 result["area"],
                 result["radius_px"],
+                1 if result["fallback_used"] else 0,
                 result["reason"],
             )
         )
@@ -266,7 +267,7 @@ def print_sequence_chunk_results(directory, names, params, expected_roi=None, st
         raw_center = result["raw_center"] if result["raw_center"] is not None else (-1, -1)
         filtered_center = result["filtered_center"] if result["filtered_center"] is not None else (-1, -1)
         print(
-            "frame|%d|%s|%d|%d|%d|%d|%d|%d|%d|%d|%d|%s" % (
+            "frame|%d|%s|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%s" % (
                 start_index + offset,
                 name,
                 1 if result["detected"] else 0,
@@ -278,6 +279,7 @@ def print_sequence_chunk_results(directory, names, params, expected_roi=None, st
                 filtered_center[1],
                 result["area"],
                 result["radius_px"],
+                1 if result["fallback_used"] else 0,
                 result["reason"],
             )
         )

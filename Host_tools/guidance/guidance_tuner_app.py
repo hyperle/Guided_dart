@@ -792,10 +792,16 @@ class VideoTunerApp:
         detected = "YES" if result.detected else "NO"
         background = "YES" if result.background_misdetect else "NO"
         source = result.source if result.source else "-"
+        if result.fallback_used:
+            search_mode = "全局搜索(ROI失效)"
+        elif result.search_roi is not None:
+            search_mode = "ROI内搜索"
+        else:
+            search_mode = "全帧搜索"
         lines = [
             f"{label}:",
             f"  locked={locked} lock_signal={1 if result.locked else 0} detected={detected}",
-            f"  reason={result.reason} background={background} source={source}",
+            f"  reason={result.reason} background={background} source={source} search_mode={search_mode}",
         ]
         if result.raw_center is not None:
             lines.append(f"  center=({result.raw_center[0]}, {result.raw_center[1]}) area={result.area} radius={result.radius_px}")
@@ -1017,9 +1023,11 @@ class VideoTunerApp:
                     first_miss_frame = result.frame_index
                 longest_miss_streak = max(longest_miss_streak, current_miss_streak)
 
+            search_mode = "全局搜索(ROI失效)" if result.fallback_used else "ROI内搜索"
             recognition_log.append(
                 f"frame={result.frame_index} lock={1 if result.locked else 0} detected={1 if result.detected else 0} "
-                f"background={1 if result.background_misdetect else 0} exp={result.exposure_scale:.4f} gain={result.gain_scale:.4f} "
+                f"background={1 if result.background_misdetect else 0} search_mode={search_mode} "
+                f"exp={result.exposure_scale:.4f} gain={result.gain_scale:.4f} "
                 f"L=({detector_params.threshold_l_min},{detector_params.threshold_l_max}) "
                 f"A=({detector_params.threshold_a_min},{detector_params.threshold_a_max}) "
                 f"B=({detector_params.threshold_b_min},{detector_params.threshold_b_max}) "

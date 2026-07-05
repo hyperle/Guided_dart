@@ -134,6 +134,7 @@ class ValidationFrameResult:
     detected: bool
     locked: bool
     background_misdetect: bool
+    fallback_used: bool
     reason: str
     raw_center: tuple[int, int] | None
     filtered_center: tuple[int, int] | None

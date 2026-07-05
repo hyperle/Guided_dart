@@ -403,8 +403,8 @@ class OpenMvEvaluator:
                 continue
             if not line.startswith("frame|"):
                 continue
-            parts = line.split("|", 12)
-            if len(parts) != 13:
+            parts = line.split("|", 13)
+            if len(parts) != 14:
                 continue
 
             frame_index = int(parts[1])
@@ -425,7 +425,8 @@ class OpenMvEvaluator:
                     detected=parts[3] == "1",
                     locked=parts[4] == "1",
                     background_misdetect=parts[5] == "1",
-                    reason=parts[12],
+                    fallback_used=parts[12] == "1",
+                    reason=parts[13],
                     raw_center=None if raw_x < 0 or raw_y < 0 else (raw_x, raw_y),
                     filtered_center=None if filtered_x < 0 or filtered_y < 0 else (filtered_x, filtered_y),
                     area=int(parts[10]),

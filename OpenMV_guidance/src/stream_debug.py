@@ -3,11 +3,14 @@ import time
 import ustruct
 from pyb import USB_VCP
 
-from adaptive_exposure import TargetExposureController
+try:
+    from adaptive_exposure import TargetExposureController
+except Exception:
+    TargetExposureController = None
 
 _MAGIC = b"OMVJ"
 _HEADER_FORMAT = ">IHHI"
-_DEFAULT_EXPOSURE_US = 2500
+_DEFAULT_EXPOSURE_US = 1000
 _OVERLAY_X = 2
 _OVERLAY_STATUS_Y = 2
 _OVERLAY_TARGET_Y = 14
@@ -68,7 +71,7 @@ def configure_sensor(frame_size="QVGA", width=640, height=480, pixformat="RGB565
         _try_call(sensor.set_auto_exposure, True)
     else:
         _try_call(sensor.set_auto_exposure, False, exposure_us=int(exposure_us or _DEFAULT_EXPOSURE_US))
-        if adaptive_exposure and pixformat.upper() == "RGB565":
+        if adaptive_exposure and pixformat.upper() == "RGB565" and TargetExposureController is not None:
             exposure_controller = TargetExposureController(initial_exposure_us=int(exposure_us or _DEFAULT_EXPOSURE_US))
             exposure_controller.apply()
     sensor.skip_frames(time=300)
@@ -124,9 +127,12 @@ def _write_frame(vcp, img, quality):
         height,
         time.ticks_ms() & 0xFFFFFFFF,
     )
-    vcp.write(_MAGIC)
-    vcp.write(header)
-    vcp.write(jpeg)
+    try:
+        vcp.write(_MAGIC)
+        vcp.write(header)
+        vcp.write(jpeg)
+    except Exception:
+        return False
     return True
 
 
@@ -191,6 +197,7 @@ def run_usb_stream(frame_size="QVGA", width=320, height=240, pixformat="RGB565",
                 _draw_stream_status(img, fps, _COLOR_TEXT)
             elif exposure_controller is not None:
                 exposure_controller.update(img, None)
-            _write_frame(vcp, img, quality)
+            if not _write_frame(vcp, img, quality):
+                break
     except KeyboardInterrupt:
         pass

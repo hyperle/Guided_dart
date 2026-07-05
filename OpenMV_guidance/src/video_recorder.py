@@ -116,7 +116,6 @@ class RollingMjpegRecorder:
         self._writer.add_frame(img, quality=self._jpeg_quality)
         if time.ticks_diff(now_ms, self._last_sync_ms) >= self._sync_interval_ms:
             self._writer.sync()
-            os.sync()
             self._last_sync_ms = now_ms
 
     def _detect_storage_root(self):
