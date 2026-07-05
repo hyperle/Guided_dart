@@ -181,11 +181,41 @@ python3 ../Host_tools/guidance/guidance_terminal_viewer.py --config ../Host_tool
 本项目采用 MIT 许可证。详见 [LICENSE](LICENSE) 文件。
 
 
+### OpenMV USB-C 相机预览
+
+这个功能是独立调试工具：主机用 Type-C/USB 直连 OpenMV，临时运行 OpenMV 端帧源并在本机播放相机画面。它不经过控制板 UART1，也不会把预览逻辑挂进 `OpenMV_guidance/src/main.py`。
+
+运行：
+
+```bash
+./.script/openmv-ports
+./.script/camera-stream --port /dev/ttyACM0
+```
+
+工具会输出本地预览地址，默认是：
+
+```text
+http://127.0.0.1:8081/
+```
+
+只抓一帧：
+
+```bash
+./.script/camera-grab --port /dev/ttyACM0
+```
+
+说明：
+
+- OpenMV 的 USB-C 在主机上通常表现为 `/dev/ttyACM*`；这是 OpenMV USB VCP 调试通道，不是 OpenMV 到 STM32 的 UART1。
+- 默认预览会在画面左上角叠加分辨率、帧率和目标像素坐标；需要原始画面可加 `--no-debug-detector`。
+- 按 Ctrl+C 退出后，工具默认复位 OpenMV，使其重新回到正常上场入口。
+- 需要排查帧流时可使用 `--raw-dump /tmp/openmv.bin`，再运行 `./.script/parse-frames /tmp/openmv.bin`。
+
 ### OpenMV 视频内录与导出
 
 OpenMV 端现在会在运行时自动进行 MJPEG 分段录像：
 
-- 优先写入 `/sdcard/recordings`，未插卡时回退到 `/flash/recordings`
+- 只写入 `/sdcard/recordings` 或 `/sd/recordings`；未检测到 SD 卡时禁用录像，不回写板载 flash
 - 默认单段 `15s`，最多保留 `12` 段
 - 达到段数上限或剩余空间不足时会自动删除最旧录像
 

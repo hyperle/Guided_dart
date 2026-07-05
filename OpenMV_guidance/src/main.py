@@ -11,6 +11,7 @@ except (ImportError, AttributeError):
     LED = None
     _has_led = False
 
+from adaptive_exposure import TargetExposureController
 from green_light_detector import GreenLightDetector
 from video_recorder import RollingMjpegRecorder
 
@@ -19,6 +20,8 @@ SENSOR_WIDTH = 320
 SENSOR_HEIGHT = 240
 UART_PORT = 1
 UART_BAUDRATE = 115200
+ADAPTIVE_EXPOSURE_ENABLED = False
+MANUAL_EXPOSURE_US = 5000
 RECORDING_SEGMENT_DURATION_MS = 15000
 RECORDING_MAX_SEGMENTS = 12
 RECORDING_SYNC_INTERVAL_MS = 1000
@@ -33,7 +36,12 @@ sensor.set_windowing((SENSOR_WIDTH, SENSOR_HEIGHT))
 sensor.skip_frames(time=2000)
 sensor.set_auto_gain(False)
 sensor.set_auto_whitebal(False)
-sensor.set_auto_exposure(False, exposure_us=2500)
+sensor.set_auto_exposure(False, exposure_us=MANUAL_EXPOSURE_US)
+exposure_controller = None
+if ADAPTIVE_EXPOSURE_ENABLED:
+    exposure_controller = TargetExposureController(initial_exposure_us=MANUAL_EXPOSURE_US)
+    exposure_controller.apply()
+sensor.skip_frames(time=500)
 
 uart = UART(UART_PORT, UART_BAUDRATE, timeout_char=1000)
 clock = time.clock()
@@ -46,12 +54,6 @@ else:
     red_led = None
     green_led = None
 
-try:
-    from stream_debug import DebugStreamer
-    debug_streamer = DebugStreamer()
-except (ImportError, RuntimeError):
-    debug_streamer = None
-
 recorder = RollingMjpegRecorder(
     segment_duration_ms=RECORDING_SEGMENT_DURATION_MS,
     max_segments=RECORDING_MAX_SEGMENTS,
@@ -62,18 +64,20 @@ recorder = RollingMjpegRecorder(
 
 heartbeat = False
 while True:
-    if debug_streamer is not None:
-        debug_streamer.poll()
     detector.poll_params(uart)
 
     clock.tick()
     img = sensor.snapshot()
-    if recorder.is_enabled():
-        recorder.add_frame(img)
+    image_width = img.width()
+    image_height = img.height()
+    recorder.add_frame(img)
 
     result = detector.process_frame(img)
+    if exposure_controller is not None:
+        exposure_controller.update(img, result)
+
     if result is None:
-        detector.send_measurement(uart, 0xFFFF, 0xFFFF, 0)
+        detector.send_measurement(uart, 0xFFFF, 0xFFFF, 0, image_width, image_height)
         print(clock.fps())
         heartbeat = not heartbeat
         if red_led is not None:
@@ -81,15 +85,9 @@ while True:
                 red_led.on()
             else:
                 red_led.off()
-        if debug_streamer is not None:
-            debug_streamer.send_frame(img)
         continue
 
     if red_led is not None:
         red_led.on()
-    img.draw_circle(result["center_x"], result["center_y"], result["radius"], color=(0, 255, 0))
-    img.draw_string(result["center_x"] - 20, result["center_y"] - 20, "LED", color=(0, 255, 0))
-    detector.send_measurement(uart, result["center_x"], result["center_y"], result["area"])
+    detector.send_measurement(uart, result["center_x"], result["center_y"], result["area"], image_width, image_height)
     print(clock.fps())
-    if debug_streamer is not None:
-        debug_streamer.send_frame(img)

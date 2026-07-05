@@ -4,6 +4,11 @@ import os
 import time
 
 
+_SD_ROOTS = ("/sdcard", "/sd")
+_SEGMENT_PREFIX = "rec_"
+_SEGMENT_SUFFIX = ".mjpeg"
+
+
 def _join_path(base, name):
     if base == "/":
         return "/" + name
@@ -16,6 +21,16 @@ def _path_exists(path):
         return True
     except OSError:
         return False
+
+
+def _entry_name(item):
+    name = item[0]
+    if isinstance(name, bytes):
+        try:
+            return name.decode()
+        except Exception:
+            return ""
+    return name
 
 
 class RollingMjpegRecorder:
@@ -34,7 +49,7 @@ class RollingMjpegRecorder:
         self._min_free_bytes = max(0, int(min_free_bytes))
 
         self._storage_root = self._detect_storage_root()
-        self._recordings_dir = _join_path(self._storage_root, self._directory_name)
+        self._recordings_dir = ""
         self._enabled = False
         self._writer = None
         self._writer_path = ""
@@ -42,8 +57,15 @@ class RollingMjpegRecorder:
         self._segment_start_ms = 0
         self._last_sync_ms = 0
 
-        self._ensure_recordings_dir()
+        if not self._storage_root:
+            print("recording disabled: no SD card")
+            return
+
+        self._recordings_dir = _join_path(self._storage_root, self._directory_name)
+        if not self._ensure_recordings_dir():
+            return
         self._segment_index = self._next_segment_index()
+        self._prune_segments()
         self._enabled = True
         print("recording dir:", self._recordings_dir)
 
@@ -69,26 +91,50 @@ class RollingMjpegRecorder:
                 return
 
         try:
-            self._writer.add_frame(img, quality=self._jpeg_quality)
-            if time.ticks_diff(now_ms, self._last_sync_ms) >= self._sync_interval_ms:
-                self._writer.sync()
-                os.sync()
-                self._last_sync_ms = now_ms
+            self._write_current_frame(img, now_ms)
         except Exception as exc:
             print("recording write failed:", exc)
+            self._recover_after_write_failure(img)
+
+    def _recover_after_write_failure(self, img):
+        self._close_writer()
+        if not self._remove_oldest_available_segment():
+            self._disable()
+            return
+
+        now_ms = time.ticks_ms()
+        if not self._open_new_segment(img.width(), img.height(), now_ms):
+            return
+
+        try:
+            self._write_current_frame(img, now_ms)
+        except Exception as exc:
+            print("recording retry failed:", exc)
             self._disable()
 
+    def _write_current_frame(self, img, now_ms):
+        self._writer.add_frame(img, quality=self._jpeg_quality)
+        if time.ticks_diff(now_ms, self._last_sync_ms) >= self._sync_interval_ms:
+            self._writer.sync()
+            os.sync()
+            self._last_sync_ms = now_ms
+
     def _detect_storage_root(self):
-        for candidate in ("/sdcard", "/sd", "/flash"):
+        for candidate in _SD_ROOTS:
             if _path_exists(candidate):
                 return candidate
-        return os.getcwd()
+        return ""
 
     def _ensure_recordings_dir(self):
+        if _path_exists(self._recordings_dir):
+            return True
+
         try:
             os.mkdir(self._recordings_dir)
-        except OSError:
-            pass
+            return True
+        except OSError as exc:
+            print("recording disabled: mkdir failed:", exc)
+            return False
 
     def _disable(self):
         self._close_writer()
@@ -115,8 +161,20 @@ class RollingMjpegRecorder:
         gc.collect()
 
     def _open_new_segment(self, width, height, now_ms):
+        self._prune_segments()
+        if self._try_open_new_segment(width, height, now_ms):
+            return True
+
+        if self._remove_oldest_available_segment():
+            gc.collect()
+            if self._try_open_new_segment(width, height, time.ticks_ms()):
+                return True
+
+        self._disable()
+        return False
+
+    def _try_open_new_segment(self, width, height, now_ms):
         try:
-            self._prune_segments()
             path = self._segment_path(self._segment_index)
             self._writer = mjpeg.Mjpeg(path, width, height)
             self._writer_path = path
@@ -126,12 +184,13 @@ class RollingMjpegRecorder:
             print("recording started:", path)
             return True
         except Exception as exc:
+            self._writer = None
+            self._writer_path = ""
             print("recording open failed:", exc)
-            self._disable()
             return False
 
     def _segment_path(self, index):
-        return _join_path(self._recordings_dir, "rec_%05d.mjpeg" % index)
+        return _join_path(self._recordings_dir, "%s%05d%s" % (_SEGMENT_PREFIX, index, _SEGMENT_SUFFIX))
 
     def _list_segment_entries(self):
         entries = []
@@ -141,8 +200,8 @@ class RollingMjpegRecorder:
             return entries
 
         for item in iterator:
-            name = item[0]
-            if not (name.startswith("rec_") and name.endswith(".mjpeg")):
+            name = _entry_name(item)
+            if not (name.startswith(_SEGMENT_PREFIX) and name.endswith(_SEGMENT_SUFFIX)):
                 continue
             entries.append(name)
 
@@ -155,7 +214,7 @@ class RollingMjpegRecorder:
 
         for name in entries:
             try:
-                value = int(name[4:9])
+                value = int(name[len(_SEGMENT_PREFIX):-len(_SEGMENT_SUFFIX)])
             except ValueError:
                 continue
             if value > highest:
@@ -188,6 +247,10 @@ class RollingMjpegRecorder:
             print("recording remove failed:", exc)
             return False
 
+    def _remove_oldest_available_segment(self):
+        entries = self._list_segment_entries()
+        return self._remove_oldest_segment(entries)
+
     def _prune_segments(self):
         entries = self._list_segment_entries()
 
@@ -198,3 +261,7 @@ class RollingMjpegRecorder:
         while entries and (self._free_bytes() < self._min_free_bytes):
             if not self._remove_oldest_segment(entries):
                 break
+
+        free_bytes = self._free_bytes()
+        if free_bytes < self._min_free_bytes:
+            print("recording low space:", free_bytes)

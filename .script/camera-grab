@@ -1,79 +1,8 @@
-#!/usr/bin/env python3
-"""Run me. I'll wait for you to unplug and replug OpenMV."""
-import os, sys, time
+#!/usr/bin/env bash
+set -euo pipefail
 
-PORT = '/dev/ttyACM0'
-OUT = '/tmp/omv_frame.jpg'
-BIN = '/tmp/omv_stream.bin'
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 
-# Phase 1: wait for unplug
-print('STEP 1: Unplug OpenMV USB-C now...')
-while os.path.exists(PORT):
-    time.sleep(0.2)
-print('Device removed. Good.')
-
-# Phase 2: wait for replug
-print('STEP 2: Plug in OpenMV USB-C now...')
-while not os.path.exists(PORT):
-    time.sleep(0.2)
-time.sleep(1.5)
-print('Device detected! Capturing (Ctrl+C to stop)...')
-
-# Phase 3: capture with cat-like approach
-os.system(f'stty -F {PORT} 115200 raw -echo 2>/dev/null')
-fd = os.open(PORT, os.O_RDONLY)
-
-buf = b''
-total = 0
-frames = 0
-try:
-    while True:
-        try:
-            chunk = os.read(fd, 65536)
-            if chunk:
-                total += len(chunk)
-                buf += chunk
-        except BlockingIOError:
-            time.sleep(0.01)
-            continue
-        except OSError:
-            break
-        
-        while len(buf) >= 4:
-            idx = buf.find(b'\xaa\x55')
-            if idx < 0:
-                buf = buf[-3:]
-                break
-            if idx > 0:
-                buf = buf[idx:]
-                continue
-            size = (buf[2] << 8) | buf[3]
-            if len(buf) < 4 + size:
-                break
-            jpeg = bytes(buf[4:4+size])
-            buf = buf[4+size:]
-            if jpeg[:2] == b'\xff\xd8':
-                frames += 1
-                with open(f'{OUT}', 'wb') as f:
-                    f.write(jpeg)
-                sys.stdout.write(f'\r  Frames: {frames}  Total: {total}B  Last: {size}B  ')
-                sys.stdout.flush()
-except KeyboardInterrupt:
-    pass
-finally:
-    try:
-        os.close(fd)
-    except:
-        pass
-
-print(f'\n\nDone. {frames} frames, {total} bytes raw.')
-if frames > 0:
-    os.system(f'file {OUT}')
-    print(f'Open: {OUT}')
-else:
-    print('No frames captured. Raw data saved to {BIN}')
-    try:
-        with open(BIN, 'wb') as f:
-            f.write(buf if buf else b'(empty)')
-    except:
-        pass
+OUT="${OPENMV_SNAPSHOT:-/tmp/omv_photo.jpg}"
+exec "${REPO_ROOT}/.script/camera-stream" --snapshot "${OUT}" "$@"

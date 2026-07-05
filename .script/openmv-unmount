@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+TARGET="${1:-/media/hyperlee/OPENMV}"
+
+unmount_device() {
+    local device="$1"
+    local source="${device}"
+    local mounted_at=""
+
+    if command -v readlink >/dev/null 2>&1; then
+        source="$(readlink -f "${device}" 2>/dev/null || printf '%s' "${device}")"
+    fi
+
+    if command -v findmnt >/dev/null 2>&1; then
+        mounted_at="$(findmnt -rn -S "${source}" -o TARGET 2>/dev/null || true)"
+    fi
+
+    if [[ -z "${mounted_at}" ]]; then
+        echo "OpenMV volume is not mounted: ${device}"
+        return 0
+    fi
+
+    udisksctl unmount -b "${source}"
+}
+
+if command -v findmnt >/dev/null 2>&1; then
+    SOURCE="$(findmnt -rn -T "${TARGET}" -o SOURCE 2>/dev/null || true)"
+    MOUNTPOINT="$(findmnt -rn -T "${TARGET}" -o TARGET 2>/dev/null || true)"
+else
+    SOURCE=""
+    MOUNTPOINT=""
+fi
+
+if [[ -n "${MOUNTPOINT}" && "${MOUNTPOINT}" == "${TARGET}" ]]; then
+    unmount_device "${SOURCE}"
+    exit 0
+fi
+
+if [[ -e "${TARGET}" && "${TARGET}" == /dev/* ]]; then
+    unmount_device "${TARGET}"
+    exit 0
+fi
+
+if [[ -e /dev/disk/by-label/OPENMV ]]; then
+    unmount_device /dev/disk/by-label/OPENMV
+    exit 0
+fi
+
+echo "OpenMV volume is not mounted: ${TARGET}"

@@ -16,21 +16,12 @@ def _point_in_roi(point, roi):
     return (x >= rx) and (x < (rx + rw)) and (y >= ry) and (y < (ry + rh))
 
 
-def _blob_to_dict(blob):
-    return {
-        "rect": blob.rect(),
-        "center_x": blob.cx(),
-        "center_y": blob.cy(),
-        "area": blob.area(),
-        "roundness_x1000": int(blob.roundness() * 1000),
-        "radius_px": int(blob.w() / 2),
-    }
-
-
-def _choose_failure_reason(candidates, params, expected_roi, best_blob):
-    if best_blob is not None:
-        if expected_roi is not None and not _point_in_roi((best_blob.cx(), best_blob.cy()), expected_roi):
+def _choose_failure_reason(candidates, params, expected_roi, best_target):
+    if best_target is not None:
+        if expected_roi is not None and not _point_in_roi((best_target["center_x"], best_target["center_y"]), expected_roi):
             return "误检背景", True
+        if best_target["source"] == "ring":
+            return "绿环锁定", False
         return "锁定成功", False
 
     if not candidates:
@@ -75,24 +66,32 @@ def _choose_failure_reason(candidates, params, expected_roi, best_blob):
     return "未找到有效 blob", False
 
 
-def _annotate_candidates(blobs, params):
+def _annotate_candidates(detector, img, blobs):
     candidates = []
     for blob in blobs:
         area = blob.area()
         roundness_x1000 = int(blob.roundness() * 1000)
-        passes_area = area >= params["min_area"]
-        if params["max_area"] > 0 and area > params["max_area"]:
-            passes_area = False
+        pixels = detector._blob_pixels(blob)
+        passes_area = detector._blob_passes_area(blob)
+        solid_target = detector._solid_target_from_blob(blob)
+        ring_target = detector._ring_target_from_blob(img, blob)
+        target = solid_target
+        if target is None:
+            target = ring_target
         candidates.append(
             {
                 "rect": blob.rect(),
-                "center_x": blob.cx(),
-                "center_y": blob.cy(),
+                "center_x": target["center_x"] if target is not None else blob.cx(),
+                "center_y": target["center_y"] if target is not None else blob.cy(),
                 "area": area,
                 "roundness_x1000": roundness_x1000,
-                "radius_px": int(blob.w() / 2),
+                "radius_px": target["radius"] if target is not None else int(blob.w() / 2),
                 "passes_area": passes_area,
-                "passes_roundness": roundness_x1000 >= params["roundness_min_x1000"],
+                "passes_roundness": roundness_x1000 >= detector.params["roundness_min_x1000"],
+                "passes_ring": ring_target is not None,
+                "source": target["source"] if target is not None else "",
+                "green_fill_x100": (pixels * 100) // max(area, 1),
+                "center_white_x100": ring_target["center_white_x100"] if ring_target is not None else 0,
             }
         )
     return candidates
@@ -131,11 +130,11 @@ def _evaluate_with_detector(detector, img, expected_roi, reset_tracking):
             margin=detector.params["merge_margin"],
         )
 
-    candidates = _annotate_candidates(blobs, detector.params)
-    best_blob = detector._find_best_blob(blobs)
+    candidates = _annotate_candidates(detector, img, blobs)
+    best_target = detector._find_best_target(img, blobs)
     fallback_used = False
 
-    if best_blob is None and roi is not None:
+    if best_target is None and roi is not None:
         fallback_used = True
         blobs = img.find_blobs(
             [detector.threshold_tuple()],
@@ -143,12 +142,12 @@ def _evaluate_with_detector(detector, img, expected_roi, reset_tracking):
             merge=True,
             margin=detector.params["merge_margin"],
         )
-        candidates = _annotate_candidates(blobs, detector.params)
-        best_blob = detector._find_best_blob(blobs)
+        candidates = _annotate_candidates(detector, img, blobs)
+        best_target = detector._find_best_target(img, blobs)
 
-    reason, background_misdetect = _choose_failure_reason(candidates, detector.params, expected_roi, best_blob)
+    reason, background_misdetect = _choose_failure_reason(candidates, detector.params, expected_roi, best_target)
 
-    if best_blob is None:
+    if best_target is None:
         detector._update_track(None)
         return {
             "candidates": candidates,
@@ -162,9 +161,10 @@ def _evaluate_with_detector(detector, img, expected_roi, reset_tracking):
             "filtered_center": None,
             "area": 0,
             "radius_px": 0,
+            "source": "",
         }
 
-    raw_center = (best_blob.cx(), best_blob.cy())
+    raw_center = (best_target["center_x"], best_target["center_y"])
     filtered_center = detector._update_track(raw_center)
     return {
         "candidates": candidates,
@@ -176,8 +176,9 @@ def _evaluate_with_detector(detector, img, expected_roi, reset_tracking):
         "background_misdetect": background_misdetect,
         "raw_center": raw_center,
         "filtered_center": filtered_center,
-        "area": best_blob.area(),
-        "radius_px": int(best_blob.w() / 2),
+        "area": best_target["area"],
+        "radius_px": best_target["radius"],
+        "source": best_target["source"],
     }
 
 

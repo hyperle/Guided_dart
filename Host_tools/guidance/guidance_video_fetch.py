@@ -145,7 +145,7 @@ class RawReplSession:
 def build_listing_command():
     return """
 import os
-roots = ['/sdcard/recordings', '/sd/recordings', '/flash/recordings']
+roots = ['/sdcard/recordings', '/sd/recordings']
 for root in roots:
     try:
         entries = os.listdir(root)

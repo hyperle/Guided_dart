@@ -14,6 +14,7 @@ from PIL import Image, ImageTk
 from guidance_tuner_core import (
     CV_FONT,
     LOCAL_PREVIEW_NOTE,
+    ColorSample,
     DetectionDebug,
     DetectorParams,
     SimulationParams,
@@ -25,9 +26,11 @@ from guidance_tuner_core import (
     clamp,
     gray_to_bgr,
     load_detector_defaults,
+    evaluate_host_frame,
     point_in_roi,
     resize_for_display,
     roi_from_drag,
+    sample_color_circle,
     scale_for_display,
     threshold_lab_mask,
 )
@@ -58,6 +61,9 @@ class VideoTunerApp:
         self.drag_current: tuple[int, int] | None = None
         self.single_display_scale = 1.0
         self.single_frame_result: DetectionDebug | None = None
+        self.host_frame_result: DetectionDebug | None = None
+        self.color_sample_center: tuple[int, int] | None = None
+        self.color_sample: ColorSample | None = None
         self.validation_summary: ValidationSummary | None = None
         self.openmv_evaluator = OpenMvEvaluator(REPO_ROOT, config_path, port_override=port, baudrate_override=baudrate)
 
@@ -77,6 +83,8 @@ class VideoTunerApp:
         defaults = load_detector_defaults(config_path)
         self.frame_index_var = tk.IntVar(value=0)
         self.validation_frame_var = tk.IntVar(value=0)
+        self.interaction_mode_var = tk.StringVar(value="roi")
+        self.sample_radius_var = tk.IntVar(value=8)
 
         self.exposure_scale_var = tk.DoubleVar(value=1.0)
         self.r_gain_var = tk.DoubleVar(value=1.0)
@@ -97,6 +105,16 @@ class VideoTunerApp:
         self.track_window_radius_var = tk.IntVar(value=defaults.track_window_radius_px)
         self.center_filter_gain_var = tk.IntVar(value=defaults.center_filter_gain_x100)
         self.max_missed_frames_var = tk.IntVar(value=defaults.max_missed_frames)
+        self.ring_detection_enabled_var = tk.IntVar(value=defaults.ring_detection_enabled)
+        self.ring_min_roundness_var = tk.IntVar(value=defaults.ring_min_roundness_x1000)
+        self.ring_min_aspect_var = tk.IntVar(value=defaults.ring_min_aspect_x100)
+        self.ring_min_fill_var = tk.IntVar(value=defaults.ring_min_fill_x100)
+        self.ring_max_fill_var = tk.IntVar(value=defaults.ring_max_fill_x100)
+        self.ring_min_center_white_var = tk.IntVar(value=defaults.ring_min_center_white_x100)
+        self.ring_center_sample_ratio_var = tk.IntVar(value=defaults.ring_center_sample_ratio_x100)
+        self.ring_center_min_brightness_var = tk.IntVar(value=defaults.ring_center_min_brightness)
+        self.ring_center_max_channel_delta_var = tk.IntVar(value=defaults.ring_center_max_channel_delta)
+        self.ring_min_outer_diameter_var = tk.IntVar(value=defaults.ring_min_outer_diameter_px)
 
         self.sweep_exposure_min_var = tk.DoubleVar(value=0.8)
         self.sweep_exposure_max_var = tk.DoubleVar(value=1.4)
@@ -161,10 +179,28 @@ class VideoTunerApp:
         status_bar.pack(fill=tk.X, padx=8, pady=(0, 6))
 
     def _build_control_panel(self) -> None:
-        file_box = ttk.LabelFrame(self.control_frame, text="Video / ROI")
+        file_box = ttk.LabelFrame(self.control_frame, text="Video / Tools")
         file_box.pack(fill=tk.X, padx=8, pady=8)
         ttk.Button(file_box, text="Open Video...", command=self.choose_video).pack(fill=tk.X, padx=6, pady=4)
         ttk.Button(file_box, text="Clear ROI", command=self.clear_roi).pack(fill=tk.X, padx=6, pady=4)
+        ttk.Button(file_box, text="Clear Sample", command=self.clear_sample).pack(fill=tk.X, padx=6, pady=4)
+
+        mode_frame = ttk.Frame(file_box)
+        mode_frame.pack(fill=tk.X, padx=6, pady=(4, 0))
+        ttk.Label(mode_frame, text="Mouse Mode", width=18).pack(side=tk.LEFT)
+        ttk.Radiobutton(
+            mode_frame,
+            text="ROI",
+            value="roi",
+            variable=self.interaction_mode_var,
+        ).pack(side=tk.LEFT)
+        ttk.Radiobutton(
+            mode_frame,
+            text="Sample",
+            value="sample",
+            variable=self.interaction_mode_var,
+        ).pack(side=tk.LEFT, padx=(8, 0))
+        self._add_scale(file_box, "Sample Radius", self.sample_radius_var, 0, 40, 1)
         ttk.Label(file_box, text=f"Config: {self.config_path}", wraplength=340).pack(fill=tk.X, padx=6, pady=(4, 6))
         ttk.Label(file_box, text=LOCAL_PREVIEW_NOTE, wraplength=340).pack(fill=tk.X, padx=6, pady=(0, 6))
 
@@ -188,6 +224,19 @@ class VideoTunerApp:
         self._add_scale(detector_box, "Max Area", self.max_area_var, 0, 50000, 1)
         self._add_scale(detector_box, "Roundness x1000", self.roundness_min_var, 0, 1000, 1)
         self._add_scale(detector_box, "Merge Margin", self.merge_margin_var, 0, 50, 1)
+
+        ring_box = ttk.LabelFrame(self.control_frame, text="Saturated Ring")
+        ring_box.pack(fill=tk.X, padx=8, pady=8)
+        self._add_scale(ring_box, "Ring Enabled", self.ring_detection_enabled_var, 0, 1, 1)
+        self._add_scale(ring_box, "Ring Round x1000", self.ring_min_roundness_var, 0, 1000, 1)
+        self._add_scale(ring_box, "Ring Aspect x100", self.ring_min_aspect_var, 1, 100, 1)
+        self._add_scale(ring_box, "Ring Fill Min", self.ring_min_fill_var, 0, 100, 1)
+        self._add_scale(ring_box, "Ring Fill Max", self.ring_max_fill_var, 0, 100, 1)
+        self._add_scale(ring_box, "White Center Min", self.ring_min_center_white_var, 0, 100, 1)
+        self._add_scale(ring_box, "Center Sample", self.ring_center_sample_ratio_var, 5, 100, 1)
+        self._add_scale(ring_box, "White Brightness", self.ring_center_min_brightness_var, 0, 255, 1)
+        self._add_scale(ring_box, "White Delta Max", self.ring_center_max_channel_delta_var, 0, 255, 1)
+        self._add_scale(ring_box, "Outer Diameter", self.ring_min_outer_diameter_var, 1, 240, 1)
 
         tracking_box = ttk.LabelFrame(self.control_frame, text="Tracking / Validation")
         tracking_box.pack(fill=tk.X, padx=8, pady=8)
@@ -269,7 +318,7 @@ class VideoTunerApp:
         self.mask_label = ttk.Label(mask_box)
         self.mask_label.grid(row=0, column=0, sticky="nsew")
 
-        overlay_box = ttk.LabelFrame(body, text="OpenMV Detection Overlay")
+        overlay_box = ttk.LabelFrame(body, text="Host Detection Overlay")
         overlay_box.grid(row=0, column=2, sticky="nsew", padx=(6, 0))
         overlay_box.rowconfigure(0, weight=1)
         overlay_box.columnconfigure(0, weight=1)
@@ -380,6 +429,11 @@ class VideoTunerApp:
         self.drag_current = None
         self.schedule_single_refresh()
 
+    def clear_sample(self) -> None:
+        self.color_sample_center = None
+        self.color_sample = None
+        self.schedule_single_refresh()
+
     def load_video(self, path: str) -> None:
         if self._validation_in_progress:
             messagebox.showwarning("Validation running", "Cannot load another video while validation is running.")
@@ -405,6 +459,10 @@ class VideoTunerApp:
         self.expected_roi = None
         self.drag_start = None
         self.drag_current = None
+        self.host_frame_result = None
+        self.single_frame_result = None
+        self.color_sample_center = None
+        self.color_sample = None
         self.validation_summary = None
         self.video_info_var.set(f"{os.path.basename(path)} | {self.video.frame_count} frames | {self.video.width}x{self.video.height}")
         self.status_var.set("Video loaded. Drag on the transformed image to mark the expected target region.")
@@ -454,6 +512,16 @@ class VideoTunerApp:
             track_window_radius_px=max(1, int(self.track_window_radius_var.get())),
             center_filter_gain_x100=int(clamp(int(self.center_filter_gain_var.get()), 0, 100)),
             max_missed_frames=max(1, int(self.max_missed_frames_var.get())),
+            ring_detection_enabled=1 if int(self.ring_detection_enabled_var.get()) != 0 else 0,
+            ring_min_roundness_x1000=int(clamp(int(self.ring_min_roundness_var.get()), 0, 1000)),
+            ring_min_aspect_x100=int(clamp(int(self.ring_min_aspect_var.get()), 1, 100)),
+            ring_min_fill_x100=int(clamp(int(self.ring_min_fill_var.get()), 0, 100)),
+            ring_max_fill_x100=int(clamp(int(self.ring_max_fill_var.get()), 0, 100)),
+            ring_min_center_white_x100=int(clamp(int(self.ring_min_center_white_var.get()), 0, 100)),
+            ring_center_sample_ratio_x100=int(clamp(int(self.ring_center_sample_ratio_var.get()), 5, 100)),
+            ring_center_min_brightness=int(clamp(int(self.ring_center_min_brightness_var.get()), 0, 255)),
+            ring_center_max_channel_delta=int(clamp(int(self.ring_center_max_channel_delta_var.get()), 0, 255)),
+            ring_min_outer_diameter_px=max(1, int(self.ring_min_outer_diameter_var.get())),
         )
 
     def snapshot_sweep_params(self) -> SweepParams:
@@ -495,6 +563,16 @@ class VideoTunerApp:
         self.track_window_radius_var.set(run_config.detector_params.track_window_radius_px)
         self.center_filter_gain_var.set(run_config.detector_params.center_filter_gain_x100)
         self.max_missed_frames_var.set(run_config.detector_params.max_missed_frames)
+        self.ring_detection_enabled_var.set(run_config.detector_params.ring_detection_enabled)
+        self.ring_min_roundness_var.set(run_config.detector_params.ring_min_roundness_x1000)
+        self.ring_min_aspect_var.set(run_config.detector_params.ring_min_aspect_x100)
+        self.ring_min_fill_var.set(run_config.detector_params.ring_min_fill_x100)
+        self.ring_max_fill_var.set(run_config.detector_params.ring_max_fill_x100)
+        self.ring_min_center_white_var.set(run_config.detector_params.ring_min_center_white_x100)
+        self.ring_center_sample_ratio_var.set(run_config.detector_params.ring_center_sample_ratio_x100)
+        self.ring_center_min_brightness_var.set(run_config.detector_params.ring_center_min_brightness)
+        self.ring_center_max_channel_delta_var.set(run_config.detector_params.ring_center_max_channel_delta)
+        self.ring_min_outer_diameter_var.set(run_config.detector_params.ring_min_outer_diameter_px)
 
         self.sweep_exposure_min_var.set(run_config.sweep_params.exposure_min)
         self.sweep_exposure_max_var.set(run_config.sweep_params.exposure_max)
@@ -555,6 +633,8 @@ class VideoTunerApp:
         detector_params = self.snapshot_detector_params()
         adjusted = apply_simulation(frame, sim_params)
         preview_mask = threshold_lab_mask(adjusted, detector_params)
+        self.host_frame_result = evaluate_host_frame(adjusted, detector_params, self.expected_roi, preview_mask)
+        self.color_sample = sample_color_circle(adjusted, self.color_sample_center, int(self.sample_radius_var.get()))
 
         if self._validation_in_progress:
             self.single_frame_result = self._fallback_result()
@@ -579,10 +659,11 @@ class VideoTunerApp:
             self.single_frame_result = self._fallback_result()
 
         self.single_frame_result.mask = preview_mask
+        self.host_frame_result.mask = preview_mask
         self.single_display_scale = scale_for_display(adjusted.shape[1], adjusted.shape[0])
         adjusted_display = resize_for_display(self.draw_adjusted_view(adjusted), self.single_display_scale)
         mask_display = resize_for_display(self.draw_mask_view(preview_mask), self.single_display_scale)
-        overlay_display = resize_for_display(self.draw_overlay_view(adjusted, self.single_frame_result), self.single_display_scale)
+        overlay_display = resize_for_display(self.draw_overlay_view(adjusted, self.host_frame_result, "HOST PREVIEW"), self.single_display_scale)
 
         self._adjusted_photo = bgr_to_photo(adjusted_display)
         self._mask_photo = bgr_to_photo(mask_display)
@@ -593,7 +674,7 @@ class VideoTunerApp:
         self.adjusted_canvas.create_image(0, 0, image=self._adjusted_photo, anchor="nw")
 
         roi_to_draw = self.expected_roi
-        if self.drag_start is not None and self.drag_current is not None and self.video is not None:
+        if self.drag_start is not None and self.drag_current is not None and self.video is not None and self.interaction_mode_var.get() == "roi":
             roi_to_draw = roi_from_drag(self.drag_start, self.drag_current, self.video.width, self.video.height)
         if roi_to_draw is not None:
             x, y, w, h = roi_to_draw
@@ -607,25 +688,60 @@ class VideoTunerApp:
                 width=2,
             )
 
+        self.draw_sample_canvas_overlay()
         self.mask_label.configure(image=self._mask_photo)
         self.overlay_label.configure(image=self._overlay_photo)
-        self._set_text(self.single_info_text, self.format_single_frame_info(self.single_frame_result))
+        self._set_text(self.single_info_text, self.format_single_frame_info(self.host_frame_result, self.single_frame_result))
 
     def draw_adjusted_view(self, adjusted_bgr: np.ndarray) -> np.ndarray:
         image = adjusted_bgr.copy()
+        self.draw_sample_marker(image)
         cv2.putText(image, f"frame={self.frame_index_var.get()}", (10, 24), CV_FONT, 0.65, (255, 255, 255), 2, cv2.LINE_AA)
         return image
+
+    def draw_sample_marker(self, image: np.ndarray) -> None:
+        if self.color_sample_center is None:
+            return
+        center_x, center_y = self.color_sample_center
+        radius = max(0, int(self.sample_radius_var.get()))
+        cv2.circle(image, (center_x, center_y), radius, (255, 0, 255), 2)
+        cv2.circle(image, (center_x, center_y), 2, (255, 0, 255), -1)
+
+    def draw_sample_canvas_overlay(self) -> None:
+        if self.color_sample_center is None:
+            return
+        center_x, center_y = self.color_sample_center
+        radius = max(0, int(self.sample_radius_var.get()))
+        scale = self.single_display_scale
+        self.adjusted_canvas.create_oval(
+            (center_x - radius) * scale,
+            (center_y - radius) * scale,
+            (center_x + radius) * scale,
+            (center_y + radius) * scale,
+            outline="#ff00ff",
+            width=2,
+        )
+        self.adjusted_canvas.create_oval(
+            (center_x - 2) * scale,
+            (center_y - 2) * scale,
+            (center_x + 2) * scale,
+            (center_y + 2) * scale,
+            fill="#ff00ff",
+            outline="#ff00ff",
+        )
 
     def draw_mask_view(self, mask: np.ndarray) -> np.ndarray:
         image = gray_to_bgr(mask)
         if self.expected_roi is not None:
             x, y, w, h = self.expected_roi
             cv2.rectangle(image, (x, y), (x + w, y + h), (255, 255, 0), 2)
+        self.draw_sample_marker(image)
         cv2.putText(image, "HOST MASK", (10, 24), CV_FONT, 0.6, (255, 255, 255), 2, cv2.LINE_AA)
         return image
 
-    def draw_overlay_view(self, adjusted_bgr: np.ndarray, result: DetectionDebug) -> np.ndarray:
+    def draw_overlay_view(self, adjusted_bgr: np.ndarray, result: DetectionDebug, label: str) -> np.ndarray:
         image = adjusted_bgr.copy()
+        self.draw_sample_marker(image)
         if self.expected_roi is not None:
             x, y, w, h = self.expected_roi
             cv2.rectangle(image, (x, y), (x + w, y + h), (255, 255, 0), 2)
@@ -634,6 +750,8 @@ class VideoTunerApp:
             color = (0, 0, 255)
             if candidate.passes_area and candidate.passes_roundness:
                 color = (0, 200, 255)
+            if candidate.passes_ring:
+                color = (255, 160, 0)
             if result.best_candidate is candidate:
                 color = (0, 255, 0) if result.locked else (0, 128, 255)
             x, y, w, h = candidate.bbox
@@ -658,86 +776,158 @@ class VideoTunerApp:
             cv2.LINE_AA,
         )
         cv2.putText(image, result.reason, (10, 48), CV_FONT, 0.55, (255, 255, 255), 2, cv2.LINE_AA)
-        cv2.putText(image, "OPENMV VERDICT", (10, 72), CV_FONT, 0.55, (255, 255, 255), 2, cv2.LINE_AA)
+        cv2.putText(image, label, (10, 72), CV_FONT, 0.55, (255, 255, 255), 2, cv2.LINE_AA)
         return image
 
-    def format_single_frame_info(self, result: DetectionDebug) -> str:
-        sim_params = self.snapshot_simulation_params()
-        detector_params = self.snapshot_detector_params()
+    @staticmethod
+    def _format_float_triplet(values: tuple[float, float, float]) -> str:
+        return ", ".join(f"{value:.1f}" for value in values)
+
+    @staticmethod
+    def _format_int_triplet(values) -> str:
+        return ", ".join(str(int(value)) for value in values)
+
+    def format_detection_summary(self, label: str, result: DetectionDebug) -> list[str]:
+        locked = "YES" if result.locked else "NO"
+        detected = "YES" if result.detected else "NO"
+        background = "YES" if result.background_misdetect else "NO"
+        source = result.source if result.source else "-"
         lines = [
-            f"Frame: {self.frame_index_var.get()}",
-            f"Locked: {'YES' if result.locked else 'NO'}",
-            f"Lock Signal: {1 if result.locked else 0}",
-            f"Detected candidate: {'YES' if result.detected else 'NO'}",
-            f"Failure reason: {result.reason}",
-            f"Background misdetect: {'YES' if result.background_misdetect else 'NO'}",
-            LOCAL_PREVIEW_NOTE,
-            "",
-            "Current simulation params:",
-            f"  exposure_scale={sim_params.exposure_scale:.4f}",
-            f"  r_gain={sim_params.r_gain:.4f}",
-            f"  g_gain={sim_params.g_gain:.4f}",
-            f"  b_gain={sim_params.b_gain:.4f}",
-            f"  gamma={sim_params.gamma:.4f}",
-            "Current detector params:",
-            f"  threshold_l_min={detector_params.threshold_l_min}",
-            f"  threshold_l_max={detector_params.threshold_l_max}",
-            f"  threshold_a_min={detector_params.threshold_a_min}",
-            f"  threshold_a_max={detector_params.threshold_a_max}",
-            f"  threshold_b_min={detector_params.threshold_b_min}",
-            f"  threshold_b_max={detector_params.threshold_b_max}",
-            f"  min_area={detector_params.min_area}",
-            f"  max_area={detector_params.max_area}",
-            f"  roundness_min_x1000={detector_params.roundness_min_x1000}",
-            f"  merge_margin={detector_params.merge_margin}",
-            f"  track_window_radius_px={detector_params.track_window_radius_px}",
-            f"  center_filter_gain_x100={detector_params.center_filter_gain_x100}",
-            f"  max_missed_frames={detector_params.max_missed_frames}",
+            f"{label}:",
+            f"  locked={locked} lock_signal={1 if result.locked else 0} detected={detected}",
+            f"  reason={result.reason} background={background} source={source}",
         ]
         if result.raw_center is not None:
-            lines.append(f"Center: ({result.raw_center[0]}, {result.raw_center[1]})")
-            lines.append(f"Area: {result.area}")
-            lines.append(f"Radius: {result.radius_px}")
+            lines.append(f"  center=({result.raw_center[0]}, {result.raw_center[1]}) area={result.area} radius={result.radius_px}")
         else:
-            lines.append("Center: -")
-            lines.append("Area: -")
-            lines.append("Radius: -")
-        lines.append(f"Candidates returned by OpenMV: {len(result.candidates)}")
+            lines.append("  center=- area=- radius=-")
+        lines.append(f"  candidates={len(result.candidates)}")
+        return lines
+
+    def format_sample_info(self) -> list[str]:
+        lines = ["Color sample:"]
+        sample = self.color_sample
+        if sample is None:
+            lines.append("  center=- radius=%d pixels=0" % int(self.sample_radius_var.get()))
+            return lines
+
+        l_min = int(clamp(math.floor(sample.lab_min[0]), 0, 100))
+        l_max = int(clamp(math.ceil(sample.lab_max[0]), 0, 100))
+        a_min = int(clamp(sample.lab_min[1], -128, 127))
+        a_max = int(clamp(sample.lab_max[1], -128, 127))
+        b_min = int(clamp(sample.lab_min[2], -128, 127))
+        b_max = int(clamp(sample.lab_max[2], -128, 127))
+        lines.extend(
+            [
+                f"  center=({sample.center_x}, {sample.center_y}) radius={sample.radius_px} pixels={sample.pixel_count}",
+                f"  RGB mean=({self._format_float_triplet(sample.rgb_mean)}) min=({self._format_int_triplet(sample.rgb_min)}) max=({self._format_int_triplet(sample.rgb_max)})",
+                f"  LAB mean=({self._format_float_triplet(sample.lab_mean)}) min=({l_min}, {a_min}, {b_min}) max=({l_max}, {a_max}, {b_max})",
+                f"  sample_lab_threshold: L=({l_min},{l_max}) A=({a_min},{a_max}) B=({b_min},{b_max})",
+            ]
+        )
+        return lines
+
+    def format_single_frame_info(self, host_result: DetectionDebug, openmv_result: DetectionDebug) -> str:
+        sim_params = self.snapshot_simulation_params()
+        detector_params = self.snapshot_detector_params()
+        lines = [f"Frame: {self.frame_index_var.get()}"]
+        lines.extend(self.format_detection_summary("Host preview", host_result))
+        lines.append("")
+        lines.extend(self.format_detection_summary("OpenMV verdict", openmv_result))
+        lines.append(LOCAL_PREVIEW_NOTE)
+        lines.append("")
+        lines.extend(self.format_sample_info())
+        lines.extend(
+            [
+                "",
+                "Current simulation params:",
+                f"  exposure_scale={sim_params.exposure_scale:.4f}",
+                f"  r_gain={sim_params.r_gain:.4f}",
+                f"  g_gain={sim_params.g_gain:.4f}",
+                f"  b_gain={sim_params.b_gain:.4f}",
+                f"  gamma={sim_params.gamma:.4f}",
+                "Current detector params:",
+                f"  threshold_l_min={detector_params.threshold_l_min}",
+                f"  threshold_l_max={detector_params.threshold_l_max}",
+                f"  threshold_a_min={detector_params.threshold_a_min}",
+                f"  threshold_a_max={detector_params.threshold_a_max}",
+                f"  threshold_b_min={detector_params.threshold_b_min}",
+                f"  threshold_b_max={detector_params.threshold_b_max}",
+                f"  min_area={detector_params.min_area}",
+                f"  max_area={detector_params.max_area}",
+                f"  roundness_min_x1000={detector_params.roundness_min_x1000}",
+                f"  merge_margin={detector_params.merge_margin}",
+                f"  track_window_radius_px={detector_params.track_window_radius_px}",
+                f"  center_filter_gain_x100={detector_params.center_filter_gain_x100}",
+                f"  max_missed_frames={detector_params.max_missed_frames}",
+                f"  ring_detection_enabled={detector_params.ring_detection_enabled}",
+                f"  ring_min_roundness_x1000={detector_params.ring_min_roundness_x1000}",
+                f"  ring_min_aspect_x100={detector_params.ring_min_aspect_x100}",
+                f"  ring_min_fill_x100={detector_params.ring_min_fill_x100}",
+                f"  ring_max_fill_x100={detector_params.ring_max_fill_x100}",
+                f"  ring_min_center_white_x100={detector_params.ring_min_center_white_x100}",
+                f"  ring_center_sample_ratio_x100={detector_params.ring_center_sample_ratio_x100}",
+                f"  ring_center_min_brightness={detector_params.ring_center_min_brightness}",
+                f"  ring_center_max_channel_delta={detector_params.ring_center_max_channel_delta}",
+                f"  ring_min_outer_diameter_px={detector_params.ring_min_outer_diameter_px}",
+            ]
+        )
         if self.expected_roi is not None:
             rx, ry, rw, rh = self.expected_roi
             lines.append(f"Expected ROI: x={rx}, y={ry}, w={rw}, h={rh}")
-        if result.candidates:
+        if host_result.candidates:
             lines.append("")
-            lines.append("Top candidates:")
-            ranked = sorted(result.candidates, key=lambda candidate: candidate.roundness_x1000, reverse=True)[:6]
+            lines.append("Host preview candidates:")
+            ranked = sorted(host_result.candidates, key=lambda candidate: candidate.roundness_x1000, reverse=True)[:6]
             for index, candidate in enumerate(ranked, start=1):
                 inside = point_in_roi((candidate.center_x, candidate.center_y), self.expected_roi)
+                source = candidate.source if candidate.source else "-"
+                ring = "yes" if candidate.passes_ring else "no"
+                inside_text = "yes" if inside else "no"
                 lines.append(
                     f"{index}. center=({candidate.center_x},{candidate.center_y}) area={candidate.area} "
-                    f"roundness={candidate.roundness_x1000} inside_roi={'yes' if inside else 'no'}"
+                    f"roundness={candidate.roundness_x1000} source={source} "
+                    f"ring={ring} fill={candidate.green_fill_x100} "
+                    f"center_white={candidate.center_white_x100} inside_roi={inside_text}"
                 )
         return "\n".join(lines) + "\n"
 
     def on_canvas_press(self, event: tk.Event) -> None:
         if self.video is None:
             return
-        self.drag_start = self.canvas_to_image_coords(event.x, event.y)
-        self.drag_current = self.drag_start
+        point = self.canvas_to_image_coords(event.x, event.y)
+        if self.interaction_mode_var.get() == "sample":
+            self.color_sample_center = point
+            self.drag_start = None
+            self.drag_current = None
+        else:
+            self.drag_start = point
+            self.drag_current = point
         self.schedule_single_refresh()
 
     def on_canvas_drag(self, event: tk.Event) -> None:
-        if self.video is None or self.drag_start is None:
+        if self.video is None:
             return
-        self.drag_current = self.canvas_to_image_coords(event.x, event.y)
+        point = self.canvas_to_image_coords(event.x, event.y)
+        if self.interaction_mode_var.get() == "sample":
+            self.color_sample_center = point
+        elif self.drag_start is not None:
+            self.drag_current = point
         self.schedule_single_refresh()
 
     def on_canvas_release(self, event: tk.Event) -> None:
-        if self.video is None or self.drag_start is None:
+        if self.video is None:
             return
-        self.drag_current = self.canvas_to_image_coords(event.x, event.y)
-        self.expected_roi = roi_from_drag(self.drag_start, self.drag_current, self.video.width, self.video.height)
-        self.drag_start = None
-        self.drag_current = None
+        point = self.canvas_to_image_coords(event.x, event.y)
+        if self.interaction_mode_var.get() == "sample":
+            self.color_sample_center = point
+            self.drag_start = None
+            self.drag_current = None
+        elif self.drag_start is not None:
+            self.drag_current = point
+            self.expected_roi = roi_from_drag(self.drag_start, self.drag_current, self.video.width, self.video.height)
+            self.drag_start = None
+            self.drag_current = None
         self.schedule_single_refresh()
 
     def canvas_to_image_coords(self, canvas_x: int, canvas_y: int) -> tuple[int, int]:
@@ -982,6 +1172,16 @@ class VideoTunerApp:
                 f"  openmv_track_window_radius_px: {params.track_window_radius_px}",
                 f"  openmv_center_filter_gain_x100: {params.center_filter_gain_x100}",
                 f"  openmv_max_missed_frames: {params.max_missed_frames}",
+                f"  openmv_ring_detection_enabled: {params.ring_detection_enabled}",
+                f"  openmv_ring_min_roundness_x1000: {params.ring_min_roundness_x1000}",
+                f"  openmv_ring_min_aspect_x100: {params.ring_min_aspect_x100}",
+                f"  openmv_ring_min_fill_x100: {params.ring_min_fill_x100}",
+                f"  openmv_ring_max_fill_x100: {params.ring_max_fill_x100}",
+                f"  openmv_ring_min_center_white_x100: {params.ring_min_center_white_x100}",
+                f"  openmv_ring_center_sample_ratio_x100: {params.ring_center_sample_ratio_x100}",
+                f"  openmv_ring_center_min_brightness: {params.ring_center_min_brightness}",
+                f"  openmv_ring_center_max_channel_delta: {params.ring_center_max_channel_delta}",
+                f"  openmv_ring_min_outer_diameter_px: {params.ring_min_outer_diameter_px}",
                 "",
             ]
         )

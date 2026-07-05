@@ -30,21 +30,31 @@ viewer:
   refresh_ms: 50
 
 green_light:
-  setpoint_x: 160
-  setpoint_y: 120
+  setpoint_x: 120
+  setpoint_y: 140
   openmv_threshold_l_min: 20
   openmv_threshold_l_max: 70
   openmv_threshold_a_min: -77
   openmv_threshold_a_max: -19
   openmv_threshold_b_min: -19
   openmv_threshold_b_max: 38
-  openmv_min_area: 20
-  openmv_max_area: 2000
+  openmv_min_area: 1
+  openmv_max_area: 36000
   openmv_roundness_min_x1000: 700
   openmv_merge_margin: 5
   openmv_track_window_radius_px: 80
   openmv_center_filter_gain_x100: 70
   openmv_max_missed_frames: 2
+  openmv_ring_detection_enabled: 1
+  openmv_ring_min_roundness_x1000: 350
+  openmv_ring_min_aspect_x100: 65
+  openmv_ring_min_fill_x100: 8
+  openmv_ring_max_fill_x100: 76
+  openmv_ring_min_center_white_x100: 20
+  openmv_ring_center_sample_ratio_x100: 35
+  openmv_ring_center_min_brightness: 220
+  openmv_ring_center_max_channel_delta: 80
+  openmv_ring_min_outer_diameter_px: 12
 
 controller:
   control_mode: 1

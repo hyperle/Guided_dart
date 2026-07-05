@@ -139,6 +139,46 @@ params:
     macro: ESP32_LINK_PARAM_KEY_OPENMV_MAX_MISSED_FRAMES
     value_type: u32
     key: 60
+  green_light.openmv_ring_detection_enabled:
+    macro: ESP32_LINK_PARAM_KEY_OPENMV_RING_DETECTION_ENABLED
+    value_type: u32
+    key: 61
+  green_light.openmv_ring_min_roundness_x1000:
+    macro: ESP32_LINK_PARAM_KEY_OPENMV_RING_MIN_ROUNDNESS_X1000
+    value_type: u32
+    key: 62
+  green_light.openmv_ring_min_aspect_x100:
+    macro: ESP32_LINK_PARAM_KEY_OPENMV_RING_MIN_ASPECT_X100
+    value_type: u32
+    key: 63
+  green_light.openmv_ring_min_fill_x100:
+    macro: ESP32_LINK_PARAM_KEY_OPENMV_RING_MIN_FILL_X100
+    value_type: u32
+    key: 64
+  green_light.openmv_ring_max_fill_x100:
+    macro: ESP32_LINK_PARAM_KEY_OPENMV_RING_MAX_FILL_X100
+    value_type: u32
+    key: 65
+  green_light.openmv_ring_min_center_white_x100:
+    macro: ESP32_LINK_PARAM_KEY_OPENMV_RING_MIN_CENTER_WHITE_X100
+    value_type: u32
+    key: 66
+  green_light.openmv_ring_center_sample_ratio_x100:
+    macro: ESP32_LINK_PARAM_KEY_OPENMV_RING_CENTER_SAMPLE_RATIO_X100
+    value_type: u32
+    key: 67
+  green_light.openmv_ring_center_min_brightness:
+    macro: ESP32_LINK_PARAM_KEY_OPENMV_RING_CENTER_MIN_BRIGHTNESS
+    value_type: u32
+    key: 68
+  green_light.openmv_ring_center_max_channel_delta:
+    macro: ESP32_LINK_PARAM_KEY_OPENMV_RING_CENTER_MAX_CHANNEL_DELTA
+    value_type: u32
+    key: 69
+  green_light.openmv_ring_min_outer_diameter_px:
+    macro: ESP32_LINK_PARAM_KEY_OPENMV_RING_MIN_OUTER_DIAMETER_PX
+    value_type: u32
+    key: 70
   controller.control_mode:
     macro: ESP32_LINK_PARAM_KEY_CONTROLLER_CONTROL_MODE
     value_type: u32

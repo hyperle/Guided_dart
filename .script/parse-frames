@@ -1,0 +1,84 @@
+#!/usr/bin/env python3
+"""Extract JPEGs from OpenMV USB preview captures.
+
+Supports the current binary OMVJ dump format and the older text format that
+printed lines beginning with "FRAME " followed by base64 JPEG data.
+"""
+from __future__ import annotations
+
+import argparse
+import base64
+import struct
+from pathlib import Path
+
+MAGIC = b"OMVJ"
+HEADER = struct.Struct(">IHHI")
+
+
+def parse_omvj(data: bytes, output_dir: Path) -> int:
+    offset = 0
+    frames = 0
+    while True:
+        marker = data.find(MAGIC, offset)
+        if marker < 0:
+            return frames
+        header_start = marker + len(MAGIC)
+        header_end = header_start + HEADER.size
+        if header_end > len(data):
+            return frames
+
+        length, width, height, ticks_ms = HEADER.unpack(data[header_start:header_end])
+        payload_start = header_end
+        payload_end = payload_start + length
+        if length <= 0 or payload_end > len(data):
+            offset = marker + 1
+            continue
+
+        jpeg = data[payload_start:payload_end]
+        if jpeg.startswith(b"\xff\xd8"):
+            frames += 1
+            path = output_dir / f"omv_{frames:04d}.jpg"
+            path.write_bytes(jpeg)
+            print(f"FRAME {frames}: {width}x{height} {len(jpeg)}B ticks={ticks_ms} -> {path}")
+            offset = payload_end
+        else:
+            offset = marker + 1
+
+
+def parse_legacy_frame_lines(data: bytes, output_dir: Path, start_index: int) -> int:
+    frames = start_index
+    for line in data.splitlines():
+        line = line.strip()
+        if not line.startswith(b"FRAME "):
+            continue
+        try:
+            jpeg = base64.b64decode(line[6:])
+        except Exception:
+            continue
+        if not jpeg.startswith(b"\xff\xd8"):
+            continue
+        frames += 1
+        path = output_dir / f"omv_{frames:04d}.jpg"
+        path.write_bytes(jpeg)
+        print(f"FRAME {frames}: legacy {len(jpeg)}B -> {path}")
+    return frames
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="extract JPEGs from OpenMV USB preview captures")
+    parser.add_argument("capture", help="raw capture file produced by camera-stream --raw-dump")
+    parser.add_argument("--output-dir", default="/tmp/openmv_frames", help="directory for extracted JPEGs")
+    args = parser.parse_args()
+
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    data = Path(args.capture).read_bytes()
+
+    frames = parse_omvj(data, output_dir)
+    frames = parse_legacy_frame_lines(data, output_dir, frames)
+    print(f"{frames} frames extracted into {output_dir}")
+    return 0 if frames else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

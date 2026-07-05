@@ -1,6 +1,6 @@
 FRAME_HEADER = (0xA5, 0x5A)
 MEASUREMENT_HEADER = 0x5A
-MEASUREMENT_LENGTH = 0x06
+MEASUREMENT_LENGTH = 0x0A
 PARAM_TYPE_SET = 0x10
 PARAM_TYPE_ACK = 0x11
 
@@ -32,6 +32,16 @@ KEY_OPENMV_MERGE_MARGIN = 0x39
 KEY_OPENMV_TRACK_WINDOW_RADIUS_PX = 0x3A
 KEY_OPENMV_CENTER_FILTER_GAIN_X100 = 0x3B
 KEY_OPENMV_MAX_MISSED_FRAMES = 0x3C
+KEY_OPENMV_RING_DETECTION_ENABLED = 0x3D
+KEY_OPENMV_RING_MIN_ROUNDNESS_X1000 = 0x3E
+KEY_OPENMV_RING_MIN_ASPECT_X100 = 0x3F
+KEY_OPENMV_RING_MIN_FILL_X100 = 0x40
+KEY_OPENMV_RING_MAX_FILL_X100 = 0x41
+KEY_OPENMV_RING_MIN_CENTER_WHITE_X100 = 0x42
+KEY_OPENMV_RING_CENTER_SAMPLE_RATIO_X100 = 0x43
+KEY_OPENMV_RING_CENTER_MIN_BRIGHTNESS = 0x44
+KEY_OPENMV_RING_CENTER_MAX_CHANNEL_DELTA = 0x45
+KEY_OPENMV_RING_MIN_OUTER_DIAMETER_PX = 0x46
 
 
 def clamp(value, min_value, max_value):
@@ -51,6 +61,17 @@ def u32_to_i32(value):
     return value
 
 
+def pixel_channels(pixel):
+    if isinstance(pixel, tuple) or isinstance(pixel, list):
+        if len(pixel) >= 3:
+            return int(pixel[0]), int(pixel[1]), int(pixel[2])
+        if len(pixel) >= 1:
+            value = int(pixel[0])
+            return value, value, value
+    value = int(pixel)
+    return value, value, value
+
+
 class GreenLightDetector:
     def __init__(self):
         self.params = {
@@ -60,13 +81,23 @@ class GreenLightDetector:
             "threshold_a_max": -19,
             "threshold_b_min": -19,
             "threshold_b_max": 38,
-            "min_area": 20,
-            "max_area": 2000,
+            "min_area": 1,
+            "max_area": 36000,
             "roundness_min_x1000": 700,
             "merge_margin": 5,
             "track_window_radius_px": 80,
             "center_filter_gain_x100": 70,
-            "max_missed_frames": 2,
+            "max_missed_frames": 8,
+            "ring_detection_enabled": 1,
+            "ring_min_roundness_x1000": 350,
+            "ring_min_aspect_x100": 65,
+            "ring_min_fill_x100": 8,
+            "ring_max_fill_x100": 76,
+            "ring_min_center_white_x100": 20,
+            "ring_center_sample_ratio_x100": 35,
+            "ring_center_min_brightness": 220,
+            "ring_center_max_channel_delta": 80,
+            "ring_min_outer_diameter_px": 12,
         }
         self._param_rx_state = 0
         self._param_rx_buffer = bytearray()
@@ -94,7 +125,7 @@ class GreenLightDetector:
         end_y = clamp(center_y + radius, 0, image_height - 1)
         return (start_x, start_y, end_x - start_x + 1, end_y - start_y + 1)
 
-    def send_measurement(self, uart, x, y, area):
+    def send_measurement(self, uart, x, y, area, image_width=0, image_height=0):
         packet = bytearray()
         packet.append(MEASUREMENT_HEADER)
         packet.append(MEASUREMENT_LENGTH)
@@ -104,6 +135,10 @@ class GreenLightDetector:
         packet.append(y & 0xFF)
         packet.append((area >> 8) & 0xFF)
         packet.append(area & 0xFF)
+        packet.append((image_width >> 8) & 0xFF)
+        packet.append(image_width & 0xFF)
+        packet.append((image_height >> 8) & 0xFF)
+        packet.append(image_height & 0xFF)
         packet.append(checksum_bytes(packet))
         uart.write(packet)
 
@@ -163,6 +198,36 @@ class GreenLightDetector:
         if key == KEY_OPENMV_MAX_MISSED_FRAMES or key == KEY_DETECTOR_MAX_MISSED_FRAMES:
             self.params["max_missed_frames"] = clamp(value_u32, 1, 255)
             return STATUS_APPLIED, self.params["max_missed_frames"]
+        if key == KEY_OPENMV_RING_DETECTION_ENABLED:
+            self.params["ring_detection_enabled"] = 1 if value_u32 != 0 else 0
+            return STATUS_APPLIED, self.params["ring_detection_enabled"]
+        if key == KEY_OPENMV_RING_MIN_ROUNDNESS_X1000:
+            self.params["ring_min_roundness_x1000"] = clamp(value_u32, 0, 1000)
+            return STATUS_APPLIED, self.params["ring_min_roundness_x1000"]
+        if key == KEY_OPENMV_RING_MIN_ASPECT_X100:
+            self.params["ring_min_aspect_x100"] = clamp(value_u32, 1, 100)
+            return STATUS_APPLIED, self.params["ring_min_aspect_x100"]
+        if key == KEY_OPENMV_RING_MIN_FILL_X100:
+            self.params["ring_min_fill_x100"] = clamp(value_u32, 0, 100)
+            return STATUS_APPLIED, self.params["ring_min_fill_x100"]
+        if key == KEY_OPENMV_RING_MAX_FILL_X100:
+            self.params["ring_max_fill_x100"] = clamp(value_u32, 0, 100)
+            return STATUS_APPLIED, self.params["ring_max_fill_x100"]
+        if key == KEY_OPENMV_RING_MIN_CENTER_WHITE_X100:
+            self.params["ring_min_center_white_x100"] = clamp(value_u32, 0, 100)
+            return STATUS_APPLIED, self.params["ring_min_center_white_x100"]
+        if key == KEY_OPENMV_RING_CENTER_SAMPLE_RATIO_X100:
+            self.params["ring_center_sample_ratio_x100"] = clamp(value_u32, 5, 100)
+            return STATUS_APPLIED, self.params["ring_center_sample_ratio_x100"]
+        if key == KEY_OPENMV_RING_CENTER_MIN_BRIGHTNESS:
+            self.params["ring_center_min_brightness"] = clamp(value_u32, 0, 255)
+            return STATUS_APPLIED, self.params["ring_center_min_brightness"]
+        if key == KEY_OPENMV_RING_CENTER_MAX_CHANNEL_DELTA:
+            self.params["ring_center_max_channel_delta"] = clamp(value_u32, 0, 255)
+            return STATUS_APPLIED, self.params["ring_center_max_channel_delta"]
+        if key == KEY_OPENMV_RING_MIN_OUTER_DIAMETER_PX:
+            self.params["ring_min_outer_diameter_px"] = clamp(value_u32, 1, 240)
+            return STATUS_APPLIED, self.params["ring_min_outer_diameter_px"]
 
         return STATUS_UNKNOWN_KEY, 0
 
@@ -216,26 +281,159 @@ class GreenLightDetector:
         while uart.any() > 0:
             self._process_param_byte(uart, uart.readchar())
 
-    def _find_best_blob(self, blobs):
-        best_blob = None
-        best_roundness = 0
+    def _blob_passes_area(self, blob):
+        area = blob.area()
+        if area < self.params["min_area"]:
+            return False
+        if self.params["max_area"] > 0 and area > self.params["max_area"]:
+            return False
+        return True
+
+    def _blob_pixels(self, blob):
+        try:
+            return blob.pixels()
+        except AttributeError:
+            return blob.area()
+
+    def _solid_target_from_blob(self, blob):
+        if not self._blob_passes_area(blob):
+            return None
+
+        roundness_x1000 = int(blob.roundness() * 1000)
+        if roundness_x1000 < self.params["roundness_min_x1000"]:
+            return None
+
+        return {
+            "blob": blob,
+            "source": "solid",
+            "center_x": blob.cx(),
+            "center_y": blob.cy(),
+            "area": blob.area(),
+            "radius": int(blob.w() / 2),
+            "roundness_x1000": roundness_x1000,
+            "green_fill_x100": (self._blob_pixels(blob) * 100) // max(blob.area(), 1),
+            "center_white_x100": 0,
+        }
+
+    def _center_white_ratio_x100(self, img, center_x, center_y, outer_diameter):
+        sample_ratio = self.params["ring_center_sample_ratio_x100"]
+        sample_radius = (outer_diameter * sample_ratio + 199) // 200
+        sample_radius = clamp(sample_radius, 1, max(1, outer_diameter // 2))
+        step = 1
+        if sample_radius > 8:
+            step = 2
+
+        x0 = clamp(center_x - sample_radius, 0, img.width() - 1)
+        y0 = clamp(center_y - sample_radius, 0, img.height() - 1)
+        x1 = clamp(center_x + sample_radius, 0, img.width() - 1)
+        y1 = clamp(center_y + sample_radius, 0, img.height() - 1)
+        min_brightness = self.params["ring_center_min_brightness"]
+        max_delta = self.params["ring_center_max_channel_delta"]
+        total = 0
+        white = 0
+
+        y = y0
+        while y <= y1:
+            x = x0
+            while x <= x1:
+                red, green, blue = pixel_channels(img.get_pixel(x, y))
+                max_channel = max(red, green, blue)
+                min_channel = min(red, green, blue)
+                if max_channel >= min_brightness and (max_channel - min_channel) <= max_delta:
+                    white += 1
+                total += 1
+                x += step
+            y += step
+
+        if total <= 0:
+            return 0
+        return (white * 100) // total
+
+    def _ring_target_from_blob(self, img, blob):
+        if img is None or self.params["ring_detection_enabled"] == 0:
+            return None
+        if not self._blob_passes_area(blob):
+            return None
+
+        rect = blob.rect()
+        x, y, width, height = rect
+        outer_diameter = min(width, height)
+        if outer_diameter < self.params["ring_min_outer_diameter_px"]:
+            return None
+
+        max_side = max(width, height)
+        if max_side <= 0:
+            return None
+        aspect_x100 = (outer_diameter * 100) // max_side
+        if aspect_x100 < self.params["ring_min_aspect_x100"]:
+            return None
+
+        roundness_x1000 = int(blob.roundness() * 1000)
+        if roundness_x1000 < self.params["ring_min_roundness_x1000"]:
+            return None
+
+        area = blob.area()
+        green_fill_x100 = (self._blob_pixels(blob) * 100) // max(area, 1)
+        if green_fill_x100 < self.params["ring_min_fill_x100"]:
+            return None
+        if green_fill_x100 > self.params["ring_max_fill_x100"]:
+            return None
+
+        center_x = x + (width // 2)
+        center_y = y + (height // 2)
+        center_white_x100 = self._center_white_ratio_x100(img, center_x, center_y, outer_diameter)
+        if center_white_x100 < self.params["ring_min_center_white_x100"]:
+            return None
+
+        return {
+            "blob": blob,
+            "source": "ring",
+            "center_x": center_x,
+            "center_y": center_y,
+            "area": area,
+            "radius": int(outer_diameter / 2),
+            "roundness_x1000": roundness_x1000,
+            "green_fill_x100": green_fill_x100,
+            "center_white_x100": center_white_x100,
+        }
+
+    def _target_from_blob(self, img, blob):
+        target = self._solid_target_from_blob(blob)
+        if target is not None:
+            return target
+        return self._ring_target_from_blob(img, blob)
+
+    def _find_best_target(self, img, blobs):
+        best_solid = None
+        best_solid_roundness = -1
+        best_ring = None
+        best_ring_score = -1
 
         for blob in blobs:
-            area = blob.area()
-            if area < self.params["min_area"]:
-                continue
-            if self.params["max_area"] > 0 and area > self.params["max_area"]:
-                continue
-
-            roundness_x1000 = int(blob.roundness() * 1000)
-            if roundness_x1000 < self.params["roundness_min_x1000"]:
+            solid = self._solid_target_from_blob(blob)
+            if solid is not None:
+                if solid["roundness_x1000"] > best_solid_roundness:
+                    best_solid = solid
+                    best_solid_roundness = solid["roundness_x1000"]
                 continue
 
-            if roundness_x1000 > best_roundness:
-                best_blob = blob
-                best_roundness = roundness_x1000
+            ring = self._ring_target_from_blob(img, blob)
+            if ring is None:
+                continue
+            ring_score = (ring["roundness_x1000"] * 1000) + ring["center_white_x100"]
+            if ring_score > best_ring_score:
+                best_ring = ring
+                best_ring_score = ring_score
 
-        return best_blob
+        if best_solid is not None:
+            return best_solid
+        return best_ring
+
+    def _find_best_blob(self, blobs):
+        best_target = self._find_best_target(None, blobs)
+        if best_target is None:
+            return None
+        return best_target["blob"]
 
     def _update_track(self, center):
         if center is None:
@@ -271,22 +469,23 @@ class GreenLightDetector:
                                    merge=True,
                                    margin=self.params["merge_margin"])
 
-        best_blob = self._find_best_blob(blobs)
-        if best_blob is None and roi is not None:
+        best_target = self._find_best_target(img, blobs)
+        if best_target is None and roi is not None:
             blobs = img.find_blobs([self.threshold_tuple()],
                                    pixels_threshold=max(self.params["min_area"], 1),
                                    merge=True,
                                    margin=self.params["merge_margin"])
-            best_blob = self._find_best_blob(blobs)
+            best_target = self._find_best_target(img, blobs)
 
-        if best_blob is None:
+        if best_target is None:
             self._update_track(None)
             return None
 
-        filtered_center = self._update_track((best_blob.cx(), best_blob.cy()))
+        filtered_center = self._update_track((best_target["center_x"], best_target["center_y"]))
         return {
             "center_x": filtered_center[0],
             "center_y": filtered_center[1],
-            "area": best_blob.area(),
-            "radius": int(best_blob.w() / 2),
+            "area": best_target["area"],
+            "radius": best_target["radius"],
+            "source": best_target["source"],
         }

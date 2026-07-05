@@ -202,6 +202,16 @@ class OpenMvEvaluator:
             "track_window_radius_px": int(params.track_window_radius_px),
             "center_filter_gain_x100": int(params.center_filter_gain_x100),
             "max_missed_frames": int(params.max_missed_frames),
+            "ring_detection_enabled": int(params.ring_detection_enabled),
+            "ring_min_roundness_x1000": int(params.ring_min_roundness_x1000),
+            "ring_min_aspect_x100": int(params.ring_min_aspect_x100),
+            "ring_min_fill_x100": int(params.ring_min_fill_x100),
+            "ring_max_fill_x100": int(params.ring_max_fill_x100),
+            "ring_min_center_white_x100": int(params.ring_min_center_white_x100),
+            "ring_center_sample_ratio_x100": int(params.ring_center_sample_ratio_x100),
+            "ring_center_min_brightness": int(params.ring_center_min_brightness),
+            "ring_center_max_channel_delta": int(params.ring_center_max_channel_delta),
+            "ring_min_outer_diameter_px": int(params.ring_min_outer_diameter_px),
         }
 
     @staticmethod
@@ -256,7 +266,7 @@ class OpenMvEvaluator:
                     "    print('filtered_center|%d|%d' % result['filtered_center'])",
                     "for candidate in result['candidates']:",
                     "    rect = candidate['rect']",
-                    "    print('cand|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d' % (candidate['center_x'], candidate['center_y'], candidate['area'], candidate['roundness_x1000'], candidate['radius_px'], rect[0], rect[1], rect[2], rect[3], 1 if candidate['passes_area'] else 0, 1 if candidate['passes_roundness'] else 0))",
+                    "    print('cand|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%s|%d|%d|%d' % (candidate['center_x'], candidate['center_y'], candidate['area'], candidate['roundness_x1000'], candidate['radius_px'], rect[0], rect[1], rect[2], rect[3], 1 if candidate['passes_area'] else 0, 1 if candidate['passes_roundness'] else 0, candidate.get('source', ''), 1 if candidate.get('passes_ring', False) else 0, candidate.get('green_fill_x100', 0), candidate.get('center_white_x100', 0)))",
                 ]
             ) + "\n"
             return self.parse_single_frame_result(self._exec(command, timeout_s=20.0), expected_roi)
@@ -303,7 +313,7 @@ class OpenMvEvaluator:
                 raw_center = (int(parts[1]), int(parts[2]))
             elif parts[0] == "filtered_center" and len(parts) == 3:
                 filtered_center = (int(parts[1]), int(parts[2]))
-            elif parts[0] == "cand" and len(parts) == 12:
+            elif parts[0] == "cand" and len(parts) >= 12:
                 center = (int(parts[1]), int(parts[2]))
                 bbox = (int(parts[6]), int(parts[7]), int(parts[8]), int(parts[9]))
                 candidates.append(
@@ -318,6 +328,10 @@ class OpenMvEvaluator:
                         passes_area=parts[10] == "1",
                         passes_roundness=parts[11] == "1",
                         overlaps_expected_roi=point_in_roi(center, expected_roi),
+                        source=parts[12] if len(parts) > 12 else "",
+                        passes_ring=(len(parts) > 13 and parts[13] == "1"),
+                        green_fill_x100=int(parts[14]) if len(parts) > 14 else 0,
+                        center_white_x100=int(parts[15]) if len(parts) > 15 else 0,
                     )
                 )
 
@@ -342,6 +356,7 @@ class OpenMvEvaluator:
             filtered_center=filtered_center,
             area=area,
             radius_px=radius_px,
+            source=best_candidate.source if best_candidate is not None else "",
         )
 
     def _reset_sequence_state(self, params: DetectorParams) -> None:

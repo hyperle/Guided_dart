@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+exec /home/hyperlee/OpenMV-IDE-4.8.11/bin/openmvide "$@"

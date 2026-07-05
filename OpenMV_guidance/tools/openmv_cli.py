@@ -17,6 +17,7 @@ CTRL_D = b"\x04"
 RAW_REPL_ENTER = b"\x01"
 RAW_REPL_EXIT = b"\x02"
 RAW_REPL_PROMPT = b"raw REPL; CTRL-B to exit\r\n>"
+FLASH_REMOTE_ROOT = PurePosixPath("/flash")
 
 
 @dataclass(frozen=True)
@@ -384,16 +385,19 @@ def ensure_serial_port_available(port: str) -> None:
 
 def ensure_remote_parent(session: DirectRawReplSession, remote_path: PurePosixPath, created_dirs: set[str]) -> None:
     parent = remote_path.parent
-    if parent.as_posix() in ("", "."):
+    if parent.as_posix() in ("", ".", "/flash"):
         return
 
-    parts = [part for part in parent.parts if part not in ("", ".")]
+    parts = [part for part in parent.parts if part not in ("", ".", "/")]
     commands = ["import os"]
     current: list[str] = []
+    if parent.is_absolute() and parts[:1] == ["flash"]:
+        current.append("flash")
+        parts = parts[1:]
     dirty = False
     for part in parts:
         current.append(part)
-        current_path = "/".join(current)
+        current_path = ("/" if parent.is_absolute() else "") + "/".join(current)
         if current_path in created_dirs:
             continue
         commands.extend(
@@ -486,28 +490,41 @@ def read_cleanup_paths(artifacts: list[Artifact]) -> set[str]:
     return cleanup_paths
 
 
+def flash_remote_path(remote_path: PurePosixPath | str) -> PurePosixPath:
+    path = PurePosixPath(remote_path)
+    if ".." in path.parts:
+        raise RuntimeError(f"unsafe remote path: {remote_path}")
+    if path.is_absolute():
+        if path.parts[:2] == ("/", "flash"):
+            return path
+        path = PurePosixPath(*path.parts[1:])
+    return FLASH_REMOTE_ROOT / path
+
+
 def flash_project(config: ProjectConfig, artifacts: list[Artifact], chunk_size: int, reset: bool) -> None:
     ensure_serial_port_available(config.serial_port)
     created_dirs: set[str] = set()
     cleanup_paths = read_cleanup_paths(artifacts)
+    remote_manifest = flash_remote_path(config.remote_manifest)
 
     with DirectRawReplSession(config.serial_port, config.serial_baudrate) as session:
-        stale_paths = read_remote_manifest(session, config.remote_manifest)
-        stale_paths.add(config.remote_manifest.as_posix())
-        stale_paths.update(cleanup_paths)
+        stale_paths = {flash_remote_path(path).as_posix() for path in read_remote_manifest(session, remote_manifest)}
+        stale_paths.add(remote_manifest.as_posix())
+        stale_paths.update(flash_remote_path(path).as_posix() for path in cleanup_paths)
         delete_remote_paths(session, stale_paths)
 
         uploaded_paths: list[str] = []
         for artifact in artifacts:
-            ensure_remote_parent(session, artifact.remote_path, created_dirs)
+            remote_path = flash_remote_path(artifact.remote_path)
+            ensure_remote_parent(session, remote_path, created_dirs)
             payload = artifact.local_path.read_bytes()
-            upload_bytes(session, artifact.remote_path, payload, chunk_size)
-            uploaded_paths.append(artifact.remote_path.as_posix())
-            print(f"uploaded {artifact.remote_path.as_posix()}")
+            upload_bytes(session, remote_path, payload, chunk_size)
+            uploaded_paths.append(remote_path.as_posix())
+            print(f"uploaded {remote_path.as_posix()}")
 
         manifest_payload = ("\n".join(uploaded_paths) + "\n").encode("utf-8")
-        upload_bytes(session, config.remote_manifest, manifest_payload, chunk_size)
-        print(f"uploaded {config.remote_manifest.as_posix()}")
+        upload_bytes(session, remote_manifest, manifest_payload, chunk_size)
+        print(f"uploaded {remote_manifest.as_posix()}")
 
         if reset:
             session.hard_reset()

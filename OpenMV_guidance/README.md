@@ -5,6 +5,7 @@ OpenMV 侧绿灯识别、板载录像与经控制板导出工程。
 职责：
 
 - 采集图像并识别绿灯圆心
+- 支持过曝时中心变白、边缘呈绿环的灯目标，仍在 OpenMV 侧解算圆心
 - 通过 UART 向 STM32 发送 `x/y/area`
 - 接收 STM32 转发来的参数热更新命令并立即生效
 - 在 OpenMV 本地文件系统持续分段保存 MJPEG 录像
@@ -14,6 +15,7 @@ OpenMV 侧绿灯识别、板载录像与经控制板导出工程。
 - `src/main.py`：OpenMV 主入口
 - `src/green_light_detector.py`：绿灯识别与参数逻辑
 - `src/video_recorder.py`：滚动录像管理
+- `src/stream_debug.py`：USB-C 直连预览的独立帧源，只由主机调试工具临时执行
 - `src/tuner_runtime.py`：主机 tuner 的 OpenMV 侧运行时支持
 - `tools/openmv_cli.py`：本地校验、部署和 ST-Link 固件烧录入口
 - `openmv.ini`：OpenMV 工程配置，包含源码目录、串口、SD 卡和 ST-Link 参数
@@ -43,6 +45,8 @@ python3 -m pip install -r OpenMV_guidance/requirements.txt
 ./.script/openmv-flash
 ./.script/openmv-sd-sync
 ./.script/openmv-stlink-flash
+./.script/camera-stream
+./.script/camera-grab
 ```
 
 也可以直接调用：
@@ -77,6 +81,30 @@ python3 OpenMV_guidance/tools/openmv_cli.py stlink-flash
 ```bash
 ./.script/openmv-build --mpy
 ```
+
+### USB-C 相机预览
+
+`camera-stream` 是独立调试工具，用主机直连 OpenMV 的 USB-C 口播放当前相机画面，不经过控制板 UART1，也不改动 `main.py` 的上场链路。工具会临时进入 OpenMV Raw REPL，运行 `src/stream_debug.py`，把 JPEG 帧经 USB VCP 发回主机，并在本机启动 MJPEG HTTP 预览页。退出时默认复位 OpenMV，让它回到正常入口脚本。
+
+示例：
+
+```bash
+./.script/openmv-ports
+./.script/camera-stream --port /dev/ttyACM0
+```
+
+打开终端输出的 `http://127.0.0.1:8081/` 即可查看画面。只抓一帧可运行：
+
+```bash
+./.script/camera-grab --port /dev/ttyACM0
+```
+
+说明：
+
+- 该调试预览只使用 OpenMV USB-C 枚举出的 CDC/VCP 设备；这里的 `--port` 不是 OpenMV 到 STM32 的 UART1。
+- 默认预览会在画面左上角叠加分辨率、帧率和目标像素坐标；需要原始画面可加 `--no-debug-detector`。
+- `src/main.py` 不导入 `stream_debug.py`，上场时仍按原逻辑通过 UART1 发送 `x/y/area` 给控制板。
+- 若需要保留原始帧流用于排查，可加 `--raw-dump /tmp/openmv.bin`，再用 `./.script/parse-frames /tmp/openmv.bin` 提取 JPEG。
 
 ### `flash`
 
@@ -161,5 +189,5 @@ firmware_address =
 - 本地“构建”定义为源码校验与部署包生成；可选地用 `mpy-cross` 产出 `.mpy` 模块。
 - 上传器会维护一个板端或目标目录 manifest，并在每次部署前清理旧的 `.py/.mpy` 同名文件，避免残留文件影响导入。
 - 对 OpenMV 来说，`ST-Link` 适合烧固件镜像；Python 应用更适合走 REPL、USB 启动文件系统或 `SD` 卡启动文件系统。
-- 录像优先保存到 `/sdcard/recordings`，未插卡时回退到 `/flash/recordings`。
+- 录像只保存到 `/sdcard/recordings` 或 `/sd/recordings`；未检测到 SD 卡时禁用录像，不回写板载 flash。
 - 主机侧可通过仓库脚本 `./.script/record-list` 与 `./.script/record-pull` 在“只连接控制板串口”的前提下列出并下载录像。
