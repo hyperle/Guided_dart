@@ -32,29 +32,36 @@ viewer:
 green_light:
   setpoint_x: 120
   setpoint_y: 140
-  openmv_threshold_l_min: 20
-  openmv_threshold_l_max: 70
-  openmv_threshold_a_min: -77
-  openmv_threshold_a_max: -19
-  openmv_threshold_b_min: -19
-  openmv_threshold_b_max: 38
-  openmv_min_area: 1
+  openmv_threshold_l_min: 12
+  openmv_threshold_l_max: 100
+  openmv_threshold_a_min: -110
+  openmv_threshold_a_max: -14
+  openmv_threshold_b_min: -40
+  openmv_threshold_b_max: 64
+  openmv_min_area: 100
   openmv_max_area: 36000
-  openmv_roundness_min_x1000: 700
-  openmv_merge_margin: 5
-  openmv_track_window_radius_px: 80
+  openmv_roundness_min_x1000: 300
+  openmv_merge_margin: 0
+  openmv_track_window_radius_px: 100
   openmv_center_filter_gain_x100: 70
-  openmv_max_missed_frames: 2
+  openmv_max_missed_frames: 6
   openmv_ring_detection_enabled: 1
-  openmv_ring_min_roundness_x1000: 350
-  openmv_ring_min_aspect_x100: 65
-  openmv_ring_min_fill_x100: 8
-  openmv_ring_max_fill_x100: 76
-  openmv_ring_min_center_white_x100: 20
+  openmv_ring_min_roundness_x1000: 500
+  openmv_ring_min_aspect_x100: 75
+  openmv_ring_min_fill_x100: 10
+  openmv_ring_max_fill_x100: 70
+  openmv_ring_min_center_white_x100: 0
   openmv_ring_center_sample_ratio_x100: 35
-  openmv_ring_center_min_brightness: 220
+  openmv_ring_center_min_brightness: 500
   openmv_ring_center_max_channel_delta: 80
   openmv_ring_min_outer_diameter_px: 12
+  openmv_threshold_small_l_min: 12
+  openmv_threshold_small_l_max: 100
+  openmv_threshold_small_a_min: -110
+  openmv_threshold_small_a_max: -14
+  openmv_threshold_small_b_min: -40
+  openmv_threshold_small_b_max: 64
+  openmv_threshold_small_area_max: 16
 
 controller:
   control_mode: 1

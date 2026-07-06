@@ -75,6 +75,9 @@ class RollingMjpegRecorder:
     def recordings_dir(self):
         return self._recordings_dir
 
+    def close(self, quiet=True):
+        self._close_writer(quiet)
+
     def add_frame(self, img):
         if (not self._enabled) or (img is None):
             return
@@ -139,7 +142,7 @@ class RollingMjpegRecorder:
         self._close_writer()
         self._enabled = False
 
-    def _close_writer(self):
+    def _close_writer(self, quiet=False):
         if self._writer is None:
             return
 
@@ -151,9 +154,11 @@ class RollingMjpegRecorder:
         try:
             self._writer.close()
             os.sync()
-            print("recording closed:", self._writer_path)
+            if not quiet:
+                print("recording closed:", self._writer_path)
         except Exception as exc:
-            print("recording close failed:", exc)
+            if not quiet:
+                print("recording close failed:", exc)
 
         self._writer = None
         self._writer_path = ""

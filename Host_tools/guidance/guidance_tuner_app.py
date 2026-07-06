@@ -228,7 +228,7 @@ class VideoTunerApp:
         ring_box = ttk.LabelFrame(self.control_frame, text="Saturated Ring")
         ring_box.pack(fill=tk.X, padx=8, pady=8)
         self._add_scale(ring_box, "Ring Enabled", self.ring_detection_enabled_var, 0, 1, 1)
-        self._add_scale(ring_box, "Ring Round x1000", self.ring_min_roundness_var, 0, 1000, 1)
+        self._add_scale(ring_box, "Inner Round x1000", self.ring_min_roundness_var, 0, 1000, 1)
         self._add_scale(ring_box, "Ring Aspect x100", self.ring_min_aspect_var, 1, 100, 1)
         self._add_scale(ring_box, "Ring Fill Min", self.ring_min_fill_var, 0, 100, 1)
         self._add_scale(ring_box, "Ring Fill Max", self.ring_max_fill_var, 0, 100, 1)
@@ -509,7 +509,7 @@ class VideoTunerApp:
             max_area=max(0, int(self.max_area_var.get())),
             roundness_min_x1000=int(clamp(int(self.roundness_min_var.get()), 0, 1000)),
             merge_margin=max(0, int(self.merge_margin_var.get())),
-            track_window_radius_px=max(1, int(self.track_window_radius_var.get())),
+            track_window_radius_px=max(3000, int(self.track_window_radius_var.get())*10),
             center_filter_gain_x100=int(clamp(int(self.center_filter_gain_var.get()), 0, 100)),
             max_missed_frames=max(1, int(self.max_missed_frames_var.get())),
             ring_detection_enabled=1 if int(self.ring_detection_enabled_var.get()) != 0 else 0,

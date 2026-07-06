@@ -7,8 +7,9 @@ from types import SimpleNamespace
 import cv2
 import numpy as np
 
-from guidance_host_common import GuidanceProtocolContext
+from guidance_host_common import GuidanceHostPaths, GuidanceProtocolContext
 from guidance_video_fetch import RawReplSession, load_config, send_passthrough_enable
+from openmv_detector_params import load_openmv_detector_param_dict
 from guidance_tuner_core import (
     BlobCandidate,
     DetectionDebug,
@@ -188,7 +189,8 @@ class OpenMvEvaluator:
 
     @staticmethod
     def params_dict(params: DetectorParams) -> dict[str, int]:
-        return {
+        payload = load_openmv_detector_param_dict(GuidanceHostPaths.default_config_path())
+        payload.update({
             "threshold_l_min": int(params.threshold_l_min),
             "threshold_l_max": int(params.threshold_l_max),
             "threshold_a_min": int(params.threshold_a_min),
@@ -212,7 +214,8 @@ class OpenMvEvaluator:
             "ring_center_min_brightness": int(params.ring_center_min_brightness),
             "ring_center_max_channel_delta": int(params.ring_center_max_channel_delta),
             "ring_min_outer_diameter_px": int(params.ring_min_outer_diameter_px),
-        }
+        })
+        return payload
 
     @staticmethod
     def encode_frame(frame_bgr: np.ndarray) -> bytes:

@@ -6,7 +6,7 @@ import math
 import cv2
 import numpy as np
 
-from guidance_host_common import YamlLiteParser
+from openmv_detector_params import load_openmv_detector_param_dict
 
 
 DISPLAY_MAX_WIDTH = 480
@@ -26,29 +26,29 @@ class SimulationParams:
 
 @dataclass
 class DetectorParams:
-    threshold_l_min: int = 20
-    threshold_l_max: int = 70
-    threshold_a_min: int = -77
-    threshold_a_max: int = -19
-    threshold_b_min: int = -19
-    threshold_b_max: int = 38
-    min_area: int = 1
-    max_area: int = 36000
-    roundness_min_x1000: int = 700
-    merge_margin: int = 5
-    track_window_radius_px: int = 80
-    center_filter_gain_x100: int = 70
-    max_missed_frames: int = 2
-    ring_detection_enabled: int = 1
-    ring_min_roundness_x1000: int = 350
-    ring_min_aspect_x100: int = 65
-    ring_min_fill_x100: int = 8
-    ring_max_fill_x100: int = 76
-    ring_min_center_white_x100: int = 20
-    ring_center_sample_ratio_x100: int = 35
-    ring_center_min_brightness: int = 220
-    ring_center_max_channel_delta: int = 80
-    ring_min_outer_diameter_px: int = 12
+    threshold_l_min: int
+    threshold_l_max: int
+    threshold_a_min: int
+    threshold_a_max: int
+    threshold_b_min: int
+    threshold_b_max: int
+    min_area: int
+    max_area: int
+    roundness_min_x1000: int
+    merge_margin: int
+    track_window_radius_px: int
+    center_filter_gain_x100: int
+    max_missed_frames: int
+    ring_detection_enabled: int
+    ring_min_roundness_x1000: int
+    ring_min_aspect_x100: int
+    ring_min_fill_x100: int
+    ring_max_fill_x100: int
+    ring_min_center_white_x100: int
+    ring_center_sample_ratio_x100: int
+    ring_center_min_brightness: int
+    ring_center_max_channel_delta: int
+    ring_min_outer_diameter_px: int
 
 
 @dataclass
@@ -454,31 +454,6 @@ def sample_color_circle(frame_bgr: np.ndarray, center: tuple[int, int] | None, r
 
 
 def load_detector_defaults(config_path: str) -> DetectorParams:
-    parser = YamlLiteParser()
-    config = parser.parse_file(config_path)
-    green_light = config.get("green_light", {})
-    return DetectorParams(
-        threshold_l_min=int(green_light.get("openmv_threshold_l_min", 20)),
-        threshold_l_max=int(green_light.get("openmv_threshold_l_max", 70)),
-        threshold_a_min=int(green_light.get("openmv_threshold_a_min", -77)),
-        threshold_a_max=int(green_light.get("openmv_threshold_a_max", -19)),
-        threshold_b_min=int(green_light.get("openmv_threshold_b_min", -19)),
-        threshold_b_max=int(green_light.get("openmv_threshold_b_max", 38)),
-        min_area=int(green_light.get("openmv_min_area", 20)),
-        max_area=int(green_light.get("openmv_max_area", 36000)),
-        roundness_min_x1000=int(green_light.get("openmv_roundness_min_x1000", 700)),
-        merge_margin=int(green_light.get("openmv_merge_margin", 5)),
-        track_window_radius_px=int(green_light.get("openmv_track_window_radius_px", 80)),
-        center_filter_gain_x100=int(green_light.get("openmv_center_filter_gain_x100", 70)),
-        max_missed_frames=int(green_light.get("openmv_max_missed_frames", 2)),
-        ring_detection_enabled=int(green_light.get("openmv_ring_detection_enabled", 1)),
-        ring_min_roundness_x1000=int(green_light.get("openmv_ring_min_roundness_x1000", 350)),
-        ring_min_aspect_x100=int(green_light.get("openmv_ring_min_aspect_x100", 65)),
-        ring_min_fill_x100=int(green_light.get("openmv_ring_min_fill_x100", 8)),
-        ring_max_fill_x100=int(green_light.get("openmv_ring_max_fill_x100", 76)),
-        ring_min_center_white_x100=int(green_light.get("openmv_ring_min_center_white_x100", 20)),
-        ring_center_sample_ratio_x100=int(green_light.get("openmv_ring_center_sample_ratio_x100", 35)),
-        ring_center_min_brightness=int(green_light.get("openmv_ring_center_min_brightness", 220)),
-        ring_center_max_channel_delta=int(green_light.get("openmv_ring_center_max_channel_delta", 80)),
-        ring_min_outer_diameter_px=int(green_light.get("openmv_ring_min_outer_diameter_px", 12)),
-    )
+    params = load_openmv_detector_param_dict(config_path)
+    detector_fields = DetectorParams.__dataclass_fields__
+    return DetectorParams(**{key: params[key] for key in detector_fields})

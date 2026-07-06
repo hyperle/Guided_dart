@@ -18,6 +18,10 @@ RAW_REPL_ENTER = b"\x01"
 RAW_REPL_EXIT = b"\x02"
 RAW_REPL_PROMPT = b"raw REPL; CTRL-B to exit\r\n>"
 FLASH_REMOTE_ROOT = PurePosixPath("/flash")
+REPO_ROOT = Path(__file__).resolve().parents[2]
+HOST_GUIDANCE_DIR = REPO_ROOT / "Host_tools" / "guidance"
+GUIDANCE_PARAMS_PATH = HOST_GUIDANCE_DIR / "guidance_params.yaml"
+GENERATED_PARAMS_MODULE = PurePosixPath("generated_guidance_params.py")
 
 
 @dataclass(frozen=True)
@@ -260,6 +264,34 @@ def build_dir_fs(config: ProjectConfig) -> Path:
     return config.build_dir / "fs"
 
 
+def build_generated_params_text() -> str:
+    if str(HOST_GUIDANCE_DIR) not in sys.path:
+        sys.path.insert(0, str(HOST_GUIDANCE_DIR))
+    from openmv_detector_params import build_openmv_generated_params_text
+
+    return build_openmv_generated_params_text(GUIDANCE_PARAMS_PATH)
+
+
+def validate_generated_params() -> None:
+    text = build_generated_params_text()
+    compile(text, GENERATED_PARAMS_MODULE.as_posix(), "exec")
+
+
+def generated_params_artifact(config: ProjectConfig, stage_dir: Path) -> Artifact:
+    text = build_generated_params_text()
+    local_path = stage_dir / GENERATED_PARAMS_MODULE.as_posix()
+    local_path.parent.mkdir(parents=True, exist_ok=True)
+    local_path.write_text(text, encoding="utf-8")
+    validate_source_file(local_path)
+    return Artifact(
+        source_path=local_path,
+        source_relative=GENERATED_PARAMS_MODULE,
+        local_path=local_path,
+        remote_path=GENERATED_PARAMS_MODULE,
+        kind="py",
+    )
+
+
 def artifact_from_source(
     config: ProjectConfig,
     source_path: Path,
@@ -316,13 +348,16 @@ def build_project(config: ProjectConfig, use_mpy: bool, mpy_cross: str) -> list[
         artifact_from_source(config, source_path, stage_dir, use_mpy, mpy_cross_cmd)
         for source_path in sources
     ]
+    if any(artifact.remote_path == GENERATED_PARAMS_MODULE for artifact in artifacts):
+        raise RuntimeError(f"source tree must not contain generated module: {GENERATED_PARAMS_MODULE.as_posix()}")
+    artifacts.append(generated_params_artifact(config, stage_dir))
 
     manifest_path = config.build_dir / "manifest.json"
     manifest_payload = {
         "entry_script": str(config.entry_script.relative_to(config.project_dir)),
         "artifacts": [
             {
-                "source": str(artifact.source_path.relative_to(config.project_dir)),
+                "source": str(artifact.source_path.relative_to(REPO_ROOT)),
                 "artifact": str(artifact.local_path.relative_to(config.project_dir)),
                 "remote_path": artifact.remote_path.as_posix(),
                 "kind": artifact.kind,
@@ -716,7 +751,8 @@ def handle_check(args: argparse.Namespace, config: ProjectConfig) -> int:
     del args
     sources = collect_source_files(config)
     validate_sources(sources)
-    print(f"checked {len(sources)} source files")
+    validate_generated_params()
+    print(f"checked {len(sources)} source files and generated {GENERATED_PARAMS_MODULE.as_posix()}")
     return 0
 
 
