@@ -119,9 +119,7 @@ if sdcard is not None:
     try:
         fat = vfs.VfsFat(sdcard)
         vfs.mount(fat, "/sdcard")
-        os.chdir("/sdcard")
-        sys.path.append("/sdcard")
-        sys.path.append("/sdcard/lib")
+        os.chdir("/flash")
     except Exception:
         pass  # Fail silently
 
