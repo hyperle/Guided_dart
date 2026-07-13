@@ -83,49 +83,25 @@ class GuidanceNamedValue:
     value: int
 
 
-@dataclass(frozen=True)
-class GuidanceParamDefinition:
-    dotted_name: str
-    macro: str
-    value_type: str
-    key: int
-
-
 class GuidanceProtocolDefinition:
-    ALLOWED_PARAM_TYPES = ("u32", "f32", "bool")
-
     def __init__(self, schema_path, schema_root):
         self.schema_path = os.path.abspath(schema_path)
         self.frame_header_0 = 0
         self.frame_header_1 = 0
         self._message_types = {}
-        self._param_status = {}
-        self._params = []
-
         self._load(schema_root)
 
     def iter_message_types(self):
         return tuple(self._message_types.values())
 
-    def iter_param_status(self):
-        return tuple(self._param_status.values())
-
-    def iter_param_definitions(self):
-        return tuple(self._params)
-
     def message_type_value(self, name):
         return self._message_types[name].value
-
-    def param_status_value(self, name):
-        return self._param_status[name].value
 
     def _load(self, schema_root):
         frame = self._require_dict(schema_root, "frame")
         self.frame_header_0 = self._require_int(frame, "frame.header_0")
         self.frame_header_1 = self._require_int(frame, "frame.header_1")
         self._message_types = self._parse_named_values(schema_root, "message_types")
-        self._param_status = self._parse_named_values(schema_root, "param_status")
-        self._params = self._parse_param_definitions(schema_root)
 
     def _parse_named_values(self, schema_root, section_name):
         section = self._require_dict(schema_root, section_name)
@@ -146,38 +122,6 @@ class GuidanceProtocolDefinition:
             seen_macros.add(macro)
 
         return named_values
-
-    def _parse_param_definitions(self, schema_root):
-        params = self._require_dict(schema_root, "params")
-        parsed = []
-        seen_keys = set()
-        seen_macros = set()
-
-        for dotted_name, raw_value in params.items():
-            value_dict = self._require_dict(params, f"params.{dotted_name}", raw_value)
-            macro = self._require_string(value_dict, f"params.{dotted_name}.macro")
-            value_type = self._require_string(value_dict, f"params.{dotted_name}.value_type")
-            key = self._require_int(value_dict, f"params.{dotted_name}.key")
-
-            if value_type not in self.ALLOWED_PARAM_TYPES:
-                raise ValueError(f"unsupported value_type for {dotted_name}: {value_type}")
-            if macro in seen_macros:
-                raise ValueError(f"duplicate param macro: {macro}")
-            if key in seen_keys:
-                raise ValueError(f"duplicate param key: {key}")
-
-            parsed.append(
-                GuidanceParamDefinition(
-                    dotted_name=dotted_name,
-                    macro=macro,
-                    value_type=value_type,
-                    key=key,
-                )
-            )
-            seen_macros.add(macro)
-            seen_keys.add(key)
-
-        return parsed
 
     def _require_dict(self, container, key, value=None):
         raw_value = container.get(key) if value is None else value
@@ -228,14 +172,6 @@ class GuidanceProtocolHeaderGenerator:
         for item in self._protocol.iter_message_types():
             lines.append(f"#define {item.macro} {self._format_u32(item.value)}")
 
-        lines.append("")
-        for item in self._protocol.iter_param_status():
-            lines.append(f"#define {item.macro} {self._format_u32(item.value)}")
-
-        lines.append("")
-        for item in self._protocol.iter_param_definitions():
-            lines.append(f"#define {item.macro} {self._format_u32(item.key)}")
-
         lines.extend([
             "",
             "#endif",
@@ -269,7 +205,7 @@ class GuidanceProtocolCli:
         return 0
 
     def _build_arg_parser(self):
-        parser = argparse.ArgumentParser(description="Load the shared guidance protocol schema")
+        parser = argparse.ArgumentParser(description="Load the shared guidance uplink protocol schema")
         parser.add_argument(
             "--schema",
             default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "guidance_protocol.yaml"),
@@ -294,8 +230,6 @@ class GuidanceProtocolCli:
         print(f"schema={protocol.schema_path}")
         print(f"frame_header=0x{protocol.frame_header_0:02X} 0x{protocol.frame_header_1:02X}")
         print(f"message_types={len(protocol.iter_message_types())}")
-        print(f"param_status={len(protocol.iter_param_status())}")
-        print(f"params={len(protocol.iter_param_definitions())}")
 
 
 if __name__ == "__main__":

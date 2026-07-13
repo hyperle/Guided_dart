@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+set -euo pipefail
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+export OPENMV_REPL_PROG="skip-off"
+export OPENMV_REPL_TASK="skip-off"
+exec "${SCRIPT_DIR}/.openmv-rawrepl-task" "$@"

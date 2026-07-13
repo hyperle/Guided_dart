@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+set -euo pipefail
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+export OPENMV_REPL_PROG="fix-sd-boot"
+export OPENMV_REPL_TASK="fix-sd-boot"
+exec "${SCRIPT_DIR}/.openmv-rawrepl-task" "$@"

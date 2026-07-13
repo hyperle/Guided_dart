@@ -40,6 +40,7 @@ from guidance_tuner_video import VideoSource, load_video_source
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, "..", ".."))
+TUNER_BUILD_TAG = "direct-usb roi-debugger"
 
 
 def bgr_to_photo(image_bgr: np.ndarray) -> ImageTk.PhotoImage:
@@ -50,7 +51,7 @@ def bgr_to_photo(image_bgr: np.ndarray) -> ImageTk.PhotoImage:
 class VideoTunerApp:
     def __init__(self, root: tk.Tk, video_path: str, config_path: str, port: str = "", baudrate: int = 0):
         self.root = root
-        self.root.title("Guidance Video Tuner")
+        self.root.title(f"Guidance Video Tuner [{TUNER_BUILD_TAG}]")
         self.root.geometry("1800x980")
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
@@ -62,6 +63,8 @@ class VideoTunerApp:
         self.single_display_scale = 1.0
         self.single_frame_result: DetectionDebug | None = None
         self.host_frame_result: DetectionDebug | None = None
+        self.recorded_metadata_result: DetectionDebug | None = None
+        self.single_frame_result_source = "Host preview only"
         self.color_sample_center: tuple[int, int] | None = None
         self.color_sample: ColorSample | None = None
         self.validation_summary: ValidationSummary | None = None
@@ -318,7 +321,7 @@ class VideoTunerApp:
         self.mask_label = ttk.Label(mask_box)
         self.mask_label.grid(row=0, column=0, sticky="nsew")
 
-        overlay_box = ttk.LabelFrame(body, text="Host Detection Overlay")
+        overlay_box = ttk.LabelFrame(body, text="Detection Overlay")
         overlay_box.grid(row=0, column=2, sticky="nsew", padx=(6, 0))
         overlay_box.rowconfigure(0, weight=1)
         overlay_box.columnconfigure(0, weight=1)
@@ -337,11 +340,12 @@ class VideoTunerApp:
 
         button_bar = ttk.Frame(self.validation_tab)
         button_bar.grid(row=0, column=0, sticky="ew", padx=8, pady=8)
-        button_bar.columnconfigure(3, weight=1)
+        button_bar.columnconfigure(4, weight=1)
         ttk.Button(button_bar, text="Run Frozen Validation", command=lambda: self.run_validation(False)).grid(row=0, column=0, padx=(0, 6))
         ttk.Button(button_bar, text="Run Sweep Validation", command=lambda: self.run_validation(True)).grid(row=0, column=1, padx=(0, 6))
-        ttk.Button(button_bar, text="Show Failed Frames", command=self.focus_first_failed_frame).grid(row=0, column=2, padx=(0, 6))
-        ttk.Label(button_bar, textvariable=self.validation_progress_var).grid(row=0, column=3, sticky="w")
+        ttk.Button(button_bar, text="Replay To Current Frame", command=self.run_sequence_to_current_frame).grid(row=0, column=2, padx=(0, 6))
+        ttk.Button(button_bar, text="Show Failed Frames", command=self.focus_first_failed_frame).grid(row=0, column=3, padx=(0, 6))
+        ttk.Label(button_bar, textvariable=self.validation_progress_var).grid(row=0, column=4, sticky="w")
 
         preview_bar = ttk.Frame(self.validation_tab)
         preview_bar.grid(row=1, column=0, sticky="ew", padx=8, pady=(0, 8))
@@ -398,8 +402,7 @@ class VideoTunerApp:
             self.openmv_evaluator.connect()
         except Exception as exc:
             self.openmv_status_var.set("OpenMV: disconnected")
-            self.status_var.set("OpenMV connection failed.")
-            messagebox.showerror("OpenMV connection failed", str(exc))
+            self.status_var.set(f"OpenMV disconnected: {exc}")
             return
         self.openmv_status_var.set(f"OpenMV: connected ({self.openmv_evaluator.workspace})")
         self.status_var.set("OpenMV connected. Single-frame verdicts and validation now run on device.")
@@ -445,7 +448,10 @@ class VideoTunerApp:
             self.video = load_video_source(path)
         except Exception as exc:
             self.video = previous_video
-            messagebox.showerror("Load video failed", str(exc))
+            try:
+                messagebox.showerror("Load video failed", str(exc))
+            except tk.TclError:
+                pass
             self.status_var.set("Failed to load video.")
             return
 
@@ -461,6 +467,8 @@ class VideoTunerApp:
         self.drag_current = None
         self.host_frame_result = None
         self.single_frame_result = None
+        self.recorded_metadata_result = None
+        self.single_frame_result_source = "Host preview only"
         self.color_sample_center = None
         self.color_sample = None
         self.validation_summary = None
@@ -509,7 +517,7 @@ class VideoTunerApp:
             max_area=max(0, int(self.max_area_var.get())),
             roundness_min_x1000=int(clamp(int(self.roundness_min_var.get()), 0, 1000)),
             merge_margin=max(0, int(self.merge_margin_var.get())),
-            track_window_radius_px=max(3000, int(self.track_window_radius_var.get())*10),
+            track_window_radius_px=int(clamp(int(self.track_window_radius_var.get()), 1, 200)),
             center_filter_gain_x100=int(clamp(int(self.center_filter_gain_var.get()), 0, 100)),
             max_missed_frames=max(1, int(self.max_missed_frames_var.get())),
             ring_detection_enabled=1 if int(self.ring_detection_enabled_var.get()) != 0 else 0,
@@ -602,14 +610,105 @@ class VideoTunerApp:
         self.connect_openmv()
         return self.openmv_evaluator.connected
 
-    def _fallback_result(self) -> DetectionDebug:
+    @staticmethod
+    def _tuple_from_metadata(value) -> tuple[int, int] | None:
+        if isinstance(value, list) or isinstance(value, tuple):
+            if len(value) >= 2 and value[0] is not None and value[1] is not None:
+                return (int(value[0]), int(value[1]))
+        return None
+
+    @staticmethod
+    def _roi_from_metadata(value) -> tuple[int, int, int, int] | None:
+        if isinstance(value, list) or isinstance(value, tuple):
+            if len(value) >= 4 and value[0] is not None and value[1] is not None and value[2] is not None and value[3] is not None:
+                return (int(value[0]), int(value[1]), int(value[2]), int(value[3]))
+        return None
+
+    def metadata_to_detection_debug(self, metadata: dict | None, mask: np.ndarray) -> DetectionDebug | None:
+        if not metadata:
+            return None
+        target_search = str(metadata.get("target_search") or "")
+        if target_search:
+            detected = target_search in {"search_roi", "full_frame_search", "search_roi_too_small"}
+            fallback_used = target_search in {"full_frame_search", "search_roi_too_small"}
+            return DetectionDebug(
+                candidates=[],
+                best_candidate=None,
+                mask=mask,
+                search_roi=None,
+                fallback_used=fallback_used,
+                reason="录制时 OpenMV compact metadata（仅参考）",
+                detected=detected,
+                locked=detected,
+                background_misdetect=False,
+                raw_center=None,
+                filtered_center=None,
+                area=0,
+                radius_px=0,
+                source="recorded",
+                fallback_reason="search_roi_too_small" if target_search == "search_roi_too_small" else "",
+                roi_active=target_search in {"search_roi", "search_roi_too_small"},
+                roi_target_found=target_search == "search_roi",
+                target_in_search_roi=target_search == "search_roi",
+                selected_scan=target_search,
+                full_target_found=detected and fallback_used,
+                full_target_selected=detected and fallback_used,
+                tracking_lost=target_search == "target_not_found",
+                missed_frames_before=0,
+                missed_frames_after=0,
+            )
+        raw_center = self._tuple_from_metadata(metadata.get("raw_center"))
+        center_x = metadata.get("center_x")
+        center_y = metadata.get("center_y")
+        if raw_center is None and center_x is not None and center_y is not None and int(center_x) >= 0 and int(center_y) >= 0:
+            raw_center = (int(center_x), int(center_y))
+        filtered_center = self._tuple_from_metadata(metadata.get("filtered_center"))
+        if filtered_center is None:
+            filtered_center = raw_center
+        search_roi = self._roi_from_metadata(metadata.get("search_roi"))
+        area = int(metadata.get("area", 0) or 0)
+        radius = int(metadata.get("radius", 0) or 0)
+        detected = bool(metadata.get("detected", raw_center is not None))
+        locked = bool(metadata.get("locked", detected))
+        return DetectionDebug(
+            candidates=[],
+            best_candidate=None,
+            mask=mask,
+            search_roi=search_roi,
+            fallback_used=bool(metadata.get("fallback_used", False)),
+            reason="录制时 OpenMV metadata（仅参考）",
+            detected=detected,
+            locked=locked,
+            background_misdetect=False,
+            raw_center=raw_center,
+            filtered_center=filtered_center,
+            area=area,
+            radius_px=radius,
+            source=str(metadata.get("source", "")),
+            fallback_reason=str(metadata.get("fallback_reason", "")),
+            roi_active=bool(metadata.get("roi_active", False)),
+            roi_target_found=bool(metadata.get("roi_target_found", False)),
+            target_in_search_roi=bool(metadata.get("target_in_search_roi", False)),
+            selected_scan=str(metadata.get("selected_scan", "recorded")),
+            full_target_found=bool(metadata.get("full_target_found", False)),
+            full_target_selected=bool(metadata.get("full_target_selected", False)),
+            tracking_lost=bool(metadata.get("tracking_lost", False)),
+            missed_frames_before=int(metadata.get("missed_frames_before", 0) or 0),
+            missed_frames_after=int(metadata.get("missed_frames_after", 0) or 0),
+        )
+
+    def _fallback_result(
+        self,
+        reason: str = "OpenMV 未连接；当前只显示主机预览",
+        selected_scan: str = "offline",
+    ) -> DetectionDebug:
         return DetectionDebug(
             candidates=[],
             best_candidate=None,
             mask=np.zeros((1, 1), dtype=np.uint8),
             search_roi=None,
             fallback_used=False,
-            reason="OpenMV 未连接，当前仅显示主机预览",
+            reason=reason,
             detected=False,
             locked=False,
             background_misdetect=False,
@@ -617,6 +716,7 @@ class VideoTunerApp:
             filtered_center=None,
             area=0,
             radius_px=0,
+            selected_scan=selected_scan,
         )
 
     def refresh_single_frame(self) -> None:
@@ -636,34 +736,38 @@ class VideoTunerApp:
         self.host_frame_result = evaluate_host_frame(adjusted, detector_params, self.expected_roi, preview_mask)
         self.color_sample = sample_color_circle(adjusted, self.color_sample_center, int(self.sample_radius_var.get()))
 
+        metadata = self.video.get_metadata(int(self.frame_index_var.get())) if self.video is not None else None
+        self.recorded_metadata_result = self.metadata_to_detection_debug(metadata, preview_mask)
+
         if self._validation_in_progress:
-            self.single_frame_result = self._fallback_result()
-            self.single_frame_result.reason = "Validation running on OpenMV; single-frame verdict paused."
+            self.single_frame_result = self._fallback_result(
+                "OpenMV 正在执行顺序重放；单帧探测已暂停",
+                selected_scan="offline",
+            )
+            self.single_frame_result_source = "Paused during OpenMV sequence run"
         elif self.ensure_openmv_connection(auto_connect=False):
             try:
-                cache_key = (
-                    int(self.frame_index_var.get()),
-                    round(sim_params.exposure_scale, 4),
-                    round(sim_params.r_gain, 4),
-                    round(sim_params.g_gain, 4),
-                    round(sim_params.b_gain, 4),
-                    round(sim_params.gamma, 4),
-                )
-                remote_path = self.openmv_evaluator.upload_single_frame(adjusted, cache_key)
-                self.single_frame_result = self.openmv_evaluator.evaluate_single_frame(remote_path, detector_params, self.expected_roi)
+                self.single_frame_result = self.openmv_evaluator.evaluate_single_frame_bytes(adjusted, detector_params, self.expected_roi)
+                self.single_frame_result_source = "OpenMV stateless single-frame probe"
             except Exception as exc:
-                self.single_frame_result = self._fallback_result()
-                self.single_frame_result.reason = f"OpenMV 单帧判定失败: {exc}"
+                self.single_frame_result = self._fallback_result(f"OpenMV 单帧探测失败: {exc}")
+                self.single_frame_result_source = "OpenMV probe failed; host preview only"
                 self.status_var.set("Single-frame evaluation failed.")
         else:
             self.single_frame_result = self._fallback_result()
+            self.single_frame_result_source = "Host preview only"
 
         self.single_frame_result.mask = preview_mask
         self.host_frame_result.mask = preview_mask
         self.single_display_scale = scale_for_display(adjusted.shape[1], adjusted.shape[0])
         adjusted_display = resize_for_display(self.draw_adjusted_view(adjusted), self.single_display_scale)
         mask_display = resize_for_display(self.draw_mask_view(preview_mask), self.single_display_scale)
-        overlay_display = resize_for_display(self.draw_overlay_view(adjusted, self.host_frame_result, "HOST PREVIEW"), self.single_display_scale)
+        overlay_result = self.single_frame_result
+        overlay_label = self.single_frame_result_source
+        if overlay_result.selected_scan == "offline":
+            overlay_result = self.host_frame_result
+            overlay_label = "Host preview"
+        overlay_display = resize_for_display(self.draw_overlay_view(adjusted, overlay_result, overlay_label.upper()), self.single_display_scale)
 
         self._adjusted_photo = bgr_to_photo(adjusted_display)
         self._mask_photo = bgr_to_photo(mask_display)
@@ -684,14 +788,17 @@ class VideoTunerApp:
                 y * scale,
                 (x + w) * scale,
                 (y + h) * scale,
-                outline="#00ffff",
-                width=2,
+                outline="#d0d0d0",
+                width=4,
             )
 
         self.draw_sample_canvas_overlay()
         self.mask_label.configure(image=self._mask_photo)
         self.overlay_label.configure(image=self._overlay_photo)
-        self._set_text(self.single_info_text, self.format_single_frame_info(self.host_frame_result, self.single_frame_result))
+        self._set_text(
+            self.single_info_text,
+            self.format_single_frame_info(self.host_frame_result, self.single_frame_result, self.recorded_metadata_result),
+        )
 
     def draw_adjusted_view(self, adjusted_bgr: np.ndarray) -> np.ndarray:
         image = adjusted_bgr.copy()
@@ -734,7 +841,7 @@ class VideoTunerApp:
         image = gray_to_bgr(mask)
         if self.expected_roi is not None:
             x, y, w, h = self.expected_roi
-            cv2.rectangle(image, (x, y), (x + w, y + h), (255, 255, 0), 2)
+            cv2.rectangle(image, (x, y), (x + w, y + h), (210, 210, 210), 4)
         self.draw_sample_marker(image)
         cv2.putText(image, "HOST MASK", (10, 24), CV_FONT, 0.6, (255, 255, 255), 2, cv2.LINE_AA)
         return image
@@ -744,7 +851,7 @@ class VideoTunerApp:
         self.draw_sample_marker(image)
         if self.expected_roi is not None:
             x, y, w, h = self.expected_roi
-            cv2.rectangle(image, (x, y), (x + w, y + h), (255, 255, 0), 2)
+            cv2.rectangle(image, (x, y), (x + w, y + h), (210, 210, 210), 4)
 
         for candidate in result.candidates:
             color = (0, 0, 255)
@@ -760,7 +867,10 @@ class VideoTunerApp:
 
         if result.search_roi is not None:
             x, y, w, h = result.search_roi
-            cv2.rectangle(image, (x, y), (x + w, y + h), (180, 180, 180), 1)
+            x2 = min(x + w - 1, image.shape[1] - 1)
+            y2 = min(y + h - 1, image.shape[0] - 1)
+            cv2.rectangle(image, (x, y), (x2, y2), (0, 0, 0), 5)
+            cv2.rectangle(image, (x, y), (x2, y2), (220, 220, 220), 3)
 
         if result.raw_center is not None:
             center_x, center_y = result.raw_center
@@ -787,21 +897,72 @@ class VideoTunerApp:
     def _format_int_triplet(values) -> str:
         return ", ".join(str(int(value)) for value in values)
 
+    @staticmethod
+    def expected_roi_feedback_for_result(result, roi: tuple[int, int, int, int] | None) -> str:
+        if roi is None:
+            return "EXPECTED ROI NOT SET"
+        if result.filtered_center is not None:
+            x, y = result.filtered_center
+            if point_in_roi((x, y), roi):
+                return f"EXPECTED ROI HIT center=({x},{y}) area={result.area}"
+            return f"EXPECTED TARGET OUTSIDE ROI center=({x},{y}) area={result.area}"
+        return "EXPECTED ROI EMPTY"
+
+    def expected_roi_feedback(self, result: DetectionDebug) -> str:
+        return self.expected_roi_feedback_for_result(result, self.expected_roi)
+
+    @staticmethod
+    def runtime_roi_feedback(result: DetectionDebug) -> str:
+        if result.selected_scan == "search_roi":
+            return "RECORDED TARGET SEARCH: search_roi"
+        if result.selected_scan == "full_frame_search":
+            return "RECORDED TARGET SEARCH: full_frame_search"
+        if result.selected_scan == "search_roi_too_small":
+            return "RECORDED TARGET SEARCH: search_roi_too_small"
+        if result.selected_scan == "target_not_found":
+            return "RECORDED TARGET SEARCH: target_not_found"
+        if result.selected_scan == "detector_unavailable":
+            return "RECORDED TARGET SEARCH: detector_unavailable"
+        if result.selected_scan == "detector_disabled":
+            return "RECORDED TARGET SEARCH: detector_disabled"
+        if result.selected_scan == "metadata_missing":
+            return "RECORDED TARGET SEARCH: metadata_missing"
+        if result.selected_scan == "host":
+            return "HOST PREVIEW ONLY"
+        if result.selected_scan == "offline":
+            return "OPENMV RUNTIME NOT AVAILABLE"
+        if result.selected_scan == "recorded":
+            return "RECORDED METADATA REFERENCE"
+        if not result.roi_active:
+            return "RUNTIME ROI NOT ACTIVE: no previous target"
+        if result.fallback_used:
+            reason = result.fallback_reason or "unknown"
+            if result.full_target_selected:
+                return f"RUNTIME FALLBACK FULL FRAME: {reason}"
+            if result.raw_center is None:
+                return f"RUNTIME FALLBACK FULL FRAME MISS: {reason}"
+            if result.target_in_search_roi:
+                return f"RUNTIME ROI OK center=({result.raw_center[0]},{result.raw_center[1]}) area={result.area}; full-frame check kept ROI target: {reason}"
+            return f"RUNTIME TARGET OUTSIDE ROI center=({result.raw_center[0]},{result.raw_center[1]}) area={result.area}; full-frame check kept target: {reason}"
+        if result.raw_center is None:
+            return "RUNTIME ROI EMPTY"
+        if result.target_in_search_roi:
+            return f"RUNTIME ROI OK center=({result.raw_center[0]},{result.raw_center[1]}) area={result.area}"
+        return f"RUNTIME TARGET OUTSIDE ROI center=({result.raw_center[0]},{result.raw_center[1]}) area={result.area}"
+
     def format_detection_summary(self, label: str, result: DetectionDebug) -> list[str]:
         locked = "YES" if result.locked else "NO"
         detected = "YES" if result.detected else "NO"
         background = "YES" if result.background_misdetect else "NO"
         source = result.source if result.source else "-"
-        if result.fallback_used:
-            search_mode = "全局搜索(ROI失效)"
-        elif result.search_roi is not None:
-            search_mode = "ROI内搜索"
-        else:
-            search_mode = "全帧搜索"
+        search_roi = result.search_roi if result.search_roi is not None else "-"
+        selected_scan = result.selected_scan or "-"
+        fallback_reason = result.fallback_reason or "-"
         lines = [
             f"{label}:",
             f"  locked={locked} lock_signal={1 if result.locked else 0} detected={detected}",
-            f"  reason={result.reason} background={background} source={source} search_mode={search_mode}",
+            f"  reason={result.reason} background={background} source={source} search_roi={search_roi}",
+            f"  runtime_roi={self.runtime_roi_feedback(result)} selected_scan={selected_scan} fallback_reason={fallback_reason}",
         ]
         if result.raw_center is not None:
             lines.append(f"  center=({result.raw_center[0]}, {result.raw_center[1]}) area={result.area} radius={result.radius_px}")
@@ -833,13 +994,31 @@ class VideoTunerApp:
         )
         return lines
 
-    def format_single_frame_info(self, host_result: DetectionDebug, openmv_result: DetectionDebug) -> str:
+    def format_single_frame_info(
+        self,
+        host_result: DetectionDebug,
+        openmv_result: DetectionDebug,
+        metadata_result: DetectionDebug | None,
+    ) -> str:
         sim_params = self.snapshot_simulation_params()
         detector_params = self.snapshot_detector_params()
         lines = [f"Frame: {self.frame_index_var.get()}"]
+        lines.append(f"Current verdict source: {self.single_frame_result_source}")
+        lines.append("ROI feedback:")
+        lines.append(f"  current_probe={self.runtime_roi_feedback(openmv_result)}")
+        lines.append(f"  current_expected_roi={self.expected_roi_feedback(openmv_result)}")
+        lines.append(f"  host_expected_roi={self.expected_roi_feedback(host_result)}")
+        lines.append("")
         lines.extend(self.format_detection_summary("Host preview", host_result))
         lines.append("")
-        lines.extend(self.format_detection_summary("OpenMV verdict", openmv_result))
+        lines.extend(self.format_detection_summary("Current OpenMV probe", openmv_result))
+        lines.append("")
+        if metadata_result is not None:
+            lines.extend(self.format_detection_summary("Recorded metadata reference", metadata_result))
+            lines.append("  note=recorded metadata is not recomputed and is never used as the current verdict")
+        else:
+            lines.append("Recorded metadata reference: not available")
+        lines.append("")
         lines.append(LOCAL_PREVIEW_NOTE)
         lines.append("")
         lines.extend(self.format_sample_info())
@@ -944,8 +1123,27 @@ class VideoTunerApp:
         image_y = int(clamp(round(canvas_y / scale), 0, max(self.video.height - 1, 0)))
         return (image_x, image_y)
 
-    def run_validation(self, use_sweep: bool) -> None:
+    def run_sequence_to_current_frame(self) -> None:
         if self.video is None:
+            messagebox.showwarning("No video", "Open a video before running sequence replay.")
+            return
+        target_frame = int(clamp(self.frame_index_var.get(), 0, max(self.video.frame_count - 1, 0)))
+        self.run_validation(
+            False,
+            stop_frame=target_frame + 1,
+            focus_last=True,
+            run_label=f"Sequence replay to frame {target_frame}",
+        )
+
+    def run_validation(
+        self,
+        use_sweep: bool,
+        stop_frame: int | None = None,
+        focus_last: bool = False,
+        run_label: str | None = None,
+    ) -> None:
+        video = self.video
+        if video is None:
             messagebox.showwarning("No video", "Open a video before running validation.")
             return
         if self._validation_in_progress:
@@ -954,24 +1152,30 @@ class VideoTunerApp:
         if not self.ensure_openmv_connection(auto_connect=True):
             return
 
+        effective_stop_frame = None
+        if stop_frame is not None:
+            effective_stop_frame = int(clamp(int(stop_frame), 1, video.frame_count))
+        label = run_label or ("Sweep validation" if use_sweep else "Frozen validation")
         run_config = self.snapshot_validation_run_config(use_sweep)
         self._validation_in_progress = True
-        self.validation_progress_var.set("Running OpenMV validation...")
-        self.status_var.set("Validation started in background.")
-        self._set_text(self.validation_text, "Validation is running in the background...\n")
+        self.validation_progress_var.set(f"Running OpenMV {label.lower()}...")
+        self.status_var.set(f"{label} started in background.")
+        self._set_text(self.validation_text, f"{label} is running in the background...\n")
         self.schedule_single_refresh()
 
         def worker() -> None:
             try:
                 frame_results = self.openmv_evaluator.stream_validation(
-                    self.video,
+                    video,
                     run_config,
                     progress_callback=self._validation_progress,
+                    stop_frame=effective_stop_frame,
                 )
             except Exception as exc:
-                self.root.after(0, lambda: self._finish_validation_error(str(exc)))
+                error_text = str(exc)
+                self.root.after(0, lambda error_text=error_text: self._finish_validation_error(error_text))
                 return
-            self.root.after(0, lambda: self._finish_validation_success(frame_results, run_config))
+            self.root.after(0, lambda: self._finish_validation_success(frame_results, run_config, label, focus_last))
 
         self._validation_thread = threading.Thread(target=worker, name="openmv-validation", daemon=True)
         self._validation_thread.start()
@@ -979,14 +1183,22 @@ class VideoTunerApp:
     def _validation_progress(self, completed: int, total: int) -> None:
         self.root.after(0, lambda: self.validation_progress_var.set(f"Running OpenMV validation... {completed}/{total}"))
 
-    def _finish_validation_success(self, frame_results: list[ValidationFrameResult], run_config: ValidationRunConfig) -> None:
+    def _finish_validation_success(
+        self,
+        frame_results: list[ValidationFrameResult],
+        run_config: ValidationRunConfig,
+        run_label: str | None = None,
+        focus_last: bool = False,
+    ) -> None:
         summary = self.build_validation_summary(frame_results, run_config)
         self.validation_summary = summary
         self.validation_slider.configure(to=max(summary.total_frames - 1, 0))
-        self.validation_frame_var.set(0)
+        focus_index = max(summary.total_frames - 1, 0) if focus_last else 0
+        self.validation_frame_var.set(focus_index)
         self.update_validation_preview()
-        self._set_text(self.validation_text, self.format_validation_summary(summary))
-        mode_text = "Sweep validation completed." if run_config.use_sweep else "Frozen validation completed."
+        if summary.total_frames == 0:
+            self._set_text(self.validation_text, self.format_validation_summary(summary))
+        mode_text = f"{run_label or ('Sweep validation' if run_config.use_sweep else 'Frozen validation')} completed."
         self.validation_progress_var.set(mode_text)
         self.status_var.set(mode_text)
         self._validation_in_progress = False
@@ -995,11 +1207,11 @@ class VideoTunerApp:
 
     def _finish_validation_error(self, error_text: str) -> None:
         self.validation_progress_var.set("Validation failed.")
-        self.status_var.set("Validation failed.")
+        self.status_var.set(f"Validation failed: {error_text}")
         self._validation_in_progress = False
         self._validation_thread = None
         self.schedule_single_refresh()
-        messagebox.showerror("Validation failed", error_text)
+        self._set_text(self.validation_text, f"Validation failed:\n{error_text}\n")
 
     def build_validation_summary(self, frame_results: list[ValidationFrameResult], run_config: ValidationRunConfig) -> ValidationSummary:
         hit_frames = 0
@@ -1023,11 +1235,16 @@ class VideoTunerApp:
                     first_miss_frame = result.frame_index
                 longest_miss_streak = max(longest_miss_streak, current_miss_streak)
 
-            search_mode = "全局搜索(ROI失效)" if result.fallback_used else "ROI内搜索"
+            expected_roi_state = self.expected_roi_feedback_for_result(result, run_config.expected_roi)
+            runtime_roi_state = self.runtime_roi_feedback(result)
+            search_roi_text = result.search_roi if result.search_roi is not None else "-"
+            selected_scan_text = result.selected_scan or "-"
+            fallback_reason_text = result.fallback_reason or "-"
             recognition_log.append(
                 f"frame={result.frame_index} lock={1 if result.locked else 0} detected={1 if result.detected else 0} "
-                f"background={1 if result.background_misdetect else 0} search_mode={search_mode} "
-                f"exp={result.exposure_scale:.4f} gain={result.gain_scale:.4f} "
+                f"background={1 if result.background_misdetect else 0} runtime_roi={runtime_roi_state} expected_roi={expected_roi_state} "
+                f"search_roi={search_roi_text} selected_scan={selected_scan_text} "
+                f"fallback_reason={fallback_reason_text} exp={result.exposure_scale:.4f} gain={result.gain_scale:.4f} "
                 f"L=({detector_params.threshold_l_min},{detector_params.threshold_l_max}) "
                 f"A=({detector_params.threshold_a_min},{detector_params.threshold_a_max}) "
                 f"B=({detector_params.threshold_b_min},{detector_params.threshold_b_max}) "
@@ -1063,11 +1280,31 @@ class VideoTunerApp:
             run_config=run_config,
         )
 
-    def format_validation_summary(self, summary: ValidationSummary) -> str:
+    def format_validation_frame_detail(self, summary: ValidationSummary, selected_index: int) -> list[str]:
+        if not summary.frames:
+            return ["Selected frame: -"]
+        index = int(clamp(selected_index, 0, len(summary.frames) - 1))
+        result = summary.frames[index]
+        run_config = summary.run_config
+        expected_roi = run_config.expected_roi if run_config is not None else None
+        lines = [
+            f"Selected frame: result_index={index} frame={result.frame_index}",
+            f"  locked={1 if result.locked else 0} detected={1 if result.detected else 0} background={1 if result.background_misdetect else 0}",
+            f"  runtime_roi={self.runtime_roi_feedback(result)}",
+            f"  expected_roi={self.expected_roi_feedback_for_result(result, expected_roi)}",
+            f"  selected_scan={result.selected_scan or '-'} search_roi={result.search_roi if result.search_roi is not None else '-'}",
+            f"  fallback_used={1 if result.fallback_used else 0} fallback_reason={result.fallback_reason or '-'} full_target_found={1 if result.full_target_found else 0} full_target_selected={1 if result.full_target_selected else 0}",
+            f"  missed_frames={result.missed_frames_before}->{result.missed_frames_after} tracking_lost={1 if result.tracking_lost else 0}",
+            f"  raw_center={result.raw_center if result.raw_center is not None else '-'} filtered_center={result.filtered_center if result.filtered_center is not None else '-'} area={result.area} radius={result.radius_px}",
+            f"  exposure_scale={result.exposure_scale:.4f} gain_scale={result.gain_scale:.4f} reason={result.reason}",
+        ]
+        return lines
+
+    def format_validation_summary(self, summary: ValidationSummary, selected_index: int | None = None) -> str:
         run_config = summary.run_config
         lines = [
             f"Mode: {'Sweep Validation' if (run_config.use_sweep if run_config is not None else False) else 'Frozen Validation'}",
-            f"Total frames: {summary.total_frames}",
+            f"Total frames in this run: {summary.total_frames}",
             f"Hit frames: {summary.hit_frames}",
             f"Hit rate: {summary.hit_rate * 100.0:.2f}%",
             f"Longest miss streak: {summary.longest_miss_streak}",
@@ -1075,7 +1312,7 @@ class VideoTunerApp:
             f"Center jitter mean: {summary.jitter_mean:.2f}px",
             f"Center jitter std: {summary.jitter_std:.2f}px",
             f"Center jitter max: {summary.jitter_max:.2f}px",
-            "Validation verdicts are produced on OpenMV.",
+            "Validation verdicts and ROI feedback are produced by the same OpenMV sequence run.",
         ]
         if run_config is not None and run_config.expected_roi is not None:
             lines.append(f"Background misdetect frames: {len(summary.misdetected_frames)}")
@@ -1087,14 +1324,18 @@ class VideoTunerApp:
         else:
             lines.append("Background misdetect frames: N/A (set an ROI to enable this check)")
 
+        if selected_index is not None:
+            lines.append("")
+            lines.extend(self.format_validation_frame_detail(summary, selected_index))
+
         lines.append("")
-        lines.append("Recognition log:")
+        lines.append("OpenMV sequence log:")
         if summary.recognition_log:
             lines.extend(summary.recognition_log[:200])
             if len(summary.recognition_log) > 200:
                 lines.append("... truncated ...")
         else:
-            lines.append("No successful lock frames.")
+            lines.append("No frame results were returned.")
         return "\n".join(lines) + "\n"
 
     def update_validation_preview(self) -> None:
@@ -1120,6 +1361,7 @@ class VideoTunerApp:
         preview_display = resize_for_display(preview, display_scale)
         self._validation_photo = bgr_to_photo(preview_display)
         self.validation_preview_label.configure(image=self._validation_photo)
+        self._set_text(self.validation_text, self.format_validation_summary(self.validation_summary, selected_index=index))
 
     def draw_validation_preview(
         self,
@@ -1130,7 +1372,13 @@ class VideoTunerApp:
         image = frame_bgr.copy()
         if expected_roi is not None:
             x, y, w, h = expected_roi
-            cv2.rectangle(image, (x, y), (x + w, y + h), (255, 255, 0), 2)
+            cv2.rectangle(image, (x, y), (x + w, y + h), (210, 210, 210), 4)
+        if frame_result.search_roi is not None:
+            x, y, w, h = frame_result.search_roi
+            x2 = min(x + w - 1, image.shape[1] - 1)
+            y2 = min(y + h - 1, image.shape[0] - 1)
+            cv2.rectangle(image, (x, y), (x2, y2), (0, 0, 0), 5)
+            cv2.rectangle(image, (x, y), (x2, y2), (220, 220, 220), 3)
         if frame_result.raw_center is not None:
             radius = max(frame_result.radius_px, 4)
             color = (0, 255, 0) if frame_result.locked else (0, 128, 255)
@@ -1141,19 +1389,20 @@ class VideoTunerApp:
         cv2.putText(image, f"frame={frame_result.frame_index} {status}", (10, 24), CV_FONT, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
         cv2.putText(image, f"exp={frame_result.exposure_scale:.2f} gain={frame_result.gain_scale:.2f}", (10, 48), CV_FONT, 0.6, (255, 255, 255), 2, cv2.LINE_AA)
         cv2.putText(image, frame_result.reason, (10, 72), CV_FONT, 0.6, (255, 255, 255), 2, cv2.LINE_AA)
+        cv2.putText(image, self.runtime_roi_feedback(frame_result)[:86], (10, 96), CV_FONT, 0.55, (255, 255, 255), 2, cv2.LINE_AA)
         if frame_result.filtered_center is not None:
-            cv2.putText(image, f"center={frame_result.filtered_center} area={frame_result.area} radius={frame_result.radius_px}", (10, 96), CV_FONT, 0.55, (255, 255, 255), 2, cv2.LINE_AA)
-        cv2.putText(image, "OPENMV VERDICT", (10, 120), CV_FONT, 0.55, (255, 255, 255), 2, cv2.LINE_AA)
+            cv2.putText(image, f"center={frame_result.filtered_center} area={frame_result.area} radius={frame_result.radius_px}", (10, 120), CV_FONT, 0.55, (255, 255, 255), 2, cv2.LINE_AA)
+        cv2.putText(image, "OPENMV VERDICT", (10, 144), CV_FONT, 0.55, (255, 255, 255), 2, cv2.LINE_AA)
         return image
 
     def focus_first_failed_frame(self) -> None:
         if self.validation_summary is None or not self.validation_summary.frames:
             return
-        for frame_result in self.validation_summary.frames:
+        for preview_index, frame_result in enumerate(self.validation_summary.frames):
             if not frame_result.locked:
                 if self.validation_summary.run_config is not None:
                     self.apply_run_config_to_controls(self.validation_summary.run_config, refresh=False)
-                self.validation_frame_var.set(frame_result.frame_index)
+                self.validation_frame_var.set(preview_index)
                 self.frame_index_var.set(frame_result.frame_index)
                 self.update_validation_preview()
                 self.schedule_single_refresh()

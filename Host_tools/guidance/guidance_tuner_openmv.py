@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 import os
+import sys
 import threading
-from types import SimpleNamespace
 
 import cv2
 import numpy as np
 
-from guidance_host_common import GuidanceHostPaths, GuidanceProtocolContext
-from guidance_video_fetch import RawReplSession, load_config, send_passthrough_enable
+from guidance_host_common import GuidanceHostPaths
+from guidance_video_fetch import load_config
 from openmv_detector_params import load_openmv_detector_param_dict
 from guidance_tuner_core import (
     BlobCandidate,
@@ -21,8 +21,105 @@ from guidance_tuner_core import (
 )
 
 
-DEFAULT_VALIDATION_CHUNK_SIZE = 16
-DEFAULT_VALIDATION_CHUNK_BYTES = 512 * 1024
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, "..", ".."))
+OPENMV_TOOLS_DIR = os.path.join(REPO_ROOT, "OpenMV_guidance", "tools")
+if OPENMV_TOOLS_DIR not in sys.path:
+    sys.path.insert(0, OPENMV_TOOLS_DIR)
+
+from openmv_cli import DirectRawReplSession
+
+
+DEFAULT_VALIDATION_CHUNK_SIZE = 1
+DEFAULT_VALIDATION_CHUNK_BYTES = 128 * 1024
+
+
+def _parse_validation_frame_line(
+    line: str,
+    exposure_scale: float,
+    gain_scale: float,
+    expected_frame_index: int | None = None,
+    expected_name: str | None = None,
+) -> tuple[int, str, ValidationFrameResult] | None:
+    parts = line.split("|", 27)
+    if len(parts) >= 28:
+        reason = parts[27]
+        fallback_reason = parts[26]
+        roi_active = parts[17] == "1"
+        roi_target_found = parts[18] == "1"
+        target_in_search_roi = parts[19] == "1"
+        selected_scan = parts[20]
+        full_target_found = parts[21] == "1"
+        full_target_selected = parts[22] == "1"
+        tracking_lost = parts[23] == "1"
+        missed_frames_before = int(parts[24])
+        missed_frames_after = int(parts[25])
+    else:
+        parts = line.split("|", 17)
+        fallback_reason = ""
+        roi_active = False
+        roi_target_found = False
+        target_in_search_roi = False
+        selected_scan = ""
+        full_target_found = False
+        full_target_selected = False
+        tracking_lost = False
+        missed_frames_before = 0
+        missed_frames_after = 0
+        if len(parts) == 18:
+            reason = parts[17]
+        else:
+            parts = line.split("|", 13)
+            if len(parts) != 14:
+                return None
+            reason = parts[13]
+
+    frame_index = int(parts[1])
+    name = parts[2]
+    if expected_frame_index is not None and frame_index != expected_frame_index:
+        raise RuntimeError(f"OpenMV validation returned unexpected frame index {frame_index}")
+    if expected_name is not None and name != expected_name:
+        raise RuntimeError(f"OpenMV validation returned frame name {name!r}, expected {expected_name!r}")
+
+    search_roi = None
+    if len(parts) >= 18:
+        roi_x = int(parts[13])
+        roi_y = int(parts[14])
+        roi_w = int(parts[15])
+        roi_h = int(parts[16])
+        if roi_x >= 0 and roi_y >= 0 and roi_w > 0 and roi_h > 0:
+            search_roi = (roi_x, roi_y, roi_w, roi_h)
+
+    raw_x = int(parts[6])
+    raw_y = int(parts[7])
+    filtered_x = int(parts[8])
+    filtered_y = int(parts[9])
+    result = ValidationFrameResult(
+        frame_index=frame_index,
+        detected=parts[3] == "1",
+        locked=parts[4] == "1",
+        background_misdetect=parts[5] == "1",
+        fallback_used=parts[12] == "1",
+        reason=reason,
+        raw_center=None if raw_x < 0 or raw_y < 0 else (raw_x, raw_y),
+        filtered_center=None if filtered_x < 0 or filtered_y < 0 else (filtered_x, filtered_y),
+        area=int(parts[10]),
+        radius_px=int(parts[11]),
+        exposure_scale=exposure_scale,
+        gain_scale=gain_scale,
+        search_roi=search_roi,
+        fallback_reason=fallback_reason,
+        roi_active=roi_active,
+        roi_target_found=roi_target_found,
+        target_in_search_roi=target_in_search_roi,
+        selected_scan=selected_scan,
+        full_target_found=full_target_found,
+        full_target_selected=full_target_selected,
+        tracking_lost=tracking_lost,
+        missed_frames_before=missed_frames_before,
+        missed_frames_after=missed_frames_after,
+    )
+    return frame_index, name, result
 
 
 class OpenMvEvaluator:
@@ -31,9 +128,8 @@ class OpenMvEvaluator:
         self._config_path = config_path
         self._port_override = port_override
         self._baudrate_override = int(baudrate_override)
-        self._protocol_ctx = GuidanceProtocolContext()
         self._config = load_config(config_path)
-        self._session: RawReplSession | None = None
+        self._session: DirectRawReplSession | None = None
         self._workspace = ""
         self._connected = False
         self._single_cache_key: tuple[int, float, float, float, float, float] | None = None
@@ -70,25 +166,13 @@ class OpenMvEvaluator:
             if self._connected:
                 return
 
-            args = SimpleNamespace(
-                port=self._port_override,
-                baudrate=self._baudrate_override,
-                ble_address="",
-                ble_device_name="",
-                ble_connect_timeout_ms=0,
-                ble_service_uuid="",
-                ble_downlink_char_uuid="",
-                ble_uplink_char_uuid="",
-            )
-            send_passthrough_enable(self._config, args, self._protocol_ctx)
-
             serial_cfg = self._config.get("serial", {})
             port = self._port_override or str(serial_cfg.get("port", ""))
             baudrate = int(self._baudrate_override or serial_cfg.get("baudrate", 115200))
             if not port:
                 raise ValueError("serial.port is required for OpenMV tuning")
 
-            self._session = RawReplSession(port, baudrate)
+            self._session = DirectRawReplSession(port, baudrate)
             self._session.__enter__()
             try:
                 self._upload_support_file()
@@ -108,6 +192,8 @@ class OpenMvEvaluator:
             if self._session is not None:
                 try:
                     self._session.__exit__(None, None, None)
+                except Exception:
+                    pass
                 finally:
                     self._session = None
             self._workspace = ""
@@ -123,10 +209,17 @@ class OpenMvEvaluator:
         return self._session.exec_raw(command, timeout_s=timeout_s)
 
     def _upload_support_file(self) -> None:
-        support_path = os.path.join(self._repo_root, "OpenMV_guidance", "src", "tuner_runtime.py")
-        with open(support_path, "rb") as handle:
-            payload = handle.read()
-        self._write_binary_file("tuner_runtime.py", payload)
+        src_dir = os.path.join(self._repo_root, "OpenMV_guidance", "src")
+        support_files = [
+            ("green_light_detector.py", self._read_support_file(src_dir, "green_light_detector.py")),
+            ("tuner_runtime.py", self._read_support_file(src_dir, "tuner_runtime.py")),
+        ]
+        for remote_name, payload in support_files:
+            self._write_binary_file(remote_name, payload)
+
+    def _read_support_file(self, src_dir: str, name: str) -> bytes:
+        with open(os.path.join(src_dir, name), "rb") as handle:
+            return handle.read()
 
     def _prepare_workspace(self) -> str:
         output = self._exec(
@@ -135,10 +228,7 @@ class OpenMvEvaluator:
                     "import sys",
                     "sys.modules.pop('tuner_runtime', None)",
                     "import tuner_runtime",
-                    "root = tuner_runtime.detect_storage_root()",
-                    "if not root:",
-                    "    root = '.'",
-                    "workspace = root + '/tuner_frames'",
+                    "workspace = '/flash/tuner_frames'",
                     "tuner_runtime.ensure_clean_dir(workspace)",
                     "tuner_runtime.clear_sequence_state()",
                     "print(workspace)",
@@ -219,7 +309,7 @@ class OpenMvEvaluator:
 
     @staticmethod
     def encode_frame(frame_bgr: np.ndarray) -> bytes:
-        ok, encoded = cv2.imencode(".jpg", frame_bgr, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
+        ok, encoded = cv2.imencode(".jpg", frame_bgr, [int(cv2.IMWRITE_JPEG_QUALITY), 35])
         if not ok:
             raise RuntimeError("failed to encode frame for OpenMV upload")
         return bytes(encoded)
@@ -261,6 +351,64 @@ class OpenMvEvaluator:
                     "print('meta|fallback|' + str(1 if result['fallback_used'] else 0))",
                     "print('meta|area|' + str(result['area']))",
                     "print('meta|radius|' + str(result['radius_px']))",
+                    "print('meta|fallback_reason|' + result.get('fallback_reason', ''))",
+                    "print('meta|roi_active|' + str(1 if result.get('roi_active', False) else 0))",
+                    "print('meta|roi_target_found|' + str(1 if result.get('roi_target_found', False) else 0))",
+                    "print('meta|target_in_search_roi|' + str(1 if result.get('target_in_search_roi', False) else 0))",
+                    "print('meta|selected_scan|' + result.get('selected_scan', ''))",
+                    "print('meta|full_target_found|' + str(1 if result.get('full_target_found', False) else 0))",
+                    "print('meta|full_target_selected|' + str(1 if result.get('full_target_selected', False) else 0))",
+                    "print('meta|tracking_lost|' + str(1 if result.get('tracking_lost', False) else 0))",
+                    "print('meta|missed_before|' + str(result.get('missed_frames_before', 0)))",
+                    "print('meta|missed_after|' + str(result.get('missed_frames_after', 0)))",
+                    "if result['search_roi'] is not None:",
+                    "    print('search_roi|%d|%d|%d|%d' % result['search_roi'])",
+                    "if result['raw_center'] is not None:",
+                    "    print('raw_center|%d|%d' % result['raw_center'])",
+                    "if result['filtered_center'] is not None:",
+                    "    print('filtered_center|%d|%d' % result['filtered_center'])",
+                    "for candidate in result['candidates']:",
+                    "    rect = candidate['rect']",
+                    "    print('cand|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%s|%d|%d|%d' % (candidate['center_x'], candidate['center_y'], candidate['area'], candidate['roundness_x1000'], candidate['radius_px'], rect[0], rect[1], rect[2], rect[3], 1 if candidate['passes_area'] else 0, 1 if candidate['passes_roundness'] else 0, candidate.get('source', ''), 1 if candidate.get('passes_ring', False) else 0, candidate.get('green_fill_x100', 0), candidate.get('center_white_x100', 0)))",
+                ]
+            ) + "\n"
+            return self.parse_single_frame_result(self._exec(command, timeout_s=20.0), expected_roi)
+        finally:
+            self._end_operation()
+
+    def evaluate_single_frame_bytes(
+        self,
+        frame_bgr: np.ndarray,
+        params: DetectorParams,
+        expected_roi: tuple[int, int, int, int] | None,
+    ) -> DetectionDebug:
+        payload = self.encode_frame(frame_bgr)
+        self._begin_operation()
+        try:
+            command = "\n".join(
+                [
+                    "import tuner_runtime, ubinascii",
+                    f"params = {self.params_dict(params)!r}",
+                    f"expected_roi = {(expected_roi,)!r}[0]",
+                    f"payload = ubinascii.unhexlify({payload.hex()!r})",
+                    "result = tuner_runtime.evaluate_single_frame_bytes(payload, params, expected_roi)",
+                    "print('meta|reason|' + result['reason'])",
+                    "print('meta|detected|' + str(1 if result['detected'] else 0))",
+                    "print('meta|locked|' + str(1 if result['locked'] else 0))",
+                    "print('meta|background|' + str(1 if result['background_misdetect'] else 0))",
+                    "print('meta|fallback|' + str(1 if result['fallback_used'] else 0))",
+                    "print('meta|area|' + str(result['area']))",
+                    "print('meta|radius|' + str(result['radius_px']))",
+                    "print('meta|fallback_reason|' + result.get('fallback_reason', ''))",
+                    "print('meta|roi_active|' + str(1 if result.get('roi_active', False) else 0))",
+                    "print('meta|roi_target_found|' + str(1 if result.get('roi_target_found', False) else 0))",
+                    "print('meta|target_in_search_roi|' + str(1 if result.get('target_in_search_roi', False) else 0))",
+                    "print('meta|selected_scan|' + result.get('selected_scan', ''))",
+                    "print('meta|full_target_found|' + str(1 if result.get('full_target_found', False) else 0))",
+                    "print('meta|full_target_selected|' + str(1 if result.get('full_target_selected', False) else 0))",
+                    "print('meta|tracking_lost|' + str(1 if result.get('tracking_lost', False) else 0))",
+                    "print('meta|missed_before|' + str(result.get('missed_frames_before', 0)))",
+                    "print('meta|missed_after|' + str(result.get('missed_frames_after', 0)))",
                     "if result['search_roi'] is not None:",
                     "    print('search_roi|%d|%d|%d|%d' % result['search_roi'])",
                     "if result['raw_center'] is not None:",
@@ -284,6 +432,16 @@ class OpenMvEvaluator:
         background_misdetect = False
         fallback_used = False
         area = 0
+        fallback_reason = ""
+        roi_active = False
+        roi_target_found = False
+        target_in_search_roi = False
+        selected_scan = ""
+        full_target_found = False
+        full_target_selected = False
+        tracking_lost = False
+        missed_frames_before = 0
+        missed_frames_after = 0
         radius_px = 0
         raw_center: tuple[int, int] | None = None
         filtered_center: tuple[int, int] | None = None
@@ -310,6 +468,26 @@ class OpenMvEvaluator:
                     area = int(parts[2])
                 elif parts[1] == "radius":
                     radius_px = int(parts[2])
+                elif parts[1] == "fallback_reason":
+                    fallback_reason = "|".join(parts[2:])
+                elif parts[1] == "roi_active":
+                    roi_active = parts[2] == "1"
+                elif parts[1] == "roi_target_found":
+                    roi_target_found = parts[2] == "1"
+                elif parts[1] == "target_in_search_roi":
+                    target_in_search_roi = parts[2] == "1"
+                elif parts[1] == "selected_scan":
+                    selected_scan = "|".join(parts[2:])
+                elif parts[1] == "full_target_found":
+                    full_target_found = parts[2] == "1"
+                elif parts[1] == "full_target_selected":
+                    full_target_selected = parts[2] == "1"
+                elif parts[1] == "tracking_lost":
+                    tracking_lost = parts[2] == "1"
+                elif parts[1] == "missed_before":
+                    missed_frames_before = int(parts[2])
+                elif parts[1] == "missed_after":
+                    missed_frames_after = int(parts[2])
             elif parts[0] == "search_roi" and len(parts) == 5:
                 search_roi = (int(parts[1]), int(parts[2]), int(parts[3]), int(parts[4]))
             elif parts[0] == "raw_center" and len(parts) == 3:
@@ -360,6 +538,16 @@ class OpenMvEvaluator:
             area=area,
             radius_px=radius_px,
             source=best_candidate.source if best_candidate is not None else "",
+            fallback_reason=fallback_reason,
+            roi_active=roi_active,
+            roi_target_found=roi_target_found,
+            target_in_search_roi=target_in_search_roi,
+            selected_scan=selected_scan,
+            full_target_found=full_target_found,
+            full_target_selected=full_target_selected,
+            tracking_lost=tracking_lost,
+            missed_frames_before=missed_frames_before,
+            missed_frames_after=missed_frames_after,
         )
 
     def _reset_sequence_state(self, params: DetectorParams) -> None:
@@ -374,6 +562,47 @@ class OpenMvEvaluator:
         if not self._connected:
             return
         self._exec("import tuner_runtime\ntuner_runtime.clear_sequence_state()\nprint('ok')\n", timeout_s=10.0)
+
+    def _evaluate_validation_frame_bytes(
+        self,
+        frame_index: int,
+        name: str,
+        payload: bytes,
+        params: DetectorParams,
+        expected_roi: tuple[int, int, int, int] | None,
+        frame_scale: tuple[float, float],
+    ) -> list[ValidationFrameResult]:
+        command = (
+            "import tuner_runtime\n"
+            f"params = {self.params_dict(params)!r}\n"
+            f"expected_roi = {expected_roi!r}\n"
+            f"tuner_runtime.print_sequence_frame_hex({frame_index}, {name!r}, {payload.hex()!r}, params, expected_roi)\n"
+        )
+        output = self._exec(command, timeout_s=30.0)
+
+        expected_total: int | None = None
+        results: list[ValidationFrameResult] = []
+        for raw_line in output.splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            if line.startswith("total|"):
+                parts = line.split("|", 1)
+                if len(parts) == 2:
+                    expected_total = int(parts[1])
+                continue
+            if not line.startswith("frame|"):
+                continue
+            exposure_scale, gain_scale = frame_scale
+            parsed = _parse_validation_frame_line(line, exposure_scale, gain_scale, frame_index, name)
+            if parsed is not None:
+                results.append(parsed[2])
+
+        if expected_total is not None and expected_total != 1:
+            raise RuntimeError(f"OpenMV validation reported total={expected_total}, expected 1 frame")
+        if len(results) != 1:
+            raise RuntimeError(f"OpenMV validation returned {len(results)} frame results, expected 1")
+        return results
 
     def _evaluate_validation_chunk(
         self,
@@ -406,38 +635,20 @@ class OpenMvEvaluator:
                 continue
             if not line.startswith("frame|"):
                 continue
-            parts = line.split("|", 13)
-            if len(parts) != 14:
+            parsed_for_index = _parse_validation_frame_line(line, 1.0, 1.0)
+            if parsed_for_index is None:
                 continue
-
-            frame_index = int(parts[1])
+            frame_index, frame_name, _ = parsed_for_index
             batch_offset = frame_index - start_index
             if batch_offset < 0 or batch_offset >= len(batch_names):
                 raise RuntimeError(f"OpenMV validation returned unexpected frame index {frame_index}")
-            if parts[2] != batch_names[batch_offset]:
-                raise RuntimeError(f"OpenMV validation returned frame name {parts[2]!r}, expected {batch_names[batch_offset]!r}")
+            if frame_name != batch_names[batch_offset]:
+                raise RuntimeError(f"OpenMV validation returned frame name {frame_name!r}, expected {batch_names[batch_offset]!r}")
 
             exposure_scale, gain_scale = frame_scales[batch_offset]
-            raw_x = int(parts[6])
-            raw_y = int(parts[7])
-            filtered_x = int(parts[8])
-            filtered_y = int(parts[9])
-            results.append(
-                ValidationFrameResult(
-                    frame_index=frame_index,
-                    detected=parts[3] == "1",
-                    locked=parts[4] == "1",
-                    background_misdetect=parts[5] == "1",
-                    fallback_used=parts[12] == "1",
-                    reason=parts[13],
-                    raw_center=None if raw_x < 0 or raw_y < 0 else (raw_x, raw_y),
-                    filtered_center=None if filtered_x < 0 or filtered_y < 0 else (filtered_x, filtered_y),
-                    area=int(parts[10]),
-                    radius_px=int(parts[11]),
-                    exposure_scale=exposure_scale,
-                    gain_scale=gain_scale,
-                )
-            )
+            parsed = _parse_validation_frame_line(line, exposure_scale, gain_scale, frame_index, frame_name)
+            if parsed is not None:
+                results.append(parsed[2])
 
         if expected_total is not None and expected_total != len(batch_names):
             raise RuntimeError(f"OpenMV validation reported total={expected_total}, expected {len(batch_names)} uploaded frames")
@@ -445,47 +656,27 @@ class OpenMvEvaluator:
             raise RuntimeError(f"OpenMV validation returned {len(results)} frame results, expected {len(batch_names)}")
         return results
 
-    def stream_validation(self, video_source, run_config: ValidationRunConfig, progress_callback=None) -> list[ValidationFrameResult]:
+    def stream_validation(
+        self,
+        video_source,
+        run_config: ValidationRunConfig,
+        progress_callback=None,
+        stop_frame: int | None = None,
+    ) -> list[ValidationFrameResult]:
         self._begin_operation()
         try:
             if not self._workspace:
                 raise RuntimeError("OpenMV workspace is not ready")
 
             total_frames = video_source.frame_count
+            if stop_frame is not None:
+                total_frames = max(0, min(video_source.frame_count, int(stop_frame)))
             results: list[ValidationFrameResult] = []
-            batch_names: list[str] = []
-            batch_payloads: list[bytes] = []
-            batch_scales: list[tuple[float, float]] = []
-            batch_start_index = 0
-            batch_bytes = 0
 
-            def flush_batch() -> None:
-                nonlocal batch_names, batch_payloads, batch_scales, batch_start_index, batch_bytes, results
-                if not batch_names:
-                    return
-                self.clear_workspace()
-                for name, payload in zip(batch_names, batch_payloads):
-                    self._write_binary_file(self._workspace + "/" + name, payload)
-                results.extend(
-                    self._evaluate_validation_chunk(
-                        batch_start_index,
-                        batch_names,
-                        run_config.detector_params,
-                        run_config.expected_roi,
-                        batch_scales,
-                    )
-                )
-                completed = batch_start_index + len(batch_names)
-                if progress_callback is not None:
-                    progress_callback(completed, total_frames)
-                batch_names = []
-                batch_payloads = []
-                batch_scales = []
-                batch_bytes = 0
-
+            self.clear_workspace()
             self._reset_sequence_state(run_config.detector_params)
             try:
-                for frame_index, frame in enumerate(video_source.iter_frames()):
+                for frame_index, frame in enumerate(video_source.iter_frames(stop=total_frames)):
                     if run_config.use_sweep:
                         exposure_scale, gain_scale = run_config.sweep_params.values_for_frame(frame_index)
                     else:
@@ -498,19 +689,19 @@ class OpenMvEvaluator:
                         dynamic_gain_scale=gain_scale,
                     )
                     payload = self.encode_frame(adjusted)
-
-                    if not batch_names:
-                        batch_start_index = frame_index
-                    elif len(batch_names) >= DEFAULT_VALIDATION_CHUNK_SIZE or (batch_bytes + len(payload)) > DEFAULT_VALIDATION_CHUNK_BYTES:
-                        flush_batch()
-                        batch_start_index = frame_index
-
-                    batch_names.append(f"frame_{len(batch_names):05d}.jpg")
-                    batch_payloads.append(payload)
-                    batch_scales.append((exposure_scale, gain_scale))
-                    batch_bytes += len(payload)
-
-                flush_batch()
+                    name = f"frame_{frame_index:05d}.jpg"
+                    results.extend(
+                        self._evaluate_validation_frame_bytes(
+                            frame_index,
+                            name,
+                            payload,
+                            run_config.detector_params,
+                            run_config.expected_roi,
+                            (exposure_scale, gain_scale),
+                        )
+                    )
+                    if progress_callback is not None:
+                        progress_callback(frame_index + 1, total_frames)
             finally:
                 self.clear_workspace()
                 self._clear_sequence_state()

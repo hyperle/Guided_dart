@@ -1,4 +1,5 @@
 import os
+import ubinascii
 
 import image
 
@@ -107,6 +108,23 @@ def _load_image(path):
     return img
 
 
+def _load_image_bytes(payload):
+    try:
+        return image.Image(payload)
+    except Exception:
+        pass
+    try:
+        return image.Image(bytearray(payload))
+    except Exception:
+        raise RuntimeError("RAM JPEG decode failed")
+
+
+def _roi_or_empty(roi):
+    if roi is None:
+        return (-1, -1, -1, -1)
+    return roi
+
+
 def _apply_params(detector, params):
     for key in detector.params:
         if key in params:
@@ -117,60 +135,47 @@ def _evaluate_with_detector(detector, img, expected_roi, reset_tracking):
     if reset_tracking:
         detector.reset_tracking()
 
-    threshold = detector._active_threshold()
-    roi = detector._resolve_roi(img.width(), img.height())
-    blobs = detector._scan_blobs(img, threshold, roi)
-    candidates = _annotate_candidates(detector, img, blobs)
-    best_target = detector._find_best_target(img, blobs)
-    fallback_used = False
+    result = detector.process_frame(img, collect_debug_blobs=True)
+    debug = detector.last_debug or {}
+    candidates = _annotate_candidates(detector, img, debug.get("debug_blobs", []))
+    raw_center = debug.get("raw_center")
+    filtered_center = debug.get("filtered_center")
+    detected = result is not None
 
-    if detector._full_scan_due(roi, best_target):
-        fallback_used = True
-        full_blobs = detector._scan_blobs(img, threshold, None)
-        full_candidates = _annotate_candidates(detector, img, full_blobs)
-        full_target = detector._find_best_target(img, full_blobs)
-        if full_target is not None:
-            if best_target is None or detector._target_score(full_target) > (detector._target_score(best_target) + 250):
-                blobs = full_blobs
-                candidates = full_candidates
-                best_target = full_target
-
-    reason, background_misdetect = _choose_failure_reason(candidates, detector.params, expected_roi, best_target)
-
-    if best_target is None:
-        detector._update_track(None)
-        return {
-            "candidates": candidates,
-            "search_roi": roi,
-            "fallback_used": fallback_used,
-            "reason": reason,
-            "detected": False,
-            "locked": False,
-            "background_misdetect": background_misdetect,
-            "raw_center": None,
-            "filtered_center": None,
-            "area": 0,
-            "radius_px": 0,
-            "source": "",
+    best_target = None
+    if detected and raw_center is not None:
+        best_target = {
+            "center_x": raw_center[0],
+            "center_y": raw_center[1],
+            "source": debug.get("source", ""),
         }
 
-    raw_center = (best_target["center_x"], best_target["center_y"])
-    filtered_center = detector._update_track(raw_center)
-    detector._last_radius = best_target["radius"]
-    detector._last_area = best_target["area"]
+    reason, background_misdetect = _choose_failure_reason(candidates, detector.params, expected_roi, best_target)
+    locked = detected and not background_misdetect
+
     return {
         "candidates": candidates,
-        "search_roi": roi,
-        "fallback_used": fallback_used,
+        "search_roi": debug.get("search_roi"),
+        "roi_active": bool(debug.get("roi_active", False)),
+        "roi_target_found": bool(debug.get("roi_target_found", False)),
+        "fallback_used": bool(debug.get("fallback_used", False)),
+        "fallback_reason": debug.get("fallback_reason", ""),
+        "full_target_found": bool(debug.get("full_target_found", False)),
+        "full_target_selected": bool(debug.get("full_target_selected", False)),
+        "selected_scan": debug.get("selected_scan", ""),
+        "target_in_search_roi": bool(debug.get("target_in_search_roi", False)),
+        "tracking_lost": bool(debug.get("tracking_lost", False)),
+        "missed_frames_before": int(debug.get("missed_frames_before", 0)),
+        "missed_frames_after": int(debug.get("missed_frames_after", 0)),
         "reason": reason,
-        "detected": True,
-        "locked": not background_misdetect,
+        "detected": detected,
+        "locked": locked,
         "background_misdetect": background_misdetect,
         "raw_center": raw_center,
         "filtered_center": filtered_center,
-        "area": best_target["area"],
-        "radius_px": best_target["radius"],
-        "source": best_target["source"],
+        "area": int(debug.get("area", 0)),
+        "radius_px": int(debug.get("radius", 0)),
+        "source": debug.get("source", ""),
     }
 
 
@@ -178,6 +183,13 @@ def evaluate_single_frame(path, params, expected_roi=None):
     detector = GreenLightDetector()
     _apply_params(detector, params)
     img = _load_image(path)
+    return _evaluate_with_detector(detector, img, expected_roi, True)
+
+
+def evaluate_single_frame_bytes(payload, params, expected_roi=None):
+    detector = GreenLightDetector()
+    _apply_params(detector, params)
+    img = _load_image_bytes(payload)
     return _evaluate_with_detector(detector, img, expected_roi, True)
 
 
@@ -218,6 +230,43 @@ def _frame_file_names(directory):
     return names
 
 
+def _print_frame_result(frame_index, name, result):
+    raw_center = result["raw_center"] if result["raw_center"] is not None else (-1, -1)
+    filtered_center = result["filtered_center"] if result["filtered_center"] is not None else (-1, -1)
+    roi = _roi_or_empty(result["search_roi"])
+    print(
+        "frame|%d|%s|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%s|%d|%d|%d|%d|%d|%s|%s" % (
+            frame_index,
+            name,
+            1 if result["detected"] else 0,
+            1 if result["locked"] else 0,
+            1 if result["background_misdetect"] else 0,
+            raw_center[0],
+            raw_center[1],
+            filtered_center[0],
+            filtered_center[1],
+            result["area"],
+            result["radius_px"],
+            1 if result["fallback_used"] else 0,
+            roi[0],
+            roi[1],
+            roi[2],
+            roi[3],
+            1 if result["roi_active"] else 0,
+            1 if result["roi_target_found"] else 0,
+            1 if result["target_in_search_roi"] else 0,
+            result["selected_scan"],
+            1 if result["full_target_found"] else 0,
+            1 if result["full_target_selected"] else 0,
+            1 if result["tracking_lost"] else 0,
+            result["missed_frames_before"],
+            result["missed_frames_after"],
+            result["fallback_reason"],
+            result["reason"],
+        )
+    )
+
+
 def print_sequence_results(directory, params, expected_roi=None):
     detector = GreenLightDetector()
     _apply_params(detector, params)
@@ -227,25 +276,7 @@ def print_sequence_results(directory, params, expected_roi=None):
         name = names[index]
         path = directory + "/" + name
         result = _evaluate_with_detector(detector, _load_image(path), expected_roi, False)
-        raw_center = result["raw_center"] if result["raw_center"] is not None else (-1, -1)
-        filtered_center = result["filtered_center"] if result["filtered_center"] is not None else (-1, -1)
-        print(
-            "frame|%d|%s|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%s" % (
-                index,
-                name,
-                1 if result["detected"] else 0,
-                1 if result["locked"] else 0,
-                1 if result["background_misdetect"] else 0,
-                raw_center[0],
-                raw_center[1],
-                filtered_center[0],
-                filtered_center[1],
-                result["area"],
-                result["radius_px"],
-                1 if result["fallback_used"] else 0,
-                result["reason"],
-            )
-        )
+        _print_frame_result(index, name, result)
 
 
 def print_sequence_chunk_results(directory, names, params, expected_roi=None, start_index=0):
@@ -255,35 +286,26 @@ def print_sequence_chunk_results(directory, names, params, expected_roi=None, st
         name = names[offset]
         path = directory + "/" + name
         result = _evaluate_with_detector(detector, _load_image(path), expected_roi, False)
-        raw_center = result["raw_center"] if result["raw_center"] is not None else (-1, -1)
-        filtered_center = result["filtered_center"] if result["filtered_center"] is not None else (-1, -1)
-        print(
-            "frame|%d|%s|%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|%s" % (
-                start_index + offset,
-                name,
-                1 if result["detected"] else 0,
-                1 if result["locked"] else 0,
-                1 if result["background_misdetect"] else 0,
-                raw_center[0],
-                raw_center[1],
-                filtered_center[0],
-                filtered_center[1],
-                result["area"],
-                result["radius_px"],
-                1 if result["fallback_used"] else 0,
-                result["reason"],
-            )
-        )
+        _print_frame_result(start_index + offset, name, result)
+
+
+def print_sequence_frame_bytes(frame_index, name, payload, params, expected_roi=None):
+    detector = _sequence_detector(params)
+    print("total|1")
+    result = _evaluate_with_detector(detector, _load_image_bytes(payload), expected_roi, False)
+    _print_frame_result(frame_index, name, result)
+
+
+def print_sequence_frame_hex(frame_index, name, payload_hex, params, expected_roi=None):
+    print_sequence_frame_bytes(frame_index, name, ubinascii.unhexlify(payload_hex), params, expected_roi)
 
 
 def detect_storage_root():
-    for candidate in ("/sdcard", "/sd", "/flash"):
-        try:
-            os.stat(candidate)
-            return candidate
-        except OSError:
-            pass
-    return ""
+    try:
+        os.stat("/flash")
+        return "/flash"
+    except OSError:
+        return "."
 
 
 def ensure_clean_dir(path):

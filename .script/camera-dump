@@ -4,4 +4,5 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 
-exec python3 "${REPO_ROOT}/OpenMV_guidance/tools/openmv_cli.py" sd-sync "$@"
+OUT="${OPENMV_RAW_DUMP:-/tmp/openmv.bin}"
+exec "${REPO_ROOT}/.script/camera-view" --raw-dump "${OUT}" "$@"

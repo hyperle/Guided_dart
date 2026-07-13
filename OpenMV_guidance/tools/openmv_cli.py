@@ -19,9 +19,6 @@ RAW_REPL_EXIT = b"\x02"
 RAW_REPL_PROMPT = b"raw REPL; CTRL-B to exit\r\n>"
 FLASH_REMOTE_ROOT = PurePosixPath("/flash")
 REPO_ROOT = Path(__file__).resolve().parents[2]
-HOST_GUIDANCE_DIR = REPO_ROOT / "Host_tools" / "guidance"
-GUIDANCE_PARAMS_PATH = HOST_GUIDANCE_DIR / "guidance_params.yaml"
-GENERATED_PARAMS_MODULE = PurePosixPath("generated_guidance_params.py")
 
 
 @dataclass(frozen=True)
@@ -33,7 +30,6 @@ class ProjectConfig:
     remote_manifest: PurePosixPath
     serial_port: str
     serial_baudrate: int
-    sdcard_root: Path | None
     stlink_openocd: str
     stlink_interface_cfg: str
     stlink_target_cfg: str
@@ -74,8 +70,12 @@ class DirectRawReplSession:
     def __exit__(self, exc_type, exc, tb) -> None:
         try:
             if self._port is not None and not self._hard_reset_requested:
-                self._write_all(RAW_REPL_EXIT)
-                time.sleep(0.1)
+                try:
+                    self._write_all(RAW_REPL_EXIT)
+                    time.sleep(0.1)
+                except Exception:
+                    if exc_type is None:
+                        raise
         finally:
             if self._port is not None:
                 self._port.close()
@@ -190,8 +190,6 @@ def load_config(config_path: Path) -> ProjectConfig:
         fallback=parser.getint("device", "baudrate", fallback=115200),
     )
 
-    sdcard_root = resolve_optional_project_path(project_dir, parser.get("sdcard", "root", fallback=""))
-
     stlink_openocd = parser.get("stlink", "openocd", fallback="openocd").strip() or "openocd"
     stlink_interface_cfg = parser.get("stlink", "interface_cfg", fallback="interface/stlink.cfg").strip()
     stlink_target_cfg = parser.get("stlink", "target_cfg", fallback="").strip()
@@ -218,7 +216,6 @@ def load_config(config_path: Path) -> ProjectConfig:
         remote_manifest=remote_manifest,
         serial_port=serial_port,
         serial_baudrate=serial_baudrate,
-        sdcard_root=sdcard_root,
         stlink_openocd=stlink_openocd,
         stlink_interface_cfg=stlink_interface_cfg,
         stlink_target_cfg=stlink_target_cfg,
@@ -262,34 +259,6 @@ def resolve_mpy_cross(explicit_path: str) -> str:
 
 def build_dir_fs(config: ProjectConfig) -> Path:
     return config.build_dir / "fs"
-
-
-def build_generated_params_text() -> str:
-    if str(HOST_GUIDANCE_DIR) not in sys.path:
-        sys.path.insert(0, str(HOST_GUIDANCE_DIR))
-    from openmv_detector_params import build_openmv_generated_params_text
-
-    return build_openmv_generated_params_text(GUIDANCE_PARAMS_PATH)
-
-
-def validate_generated_params() -> None:
-    text = build_generated_params_text()
-    compile(text, GENERATED_PARAMS_MODULE.as_posix(), "exec")
-
-
-def generated_params_artifact(config: ProjectConfig, stage_dir: Path) -> Artifact:
-    text = build_generated_params_text()
-    local_path = stage_dir / GENERATED_PARAMS_MODULE.as_posix()
-    local_path.parent.mkdir(parents=True, exist_ok=True)
-    local_path.write_text(text, encoding="utf-8")
-    validate_source_file(local_path)
-    return Artifact(
-        source_path=local_path,
-        source_relative=GENERATED_PARAMS_MODULE,
-        local_path=local_path,
-        remote_path=GENERATED_PARAMS_MODULE,
-        kind="py",
-    )
 
 
 def artifact_from_source(
@@ -348,10 +317,6 @@ def build_project(config: ProjectConfig, use_mpy: bool, mpy_cross: str) -> list[
         artifact_from_source(config, source_path, stage_dir, use_mpy, mpy_cross_cmd)
         for source_path in sources
     ]
-    if any(artifact.remote_path == GENERATED_PARAMS_MODULE for artifact in artifacts):
-        raise RuntimeError(f"source tree must not contain generated module: {GENERATED_PARAMS_MODULE.as_posix()}")
-    artifacts.append(generated_params_artifact(config, stage_dir))
-
     manifest_path = config.build_dir / "manifest.json"
     manifest_payload = {
         "entry_script": str(config.entry_script.relative_to(config.project_dir)),
@@ -498,6 +463,68 @@ def upload_bytes(session: DirectRawReplSession, remote_path: PurePosixPath, payl
         mode = "ab"
 
 
+def payload_digest(payload: bytes) -> tuple[int, int]:
+    checksum = 0
+    for byte in payload:
+        checksum = (checksum + byte) & 0xFFFFFFFF
+    return len(payload), checksum
+
+
+def verify_uploaded_bytes(session: DirectRawReplSession, remote_path: PurePosixPath, payload: bytes) -> None:
+    expected_size, expected_checksum = payload_digest(payload)
+    remote_path_text = remote_path.as_posix()
+    output = session.exec_raw(
+        "\n".join(
+            [
+                f"path = {remote_path_text!r}",
+                "size = 0",
+                "checksum = 0",
+                "f = open(path, 'rb')",
+                "while True:",
+                "    data = f.read(256)",
+                "    if not data:",
+                "        break",
+                "    size += len(data)",
+                "    for byte in data:",
+                "        checksum = (checksum + byte) & 0xffffffff",
+                "f.close()",
+                "print('%d %d' % (size, checksum))",
+            ]
+        )
+        + "\n",
+        timeout_s=10.0,
+    ).strip()
+    parts = output.splitlines()[-1].split() if output.splitlines() else []
+    if len(parts) != 2:
+        raise RuntimeError(f"verify failed for {remote_path_text}: malformed response {output!r}")
+    actual_size = int(parts[0])
+    actual_checksum = int(parts[1])
+    if actual_size != expected_size or actual_checksum != expected_checksum:
+        raise RuntimeError(
+            f"verify failed for {remote_path_text}: "
+            f"expected size={expected_size} checksum={expected_checksum}, "
+            f"got size={actual_size} checksum={actual_checksum}"
+        )
+
+
+def sync_remote_filesystem(session: DirectRawReplSession) -> None:
+    session.exec_raw(
+        "\n".join(
+            [
+                "import os",
+                "try:",
+                "    os.sync()",
+                "except Exception:",
+                "    pass",
+                "print('synced')",
+            ]
+        )
+        + "\n",
+        timeout_s=10.0,
+    )
+
+
+
 def read_remote_manifest(session: DirectRawReplSession, remote_manifest: PurePosixPath) -> set[str]:
     output = session.exec_raw(
         "\n".join(
@@ -554,80 +581,62 @@ def flash_project(config: ProjectConfig, artifacts: list[Artifact], chunk_size: 
             ensure_remote_parent(session, remote_path, created_dirs)
             payload = artifact.local_path.read_bytes()
             upload_bytes(session, remote_path, payload, chunk_size)
+            verify_uploaded_bytes(session, remote_path, payload)
             uploaded_paths.append(remote_path.as_posix())
-            print(f"uploaded {remote_path.as_posix()}")
+            print(f"uploaded and verified {remote_path.as_posix()}")
 
         manifest_payload = ("\n".join(uploaded_paths) + "\n").encode("utf-8")
         upload_bytes(session, remote_manifest, manifest_payload, chunk_size)
-        print(f"uploaded {remote_manifest.as_posix()}")
+        verify_uploaded_bytes(session, remote_manifest, manifest_payload)
+        sync_remote_filesystem(session)
+        print(f"uploaded and verified {remote_manifest.as_posix()}")
+        print("synced internal /flash filesystem")
 
         if reset:
             session.hard_reset()
-            print("triggered hard reset to run main.py")
+            print("triggered hard reset to run /flash/main.py")
 
 
-def relative_posix_to_host_path(root: Path, relative_path: PurePosixPath) -> Path:
-    if relative_path.is_absolute() or ".." in relative_path.parts:
-        raise RuntimeError(f"unsafe relative path: {relative_path.as_posix()}")
-    parts = [part for part in relative_path.parts if part not in ("", ".")]
-    return root.joinpath(*parts)
+def clear_flash_storage(config: ProjectConfig, reset: bool) -> None:
+    ensure_serial_port_available(config.serial_port)
+    command = """
+import os
 
+def _is_dir(path):
+    try:
+        return (os.stat(path)[0] & 0x4000) != 0
+    except OSError:
+        return False
 
-def read_host_manifest(root: Path, manifest_relative: PurePosixPath) -> set[str]:
-    manifest_path = relative_posix_to_host_path(root, manifest_relative)
-    if not manifest_path.exists():
-        return set()
-    return {line.strip() for line in manifest_path.read_text(encoding="utf-8").splitlines() if line.strip()}
+def _remove_tree(path):
+    try:
+        names = os.listdir(path)
+    except OSError:
+        names = []
+    for name in names:
+        child = path + "/" + name
+        if _is_dir(child):
+            _remove_tree(child)
+            try:
+                os.rmdir(child)
+            except OSError:
+                pass
+        else:
+            try:
+                os.remove(child)
+            except OSError:
+                pass
 
-
-def prune_empty_parents(start: Path, stop_at: Path) -> None:
-    current = start
-    stop_at = stop_at.resolve()
-    while True:
-        try:
-            if current.resolve() == stop_at:
-                return
-        except FileNotFoundError:
-            pass
-        if not current.exists():
-            current = current.parent
-            continue
-        try:
-            current.rmdir()
-        except OSError:
-            return
-        current = current.parent
-
-
-def delete_host_paths(root: Path, relative_paths: set[str]) -> None:
-    for relative_text in sorted(relative_paths, reverse=True):
-        relative_path = PurePosixPath(relative_text)
-        target = relative_posix_to_host_path(root, relative_path)
-        if target.is_file() or target.is_symlink():
-            target.unlink(missing_ok=True)
-            prune_empty_parents(target.parent, root)
-
-
-def sync_host_directory(config: ProjectConfig, artifacts: list[Artifact], destination_root: Path) -> None:
-    destination_root.mkdir(parents=True, exist_ok=True)
-    cleanup_paths = read_cleanup_paths(artifacts)
-    stale_paths = read_host_manifest(destination_root, config.remote_manifest)
-    stale_paths.add(config.remote_manifest.as_posix())
-    stale_paths.update(cleanup_paths)
-    delete_host_paths(destination_root, stale_paths)
-
-    uploaded_paths: list[str] = []
-    for artifact in artifacts:
-        target = relative_posix_to_host_path(destination_root, artifact.remote_path)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(artifact.local_path, target)
-        uploaded_paths.append(artifact.remote_path.as_posix())
-        print(f"synced {target}")
-
-    manifest_path = relative_posix_to_host_path(destination_root, config.remote_manifest)
-    manifest_path.parent.mkdir(parents=True, exist_ok=True)
-    manifest_path.write_text("\n".join(uploaded_paths) + "\n", encoding="utf-8")
-    print(f"wrote manifest {manifest_path}")
+_remove_tree("/flash")
+print("cleared /flash")
+"""
+    with DirectRawReplSession(config.serial_port, config.serial_baudrate) as session:
+        output = session.exec_raw(command, timeout_s=30.0).strip()
+        if output:
+            print(output)
+        if reset:
+            session.hard_reset()
+            print("triggered hard reset after clearing /flash")
 
 
 def resolve_openocd_binary(command: str) -> str:
@@ -710,7 +719,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     build_parser.add_argument("--mpy-cross", default="", help="override the mpy-cross executable path")
     build_parser.set_defaults(handler=handle_build)
 
-    flash_parser = subparsers.add_parser("flash", help="build and upload Python files over OpenMV USB serial raw REPL")
+    flash_parser = subparsers.add_parser("flash", help="build and upload Python files to OpenMV internal /flash over USB raw REPL")
     flash_parser.add_argument("--mpy", action="store_true", help="compile non-entry modules to .mpy with mpy-cross")
     flash_parser.add_argument("--mpy-cross", default="", help="override the mpy-cross executable path")
     flash_parser.add_argument("--port", default="", help="override [serial] port from config")
@@ -719,11 +728,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     flash_parser.add_argument("--no-reset", action="store_true", help="leave the board in REPL after upload")
     flash_parser.set_defaults(handler=handle_flash)
 
-    sd_parser = subparsers.add_parser("sd-sync", help="build and sync Python files into a mounted SD-card boot filesystem")
-    sd_parser.add_argument("--mpy", action="store_true", help="compile non-entry modules to .mpy with mpy-cross")
-    sd_parser.add_argument("--mpy-cross", default="", help="override the mpy-cross executable path")
-    sd_parser.add_argument("--dest", default="", help="mounted SD-card root; overrides [sdcard] root from config")
-    sd_parser.set_defaults(handler=handle_sd_sync)
+    clear_flash_parser = subparsers.add_parser("clear-flash", help="delete all files under OpenMV /flash over USB raw REPL")
+    clear_flash_parser.add_argument("--port", default="", help="override [serial] port from config")
+    clear_flash_parser.add_argument("--baudrate", type=int, default=0, help="override [serial] baudrate from config")
+    clear_flash_parser.add_argument("--yes", action="store_true", help="confirm deleting every file and directory under /flash")
+    clear_flash_parser.add_argument("--no-reset", action="store_true", help="leave the board in REPL after clearing /flash")
+    clear_flash_parser.set_defaults(handler=handle_clear_flash)
 
     stlink_parser = subparsers.add_parser("stlink-flash", help="flash an OpenMV firmware image through ST-Link via OpenOCD")
     stlink_parser.add_argument("--image", default="", help="firmware image path; overrides [stlink] firmware_image")
@@ -751,8 +761,7 @@ def handle_check(args: argparse.Namespace, config: ProjectConfig) -> int:
     del args
     sources = collect_source_files(config)
     validate_sources(sources)
-    validate_generated_params()
-    print(f"checked {len(sources)} source files and generated {GENERATED_PARAMS_MODULE.as_posix()}")
+    print(f"checked {len(sources)} source files")
     return 0
 
 
@@ -771,7 +780,6 @@ def handle_flash(args: argparse.Namespace, config: ProjectConfig) -> int:
         remote_manifest=config.remote_manifest,
         serial_port=args.port or config.serial_port,
         serial_baudrate=int(args.baudrate or config.serial_baudrate),
-        sdcard_root=config.sdcard_root,
         stlink_openocd=config.stlink_openocd,
         stlink_interface_cfg=config.stlink_interface_cfg,
         stlink_target_cfg=config.stlink_target_cfg,
@@ -789,17 +797,25 @@ def handle_flash(args: argparse.Namespace, config: ProjectConfig) -> int:
     return 0
 
 
-def handle_sd_sync(args: argparse.Namespace, config: ProjectConfig) -> int:
-    destination = args.dest.strip()
-    if destination:
-        destination_root = resolve_project_path(config.project_dir, destination)
-    elif config.sdcard_root is not None:
-        destination_root = config.sdcard_root
-    else:
-        raise RuntimeError("sdcard root is empty; set [sdcard] root in OpenMV_guidance/openmv.ini or pass --dest")
-
-    artifacts = build_project(config, use_mpy=bool(args.mpy), mpy_cross=str(args.mpy_cross))
-    sync_host_directory(config, artifacts, destination_root)
+def handle_clear_flash(args: argparse.Namespace, config: ProjectConfig) -> int:
+    if not bool(args.yes):
+        raise RuntimeError("clear-flash deletes every file under /flash; pass --yes to confirm")
+    effective_config = ProjectConfig(
+        project_dir=config.project_dir,
+        src_dir=config.src_dir,
+        entry_script=config.entry_script,
+        build_dir=config.build_dir,
+        remote_manifest=config.remote_manifest,
+        serial_port=args.port or config.serial_port,
+        serial_baudrate=int(args.baudrate or config.serial_baudrate),
+        stlink_openocd=config.stlink_openocd,
+        stlink_interface_cfg=config.stlink_interface_cfg,
+        stlink_target_cfg=config.stlink_target_cfg,
+        stlink_transport=config.stlink_transport,
+        stlink_firmware_image=config.stlink_firmware_image,
+        stlink_firmware_address=config.stlink_firmware_address,
+    )
+    clear_flash_storage(effective_config, reset=not bool(args.no_reset))
     return 0
 
 

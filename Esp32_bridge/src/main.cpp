@@ -17,13 +17,17 @@
 #define BRIDGE_UART_BAUD 115200
 #endif
 
+#ifndef BRIDGE_TELEMETRY_NOTIFY_HZ
+#define BRIDGE_TELEMETRY_NOTIFY_HZ 25
+#endif
+
 class Esp32BridgeApp {
 public:
   Esp32BridgeApp()
 #if defined(CONFIG_IDF_TARGET_ESP32C3)
-      : bridge_uart_(1), server_callbacks_(this), downlink_callbacks_(this) {}
+      : bridge_uart_(1), server_callbacks_(this) {}
 #else
-      : bridge_uart_(2), server_callbacks_(this), downlink_callbacks_(this) {}
+      : bridge_uart_(2), server_callbacks_(this) {}
 #endif
 
   void Setup() {
@@ -36,6 +40,7 @@ public:
 
   void Loop() {
     ProcessBridgeUart();
+    PublishTelemetrySnapshot();
     MaintainAdvertising();
     PublishPeriodicStatus();
     delay(2);
@@ -44,30 +49,69 @@ public:
 private:
   static constexpr char kDeviceName[] = "Dart_1";
   static constexpr char kServiceUuid[] = "4fafc201-1fb5-459e-8fcc-c5c9c331914b";
-  static constexpr char kDownlinkCharacteristicUuid[] = "beb5483e-36e1-4688-b7f5-ea07361b26a8";
-  static constexpr char kUplinkCharacteristicUuid[] = "9f6c1db5-0b3b-4d1d-8a4d-11dd5c3a4f21";
-  static constexpr char kAckCharacteristicUuid[] = "de24d570-5f81-4d6b-8e4d-2f1309367d91";
+  static constexpr char kTelemetryCharacteristicUuid[] = "7b3f5a10-2d36-4c8f-9a7f-3a2d542fd1b2";
   static constexpr char kStatusCharacteristicUuid[] = "3d7f7b30-5602-4f2d-9d45-1f1be1b4c001";
-  static constexpr uint32_t kUsbSerialBaud = 115200U;
+
   static constexpr uint32_t kStatusUpdateIntervalMs = 1000U;
   static constexpr uint32_t kDisconnectRestartDelayMs = 300U;
-  static constexpr size_t kMaxBlePacketSize = 256U;
+  static constexpr uint32_t kSourceStaleMs = 500U;
+#if BRIDGE_TELEMETRY_NOTIFY_HZ <= 0
+  static constexpr uint32_t kTelemetryNotifyIntervalMs = 40U;
+#else
+  static constexpr uint32_t kTelemetryNotifyIntervalMs = 1000U / BRIDGE_TELEMETRY_NOTIFY_HZ;
+#endif
+
   static constexpr size_t kMaxUplinkFrameSize = 256U;
   static constexpr uint8_t kFrameHeader0 = 0xA5U;
   static constexpr uint8_t kFrameHeader1 = 0x5AU;
-  static constexpr uint8_t kMessageTypeParamAck = 0x03U;
+  static constexpr uint8_t kFrameTypeGuidanceTelemetry = 0x01U;
+  static constexpr uint8_t kFrameTypeImuAccel = 0x04U;
+  static constexpr uint8_t kFrameTypeImuMotion = 0x05U;
+  static constexpr uint8_t kGuidanceFlagTargetDetected = 1U << 0U;
+  static constexpr uint16_t kNoTargetCoordinate = 0xFFFFU;
+
+  static constexpr uint16_t kTelemetryMagic = 0xDA7AU;
+  static constexpr uint8_t kTelemetryVersion = 1U;
+  static constexpr uint8_t kTelemetryTypeSnapshot = 1U;
+  static constexpr uint16_t kTelemetryFlagTargetValid = 1U << 0U;
+  static constexpr uint16_t kTelemetryFlagGuidanceSeen = 1U << 1U;
+  static constexpr uint16_t kTelemetryFlagMotionSeen = 1U << 2U;
+  static constexpr uint16_t kTelemetryFlagAccelSeen = 1U << 3U;
+  static constexpr uint16_t kTelemetryFlagTargetLost = 1U << 4U;
+  static constexpr uint16_t kTelemetryFlagGuidanceStale = 1U << 5U;
+  static constexpr uint16_t kTelemetryFlagMotionStale = 1U << 6U;
+
+  struct __attribute__((packed)) TelemetryPacket {
+    uint16_t magic;
+    uint8_t version;
+    uint8_t type;
+    uint16_t sequence;
+    uint16_t flags;
+    uint32_t esp_time_ms;
+    uint32_t source_time_ms;
+    float target_x;
+    float target_y;
+    float velocity_x;
+    float velocity_y;
+    float velocity_z;
+    float accel_x;
+    float accel_y;
+    float accel_z;
+    uint16_t crc16;
+  };
 
   class ServerCallbacks : public NimBLEServerCallbacks {
   public:
     explicit ServerCallbacks(Esp32BridgeApp* app) : app_(app) {}
 
     void onConnect(NimBLEServer* server, ble_gap_conn_desc* desc) override {
-      (void)server; (void)desc;
-      app_->HandleBleConnected();
+      (void)server;
+      app_->HandleBleConnected(desc);
     }
 
     void onDisconnect(NimBLEServer* server, ble_gap_conn_desc* desc) override {
-      (void)server; (void)desc;
+      (void)server;
+      (void)desc;
       app_->HandleBleDisconnected();
     }
 
@@ -75,87 +119,80 @@ private:
     Esp32BridgeApp* app_;
   };
 
-  class DownlinkCallbacks : public NimBLECharacteristicCallbacks {
-  public:
-    explicit DownlinkCallbacks(Esp32BridgeApp* app) : app_(app) {}
-
-    void onWrite(NimBLECharacteristic* characteristic, ble_gap_conn_desc* desc) override {
-      (void)desc;
-      app_->HandleBleWrite(characteristic);
-    }
-
-  private:
-    Esp32BridgeApp* app_;
+  struct BridgeStats {
+    uint32_t uart_rx_bytes = 0U;
+    uint32_t uart_header0_bytes = 0U;
+    uint32_t uart_header_pairs = 0U;
+    uint32_t uart_frames = 0U;
+    uint32_t guidance_frames = 0U;
+    uint32_t motion_frames = 0U;
+    uint32_t accel_frames = 0U;
+    uint32_t checksum_errors = 0U;
+    uint32_t bad_payload_frames = 0U;
+    uint32_t unknown_uart_frames = 0U;
+    uint32_t dropped_uart_frames = 0U;
+    uint32_t telemetry_notifications = 0U;
+    uint8_t last_frame_type = 0U;
+    uint8_t last_payload_size = 0U;
   };
 
-  struct BridgeStats {
-    uint32_t downlink_packets = 0U;
-    uint32_t downlink_bytes = 0U;
-    uint32_t uplink_frames = 0U;
-    uint32_t uplink_bytes = 0U;
-    uint32_t checksum_errors = 0U;
-    uint32_t dropped_ble_packets = 0U;
-    uint32_t dropped_uart_frames = 0U;
-    uint32_t last_downlink_ms = 0U;
-    uint32_t last_uplink_ms = 0U;
+  struct TelemetryState {
+    bool guidance_seen = false;
+    bool motion_seen = false;
+    bool accel_seen = false;
+    bool target_valid = false;
+    uint32_t last_guidance_ms = 0U;
+    uint32_t last_motion_ms = 0U;
+    uint32_t last_accel_ms = 0U;
+    float target_x = -1.0f;
+    float target_y = -1.0f;
+    float velocity_x = 0.0f;
+    float velocity_y = 0.0f;
+    float velocity_z = 0.0f;
+    float accel_x = 0.0f;
+    float accel_y = 0.0f;
+    float accel_z = 0.0f;
   };
 
   HardwareSerial bridge_uart_;
   NimBLEServer* ble_server_ = nullptr;
-  NimBLECharacteristic* downlink_characteristic_ = nullptr;
-  NimBLECharacteristic* uplink_characteristic_ = nullptr;
-  NimBLECharacteristic* ack_characteristic_ = nullptr;
+  NimBLECharacteristic* telemetry_characteristic_ = nullptr;
   NimBLECharacteristic* status_characteristic_ = nullptr;
   bool ble_connected_ = false;
-  bool was_ble_connected_ = false;
   uint32_t last_status_update_ms_ = 0U;
   uint32_t disconnect_timestamp_ms_ = 0U;
+  uint32_t last_telemetry_notify_ms_ = 0U;
+  uint16_t telemetry_sequence_ = 0U;
 
   uint8_t uplink_frame_[kMaxUplinkFrameSize] = {0U};
   size_t uplink_frame_index_ = 0U;
   size_t uplink_expected_size_ = 0U;
 
   BridgeStats stats_;
+  TelemetryState telemetry_;
   ServerCallbacks server_callbacks_;
-  DownlinkCallbacks downlink_callbacks_;
 
   void BeginBridgeUart() {
     bridge_uart_.begin(static_cast<uint32_t>(BRIDGE_UART_BAUD),
                        SERIAL_8N1,
                        BRIDGE_RX_PIN,
                        BRIDGE_TX_PIN);
-    if (Serial) {
-      Serial.printf("Bridge UART started: RX=%d TX=%d BAUD=%d\n",
-                    BRIDGE_RX_PIN,
-                    BRIDGE_TX_PIN,
-                    BRIDGE_UART_BAUD);
-    }
   }
 
   void SetupBle() {
     NimBLEDevice::init(kDeviceName);
-    NimBLEDevice::setMTU(247);
+    NimBLEDevice::setMTU(185);
+    NimBLEDevice::setPower(ESP_PWR_LVL_P9);
 
     ble_server_ = NimBLEDevice::createServer();
     ble_server_->setCallbacks(&server_callbacks_);
 
     NimBLEService* service = ble_server_->createService(kServiceUuid);
 
-    downlink_characteristic_ = service->createCharacteristic(
-        kDownlinkCharacteristicUuid,
-        NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR | NIMBLE_PROPERTY::NOTIFY);
-    downlink_characteristic_->setCallbacks(&downlink_callbacks_);
-    downlink_characteristic_->setValue((const uint8_t*)"downlink ready", 13);
-
-    uplink_characteristic_ = service->createCharacteristic(
-        kUplinkCharacteristicUuid,
+    telemetry_characteristic_ = service->createCharacteristic(
+        kTelemetryCharacteristicUuid,
         NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
-    uplink_characteristic_->setValue(std::string());
-
-    ack_characteristic_ = service->createCharacteristic(
-        kAckCharacteristicUuid,
-        NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
-    ack_characteristic_->setValue(std::string());
+    telemetry_characteristic_->setValue(std::string());
 
     status_characteristic_ = service->createCharacteristic(
         kStatusCharacteristicUuid,
@@ -166,17 +203,17 @@ private:
 
     NimBLEAdvertising* advertising = NimBLEDevice::getAdvertising();
     advertising->addServiceUUID(kServiceUuid);
-    advertising->setScanResponse(false);
-    advertising->setMinPreferred(0x20);
-    advertising->setMaxPreferred(0x40);
+    advertising->setScanResponse(true);
+    advertising->setMinPreferred(0x12);
+    advertising->setMaxPreferred(0x24);
     advertising->start();
   }
 
-  void HandleBleConnected() {
+  void HandleBleConnected(const ble_gap_conn_desc* desc) {
     ble_connected_ = true;
-    was_ble_connected_ = true;
-    if (Serial) {
-      Serial.println("BLE client connected");
+    last_telemetry_notify_ms_ = 0U;
+    if ((ble_server_ != nullptr) && (desc != nullptr)) {
+      ble_server_->updateConnParams(desc->conn_handle, 12, 24, 0, 200);
     }
     SetStatus("ble connected", true);
   }
@@ -184,62 +221,14 @@ private:
   void HandleBleDisconnected() {
     ble_connected_ = false;
     disconnect_timestamp_ms_ = millis();
-    if (Serial) {
-      Serial.println("BLE client disconnected");
-    }
     SetStatus("ble disconnected", false);
-  }
-
-  void HandleBleWrite(NimBLECharacteristic* characteristic) {
-    const std::string value = characteristic->getValue();
-    if (value.empty()) {
-      return;
-    }
-
-    if (value.size() > kMaxBlePacketSize) {
-      stats_.dropped_ble_packets += 1U;
-      if (Serial) {
-        Serial.printf("Dropped BLE packet: %u bytes exceeds %u\n",
-                      static_cast<unsigned>(value.size()),
-                      static_cast<unsigned>(kMaxBlePacketSize));
-      }
-      SetStatus("ble packet too large", true);
-      return;
-    }
-
-    ForwardBlePacketToUart(reinterpret_cast<const uint8_t*>(value.data()), value.size());
-  }
-
-  void ForwardBlePacketToUart(const uint8_t* packet, size_t packet_size) {
-    if ((packet == nullptr) || (packet_size == 0U)) {
-      return;
-    }
-
-    const size_t written = bridge_uart_.write(packet, packet_size);
-    bridge_uart_.flush();
-
-    if (written == packet_size) {
-      stats_.downlink_packets += 1U;
-      stats_.downlink_bytes += static_cast<uint32_t>(written);
-      stats_.last_downlink_ms = millis();
-      if (Serial) {
-        Serial.printf("Forwarded BLE->UART packet: %u bytes\n",
-                      static_cast<unsigned>(written));
-      }
-    } else {
-      stats_.dropped_ble_packets += 1U;
-      if (Serial) {
-        Serial.printf("Partial BLE->UART write: %u/%u bytes\n",
-                      static_cast<unsigned>(written),
-                      static_cast<unsigned>(packet_size));
-      }
-      SetStatus("uart write partial", true);
-    }
+    StartAdvertising();
   }
 
   void ProcessBridgeUart() {
     while (bridge_uart_.available() > 0) {
       const uint8_t byte_value = static_cast<uint8_t>(bridge_uart_.read());
+      stats_.uart_rx_bytes += 1U;
       ConsumeUartByte(byte_value);
     }
   }
@@ -247,6 +236,7 @@ private:
   void ConsumeUartByte(uint8_t byte_value) {
     if (uplink_frame_index_ == 0U) {
       if (byte_value == kFrameHeader0) {
+        stats_.uart_header0_bytes += 1U;
         uplink_frame_[uplink_frame_index_++] = byte_value;
       }
       return;
@@ -254,6 +244,7 @@ private:
 
     if (uplink_frame_index_ == 1U) {
       if (byte_value == kFrameHeader1) {
+        stats_.uart_header_pairs += 1U;
         uplink_frame_[uplink_frame_index_++] = byte_value;
         return;
       }
@@ -272,8 +263,11 @@ private:
 
     uplink_frame_[uplink_frame_index_++] = byte_value;
     if (uplink_frame_index_ == 4U) {
+      stats_.last_frame_type = uplink_frame_[2];
+      stats_.last_payload_size = uplink_frame_[3];
       if (uplink_frame_[3] > (kMaxUplinkFrameSize - 5U)) {
         ResetUplinkAssembler();
+        stats_.bad_payload_frames += 1U;
         stats_.dropped_uart_frames += 1U;
         SetStatus("uart payload too large", true);
         return;
@@ -290,27 +284,187 @@ private:
   void HandleCompletedUartFrame() {
     if (!FrameChecksumIsValid(uplink_frame_, uplink_expected_size_)) {
       stats_.checksum_errors += 1U;
-      if (Serial) {
-        Serial.println("UART frame checksum error");
-      }
       SetStatus("uart checksum error", true);
       return;
     }
 
-    stats_.uplink_frames += 1U;
-    stats_.uplink_bytes += static_cast<uint32_t>(uplink_expected_size_);
-    stats_.last_uplink_ms = millis();
+    stats_.uart_frames += 1U;
+    UpdateTelemetryFromFrame(uplink_frame_, uplink_expected_size_);
+  }
 
-    if (Serial) {
-      Serial.printf("Forwarded UART->BLE frame: type=0x%02X size=%u\n",
-                    static_cast<unsigned>(uplink_frame_[2]),
-                    static_cast<unsigned>(uplink_expected_size_));
+  void UpdateTelemetryFromFrame(const uint8_t* frame, size_t frame_size) {
+    if ((frame == nullptr) || (frame_size < 5U)) {
+      return;
     }
 
-    NotifyFrame(uplink_characteristic_, uplink_frame_, uplink_expected_size_);
-    if (uplink_frame_[2] == kMessageTypeParamAck) {
-      NotifyFrame(ack_characteristic_, uplink_frame_, uplink_expected_size_);
+    const uint8_t frame_type = frame[2];
+    const uint8_t payload_size = frame[3];
+    const uint8_t* payload = frame + 4U;
+    const uint32_t now_ms = millis();
+
+    stats_.last_frame_type = frame_type;
+    stats_.last_payload_size = payload_size;
+
+    if (frame_type == kFrameTypeGuidanceTelemetry) {
+      if (payload_size != 28U) {
+        stats_.bad_payload_frames += 1U;
+        return;
+      }
+      ApplyGuidanceTelemetry(payload, payload_size, now_ms);
+    } else if (frame_type == kFrameTypeImuAccel) {
+      if (payload_size != 12U) {
+        stats_.bad_payload_frames += 1U;
+        return;
+      }
+      ApplyImuAccel(payload, payload_size, now_ms);
+    } else if (frame_type == kFrameTypeImuMotion) {
+      if (payload_size != 24U) {
+        stats_.bad_payload_frames += 1U;
+        return;
+      }
+      ApplyImuMotion(payload, payload_size, now_ms);
+    } else {
+      stats_.unknown_uart_frames += 1U;
     }
+  }
+
+  void ApplyGuidanceTelemetry(const uint8_t* payload, uint8_t payload_size, uint32_t now_ms) {
+    if ((payload == nullptr) || (payload_size < 14U)) {
+      return;
+    }
+
+    const uint8_t flags = payload[2];
+    const uint16_t measurement_x = ReadU16Le(payload + 4U);
+    const uint16_t measurement_y = ReadU16Le(payload + 6U);
+    const int16_t delta_x = ReadI16Le(payload + 10U);
+    const int16_t delta_y = ReadI16Le(payload + 12U);
+    const bool target_valid = ((flags & kGuidanceFlagTargetDetected) != 0U) &&
+                              (measurement_x != kNoTargetCoordinate) &&
+                              (measurement_y != kNoTargetCoordinate);
+
+    telemetry_.guidance_seen = true;
+    telemetry_.last_guidance_ms = now_ms;
+    telemetry_.target_valid = target_valid;
+    telemetry_.target_x = target_valid ? static_cast<float>(delta_x) : -1.0f;
+    telemetry_.target_y = target_valid ? static_cast<float>(delta_y) : -1.0f;
+    stats_.guidance_frames += 1U;
+  }
+
+  void ApplyImuAccel(const uint8_t* payload, uint8_t payload_size, uint32_t now_ms) {
+    if ((payload == nullptr) || (payload_size != 12U)) {
+      return;
+    }
+
+    telemetry_.accel_x = ReadFloatLe(payload + 0U);
+    telemetry_.accel_y = ReadFloatLe(payload + 4U);
+    telemetry_.accel_z = ReadFloatLe(payload + 8U);
+    telemetry_.accel_seen = true;
+    telemetry_.last_accel_ms = now_ms;
+    stats_.accel_frames += 1U;
+  }
+
+  void ApplyImuMotion(const uint8_t* payload, uint8_t payload_size, uint32_t now_ms) {
+    if ((payload == nullptr) || (payload_size != 24U)) {
+      return;
+    }
+
+    telemetry_.velocity_x = ReadFloatLe(payload + 0U);
+    telemetry_.velocity_y = ReadFloatLe(payload + 4U);
+    telemetry_.velocity_z = ReadFloatLe(payload + 8U);
+    telemetry_.accel_x = ReadFloatLe(payload + 12U);
+    telemetry_.accel_y = ReadFloatLe(payload + 16U);
+    telemetry_.accel_z = ReadFloatLe(payload + 20U);
+    telemetry_.motion_seen = true;
+    telemetry_.accel_seen = true;
+    telemetry_.last_motion_ms = now_ms;
+    telemetry_.last_accel_ms = now_ms;
+    stats_.motion_frames += 1U;
+  }
+
+  void PublishTelemetrySnapshot() {
+    const uint32_t now_ms = millis();
+    if ((telemetry_characteristic_ == nullptr) || !ble_connected_) {
+      return;
+    }
+    if (now_ms - last_telemetry_notify_ms_ < kTelemetryNotifyIntervalMs) {
+      return;
+    }
+    last_telemetry_notify_ms_ = now_ms;
+
+    TelemetryPacket packet = {};
+    packet.magic = kTelemetryMagic;
+    packet.version = kTelemetryVersion;
+    packet.type = kTelemetryTypeSnapshot;
+    packet.sequence = telemetry_sequence_++;
+    packet.flags = BuildTelemetryFlags(now_ms);
+    packet.esp_time_ms = now_ms;
+    packet.source_time_ms = LatestSourceTimeMs();
+
+    if ((packet.flags & kTelemetryFlagTargetValid) != 0U) {
+      packet.target_x = telemetry_.target_x;
+      packet.target_y = telemetry_.target_y;
+    } else {
+      packet.target_x = -1.0f;
+      packet.target_y = -1.0f;
+    }
+
+    packet.velocity_x = telemetry_.velocity_x;
+    packet.velocity_y = telemetry_.velocity_y;
+    packet.velocity_z = telemetry_.velocity_z;
+    packet.accel_x = telemetry_.accel_x;
+    packet.accel_y = telemetry_.accel_y;
+    packet.accel_z = telemetry_.accel_z;
+    packet.crc16 = Crc16Ccitt(reinterpret_cast<const uint8_t*>(&packet), sizeof(packet) - sizeof(packet.crc16));
+
+    NotifyFrame(telemetry_characteristic_, reinterpret_cast<const uint8_t*>(&packet), sizeof(packet));
+    stats_.telemetry_notifications += 1U;
+  }
+
+  uint16_t BuildTelemetryFlags(uint32_t now_ms) const {
+    uint16_t flags = 0U;
+    const bool guidance_current = telemetry_.guidance_seen &&
+                                  ((now_ms - telemetry_.last_guidance_ms) <= kSourceStaleMs);
+    const bool motion_current = telemetry_.motion_seen &&
+                                ((now_ms - telemetry_.last_motion_ms) <= kSourceStaleMs);
+    const bool accel_current = telemetry_.accel_seen &&
+                               ((now_ms - telemetry_.last_accel_ms) <= kSourceStaleMs);
+
+    if (telemetry_.guidance_seen) {
+      flags |= kTelemetryFlagGuidanceSeen;
+      if (!guidance_current) {
+        flags |= kTelemetryFlagGuidanceStale;
+      }
+    }
+    if (telemetry_.motion_seen) {
+      flags |= kTelemetryFlagMotionSeen;
+      if (!motion_current) {
+        flags |= kTelemetryFlagMotionStale;
+      }
+    }
+    if (telemetry_.accel_seen) {
+      flags |= kTelemetryFlagAccelSeen;
+      if (!accel_current) {
+        flags |= kTelemetryFlagMotionStale;
+      }
+    }
+    if (guidance_current && telemetry_.target_valid) {
+      flags |= kTelemetryFlagTargetValid;
+    } else if (telemetry_.guidance_seen) {
+      flags |= kTelemetryFlagTargetLost;
+    }
+
+    return flags;
+  }
+
+  uint32_t LatestSourceTimeMs() const {
+    uint32_t latest_ms = telemetry_.last_guidance_ms;
+    if (telemetry_.last_motion_ms > latest_ms) {
+      latest_ms = telemetry_.last_motion_ms;
+    }
+    if (telemetry_.last_accel_ms > latest_ms) {
+      latest_ms = telemetry_.last_accel_ms;
+    }
+    return latest_ms;
   }
 
   void NotifyFrame(NimBLECharacteristic* characteristic, const uint8_t* frame, size_t frame_size) {
@@ -336,20 +490,54 @@ private:
     return checksum == frame[frame_size - 1U];
   }
 
+  static uint16_t ReadU16Le(const uint8_t* data) {
+    return static_cast<uint16_t>(data[0]) |
+           static_cast<uint16_t>(static_cast<uint16_t>(data[1]) << 8U);
+  }
+
+  static int16_t ReadI16Le(const uint8_t* data) {
+    return static_cast<int16_t>(ReadU16Le(data));
+  }
+
+  static float ReadFloatLe(const uint8_t* data) {
+    float value = 0.0f;
+    std::memcpy(&value, data, sizeof(value));
+    return value;
+  }
+
+  static uint16_t Crc16Ccitt(const uint8_t* data, size_t data_size) {
+    uint16_t crc = 0xFFFFU;
+    for (size_t index = 0U; index < data_size; ++index) {
+      crc ^= static_cast<uint16_t>(data[index]) << 8U;
+      for (uint8_t bit = 0U; bit < 8U; ++bit) {
+        if ((crc & 0x8000U) != 0U) {
+          crc = static_cast<uint16_t>((crc << 1U) ^ 0x1021U);
+        } else {
+          crc = static_cast<uint16_t>(crc << 1U);
+        }
+      }
+    }
+    return crc;
+  }
+
   void ResetUplinkAssembler() {
     uplink_frame_index_ = 0U;
     uplink_expected_size_ = 0U;
   }
 
   void MaintainAdvertising() {
-    if (!ble_connected_ && was_ble_connected_) {
-      if (millis() - disconnect_timestamp_ms_ >= kDisconnectRestartDelayMs) {
-        ble_server_->startAdvertising();
-        was_ble_connected_ = false;
-        if (Serial) {
-          Serial.println("BLE advertising restarted");
-        }
-      }
+    if (ble_connected_) {
+      return;
+    }
+    if (millis() - disconnect_timestamp_ms_ >= kDisconnectRestartDelayMs) {
+      StartAdvertising();
+    }
+  }
+
+  void StartAdvertising() {
+    NimBLEAdvertising* advertising = NimBLEDevice::getAdvertising();
+    if ((advertising != nullptr) && !advertising->isAdvertising()) {
+      advertising->start();
     }
   }
 
@@ -363,8 +551,9 @@ private:
   }
 
   String BuildStatusSnapshot() const {
+    const uint32_t now_ms = millis();
     String status;
-    status.reserve(160);
+    status.reserve(220);
     status += "ble=";
     status += ble_connected_ ? "1" : "0";
     status += ",rx=";
@@ -373,20 +562,43 @@ private:
     status += String(BRIDGE_TX_PIN);
     status += ",baud=";
     status += String(BRIDGE_UART_BAUD);
-    status += ",dl_pkt=";
-    status += String(stats_.downlink_packets);
-    status += ",dl_b=";
-    status += String(stats_.downlink_bytes);
-    status += ",ul_fr=";
-    status += String(stats_.uplink_frames);
-    status += ",ul_b=";
-    status += String(stats_.uplink_bytes);
+    status += ",rx_b=";
+    status += String(stats_.uart_rx_bytes);
+    status += ",h0=";
+    status += String(stats_.uart_header0_bytes);
+    status += ",hdr=";
+    status += String(stats_.uart_header_pairs);
+    status += ",last_t=0x";
+    if (stats_.last_frame_type < 16U) {
+      status += "0";
+    }
+    status += String(static_cast<unsigned int>(stats_.last_frame_type), HEX);
+    status += ",last_len=";
+    status += String(stats_.last_payload_size);
+    status += ",uart=";
+    status += String(stats_.uart_frames);
+    status += ",guid=";
+    status += String(stats_.guidance_frames);
+    status += ",motion=";
+    status += String(stats_.motion_frames);
+    status += ",accel=";
+    status += String(stats_.accel_frames);
+    status += ",snap=";
+    status += String(stats_.telemetry_notifications);
     status += ",crc=";
     status += String(stats_.checksum_errors);
-    status += ",drop_ble=";
-    status += String(stats_.dropped_ble_packets);
+    status += ",bad_len=";
+    status += String(stats_.bad_payload_frames);
+    status += ",bad_type=";
+    status += String(stats_.unknown_uart_frames);
     status += ",drop_uart=";
     status += String(stats_.dropped_uart_frames);
+    status += ",age_g=";
+    status += String(telemetry_.guidance_seen ? now_ms - telemetry_.last_guidance_ms : 0U);
+    status += ",age_m=";
+    status += String(telemetry_.motion_seen ? now_ms - telemetry_.last_motion_ms : 0U);
+    status += ",age_a=";
+    status += String(telemetry_.accel_seen ? now_ms - telemetry_.last_accel_ms : 0U);
     return status;
   }
 
@@ -404,9 +616,7 @@ private:
 
 constexpr char Esp32BridgeApp::kDeviceName[];
 constexpr char Esp32BridgeApp::kServiceUuid[];
-constexpr char Esp32BridgeApp::kDownlinkCharacteristicUuid[];
-constexpr char Esp32BridgeApp::kUplinkCharacteristicUuid[];
-constexpr char Esp32BridgeApp::kAckCharacteristicUuid[];
+constexpr char Esp32BridgeApp::kTelemetryCharacteristicUuid[];
 constexpr char Esp32BridgeApp::kStatusCharacteristicUuid[];
 
 Esp32BridgeApp g_esp32_bridge_app;
