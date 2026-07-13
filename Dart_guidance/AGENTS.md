@@ -1,0 +1,19 @@
+- 单片机环境，注意内存，算力开销。以控制帧率与精度双最优为目标。
+- 除非用户显式要求，否则严禁创建文件/命名空间作用域的自由函数，包括匿名 namespace 函数和 static 函数，应定义为某个类的私有成员函数。
+  若函数被多个类共享，优先归入调用方最多的类，必要时可创建 utility 类集中管理。
+- 每次更新后在对应条目下简述代码实现。
+1.绿灯识别的优化：保证工况下绿灯能够被识别并精确定位圆心。
+   代码实现简述：绿灯识别职责已迁移到 `OpenMV_guidance`。`OpenMV_guidance/src/green_light_detector.py` 负责图像采集、目标提取、圆心定位和测量值串口发送；`Dart_guidance` 不再保留本地图像识别实现，只消费上游 `OpenMV/UART` 输出的 `measurement`。
+2.线程规划与任务流程的优化：将动作封装为一个action，action组合成为task，每个task代表一个概念性的功能，比如识别绿灯。action是一系列函数的组合。task之间要能进行action的串行处理，并行处理，中断处理。task依赖的参数应该由于一个profile注入，profile应该分为输出，输入，参数三个部分（输出输入需要满足task间通信的目的）。并在主文件对需要的参数进行赋值。写一个action，task文件模板hpp，定义action的enter，running，exit三个状态，并基于完成与否返回SUCCESS与FAILURE。task需要处理action的串行，并行与阻断。阻断是指在一个action中插入一各action，这个action完成后再进行上一个action。注意需要判断并行aciton是依据某个动作完成视为完成还是所有动作完成视为完成。
+   代码实现简述：新增 `APP/Inc/task_action.hpp`、`APP/Inc/task.hpp`、`APP/Inc/task_profile.hpp`、`APP/Inc/green_light_task.hpp` 以及对应实现文件 `APP/Src/task.c`、`APP/Src/green_light_task.c`，建立可直接用于单片机主循环的 action/task/profile 框架。action 统一具备 `enter / running / exit` 三阶段和 `Running / Success / Failure` 返回值；task 层支持 action 串行执行、并行执行、阻断插入，并通过 `TASK_PARALLEL_COMPLETE_ANY_SUCCESS / ALL_SUCCESS` 明确并行完成判据。当前 `GreenLightTaskProfile_t` 已收敛为 `upstream_measurement + setpoint + output`，由 `main.c` 注入 `OpenMV/UART` 上游测量值，不再在 STM32 侧维护图像输入和本地 detector。
+3.运动控制的闭环：
+    3.1我会设置一个像素点作为目标点（setpoint），将绿灯的圆心设置为测量点（measurement），计算这两个点的横向，纵向像素距离（delta_x,delta_y）。
+       代码实现简述：在 `APP/Inc/guidance_types.h` 中新增 `GuidanceSetpoint_t` 与 `GuidanceDelta_t` 作为“目标点”和“闭环输出”的基础类型；`APP/Inc/task_profile.hpp` 中 `GreenLightTask` 当前输入为 `upstream_measurement / setpoint`，输出为 `measurement / delta`。主循环通过 `GUIDANCE_SETPOINT_X / GUIDANCE_SETPOINT_Y` 配置像平面目标点，后续 task 统一围绕“上游圆心坐标对齐 setpoint，输出 delta”这一目标工作。
+    3.2设置四个舵机的零点，通过pwm控制，设置对大变化量（绝对值）。为每一个舵机进行编号，顺时针分别为0,1,2,3。0与2有方向相反，大小相同的转动方向（即pwm变化量）。1与3有有方向相反，大小相同的转动方向。且0与1相反，2与3相反。通过pid算法计算出pwm的变化量。我们只闭环水平方向，即delta_x。
+       代码实现简述：将 `GreenLightTask` 收敛为“采集 measurement 并计算 delta”的单一职责 task，不再在 task 内部耦合 PWM、PID 或舵面分配。控制层现明确支持 `GUIDANCE_CONTROL_MODE_FIXED_PWM` 与 `GUIDANCE_CONTROL_MODE_HORIZONTAL_PWM_PID` 两种 PWM 输出模式：固定模式和 PID 模式共用 `Controller_Left_Turn` / `Controller_Right_Turn` / `Controller_Up_Turn` / `Controller_Down_Turn` 四个最终 PWM 接线函数；固定模式在最终接线处把 PID 叠加量置 0，PID 模式基于 `delta_x` 生成限幅后的 PID output 并叠加到 Servo 0/1/2/3 初始 PWM；新增的垂直 PID 求解函数基于 `delta_y` 调用 `Controller_Up_Turn` / `Controller_Down_Turn`，但暂未接入控制模式；`Drv/Src/servo.c` 已去除固定测试覆盖，最终只在写 timer compare 前做物理占空比限幅。
+4.imu增量控制的自稳方案：
+   代码实现简述：`Dart_guidance/Drv/Src/bmi088.c` 已将 BMI088 加速度计量程切换到 `±24g`，并按寄存器枚举精确换算 mg 输出；`APP/Inc/imu.h` 与 `APP/Src/imu.c` 现将 IMU 内部状态扩展为“全周期滚动均值 + 脉冲锁存参考姿态”模型：持续维护 `10` 个稳定姿态样本窗口，并在检测到大加速度脉冲时，把窗口均值锁存到 `launch_ref_roll / pitch / yaw` 作为发射参考姿态，同时切换到 `gyro-only` 姿态积分，待加速度恢复可信并经过可调恢复延时后，再恢复 `accel + gyro` 的 Mahony 纠偏；同一模块现会持续计算相对该发射参考的 `pitch / roll` 姿态误差，并通过 `GuidanceController` 进入控制层，再经 `Esp32Link` telemetry 帧传到主机 viewer，在终端画框左上角实时叠加显示。相关触发阈值已通过 `protocol/guidance_protocol.yaml`、`Host_tools/guidance/guidance_params.yaml` 和 `main.c` 的热传参链路暴露为可在线调试参数。
+5.esp32的蓝牙连接远程调参：
+   代码实现简述：将 `USART2(host/ESP32)` 参数输入链路从主循环空轮询重构为 `USART2 IRQ -> esp32_link 帧状态机 -> 有界命令队列 -> main.c 消费`，只有主机实际执行 `param-push` 时才触发参数处理；同时保留 telemetry 全生命周期持续上报。`Esp32_bridge` 侧把 BLE 下行改为写回调内直接转 UART，不再保留额外 downlink 轮询，并新增独立 `ack notify` 特征专门镜像 `0x03 ParamAck`，将 ACK 从持续 telemetry 流中分离。主机侧 `guidance_param_sync.py` 与共享 `guidance_host_common.py` 现统一按 `key + sequence` 严格等待匹配 ACK，并把“请求值 / 应用状态 / 实际生效值”做一致性校验；`Dart_guidance` 只处理 setpoint、controller、IMU 等控制侧参数，不再转发 OpenMV/detector 参数。
+6.内录视频功能：
+   代码实现简述：OpenMV 侧新增 `src/video_recorder.py`，在 `src/main.py` 的采样主循环内以 `mjpeg.Mjpeg` 分段滚动保存 QVGA 录像，优先写入 `/sdcard/recordings`，无卡时回退到 `/flash/recordings`，并通过定期 `sync()`、最小剩余空间阈值和段数上限控制掉电风险与存储占用。`Dart_guidance` 不再提供 `USART2(host) <-> USART1(OpenMV)` 直通和 OpenMV REPL/录像访问代理；这类相机维护能力应归入 `OpenMV_guidance` 或主机工具直接面向相机实现。
