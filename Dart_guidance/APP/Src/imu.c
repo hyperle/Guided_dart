@@ -80,6 +80,63 @@ static void imu_latch_launch_reference(imu_t *imu)
     imu->launch_reference_valid = 1U;
 }
 
+static void imu_update_dart_launched_from_accel(imu_t *imu)
+{
+    float selected_accel_g;
+    float threshold_mps2;
+    uint8_t launch_accel_active;
+
+    switch ((ImuAccelAxis_t)imu->config.dart_launch_accel_axis) {
+    case IMU_ACCEL_AXIS_Y:
+        selected_accel_g = imu->accel_y;
+        break;
+    case IMU_ACCEL_AXIS_Z:
+        selected_accel_g = imu->accel_z;
+        break;
+    case IMU_ACCEL_AXIS_X:
+    default:
+        selected_accel_g = imu->accel_x;
+        break;
+    }
+
+    threshold_mps2 = fabsf(imu->config.dart_launch_accel_threshold_mps2);
+    launch_accel_active =
+        (fabsf(selected_accel_g * IMU_STANDARD_GRAVITY_MPS2) > threshold_mps2) ? 1U : 0U;
+
+    if ((launch_accel_active != 0U) && (imu->dart_launch_accel_active == 0U)) {
+        imu->DartLaunched = (int8_t)(imu->DartLaunched * -1);
+    }
+    imu->dart_launch_accel_active = launch_accel_active;
+}
+
+static void imu_update_dart_launch_counter(imu_t *imu)
+{
+    if (imu->DartLaunched == 1) {
+        imu->dart_launch_counter_ticks++;
+        if (imu->dart_launch_counter_ticks >= IMU_DART_LAUNCH_COUNTER_LIMIT) {
+            imu->dart_launch_counter_ticks = 0U;
+        }
+    } else {
+        imu->dart_launch_counter_ticks = 0U;
+    }
+}
+
+static void imu_update_dart_launch_velocity_sample(imu_t *imu)
+{
+    if (imu->DartLaunched != 1) {
+        imu->dart_launch_velocity_x_dps = 0.0f;
+        imu->dart_launch_velocity_y_dps = 0.0f;
+        imu->dart_launch_velocity_z_dps = 0.0f;
+        return;
+    }
+
+    if (imu->dart_launch_counter_ticks == IMU_DART_LAUNCH_VELOCITY_SAMPLE_TICKS) {
+        imu->dart_launch_velocity_x_dps = imu->gyro_x;
+        imu->dart_launch_velocity_y_dps = imu->gyro_y;
+        imu->dart_launch_velocity_z_dps = imu->gyro_z;
+    }
+}
+
 HAL_StatusTypeDef imu_init(imu_t *imu, SPI_HandleTypeDef *hspi, float Kp, float Ki)
 {
     HAL_StatusTypeDef status;
@@ -95,7 +152,9 @@ HAL_StatusTypeDef imu_init(imu_t *imu, SPI_HandleTypeDef *hspi, float Kp, float 
     imu->config.accel_trust_delta_g = IMU_DEFAULT_ACCEL_TRUST_DELTA_G;
     imu->config.accel_pulse_threshold_g = IMU_DEFAULT_ACCEL_PULSE_THRESHOLD_G;
     imu->config.accel_axis_saturation_ratio = IMU_DEFAULT_ACCEL_AXIS_SATURATION_RATIO;
+    imu->config.dart_launch_accel_threshold_mps2 = IMU_DEFAULT_DART_LAUNCH_ACCEL_THRESHOLD_MPS2;
     imu->config.recovery_delay_ms = IMU_DEFAULT_RECOVERY_DELAY_MS;
+    imu->config.dart_launch_accel_axis = (uint8_t)IMU_DEFAULT_DART_LAUNCH_ACCEL_AXIS;
 
     imu->last_tick = HAL_GetTick();
     imu->stable_since_tick = imu->last_tick;
@@ -113,6 +172,12 @@ HAL_StatusTypeDef imu_init(imu_t *imu, SPI_HandleTypeDef *hspi, float Kp, float 
     imu->high_dynamic_mode = 0U;
     imu->launch_reference_valid = 0U;
     imu->pulse_active = 0U;
+    imu->dart_launch_accel_active = 0U;
+    imu->DartLaunched = 1;
+    imu->dart_launch_counter_ticks = 0U;
+    imu->dart_launch_velocity_x_dps = 0.0f;
+    imu->dart_launch_velocity_y_dps = 0.0f;
+    imu->dart_launch_velocity_z_dps = 0.0f;
     imu->accel_x = 0.0f;
     imu->accel_y = 0.0f;
     imu->accel_z = 0.0f;
@@ -173,6 +238,9 @@ HAL_StatusTypeDef imu_update(imu_t *imu)
     imu->accel_x = ax_g;
     imu->accel_y = ay_g;
     imu->accel_z = az_g;
+    imu_update_dart_launched_from_accel(imu);
+    imu_update_dart_launch_counter(imu);
+    imu_update_dart_launch_velocity_sample(imu);
 
     accel_norm_sq = ax_g * ax_g + ay_g * ay_g + az_g * az_g;
     accel_norm = (accel_norm_sq > 0.0f) ? sqrtf(accel_norm_sq) : 0.0f;
@@ -297,4 +365,17 @@ void imu_get_gyro(imu_t *imu, float *gx, float *gy, float *gz)
     if (gx != NULL) *gx = imu->gyro_x;
     if (gy != NULL) *gy = imu->gyro_y;
     if (gz != NULL) *gz = imu->gyro_z;
+}
+
+void imu_get_dart_launch_velocity_sample(imu_t *imu,
+                                         uint16_t *counter_ticks,
+                                         float *speed_x_dps,
+                                         float *speed_y_dps,
+                                         float *speed_z_dps)
+{
+    if (imu == NULL) return;
+    if (counter_ticks != NULL) *counter_ticks = imu->dart_launch_counter_ticks;
+    if (speed_x_dps != NULL) *speed_x_dps = imu->dart_launch_velocity_x_dps;
+    if (speed_y_dps != NULL) *speed_y_dps = imu->dart_launch_velocity_y_dps;
+    if (speed_z_dps != NULL) *speed_z_dps = imu->dart_launch_velocity_z_dps;
 }

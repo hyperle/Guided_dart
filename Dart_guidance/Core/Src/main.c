@@ -26,11 +26,13 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "control_mixer.h"
 #include "guidance_controller.h"
 #include "green_light_task.hpp"
 #include "esp32_link.h"
 #include "imu.h"
 #include "interface.h"
+#include "pixel_delta_pid_action.hpp"
 #include "servo.h"
 /* USER CODE END Includes */
 
@@ -41,7 +43,7 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-
+#define GUIDANCE_TARGET_LOST_NO_UPDATE_TICKS 10U
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -58,8 +60,13 @@ static Esp32Link_t esp32_link;
 static GuidanceTelemetry_t esp32_telemetry;
 static GuidanceController_Config_t guidance_controller_config;
 static GuidanceController_t guidance_controller;
+static ControlMixer_Config_t control_mixer_config;
+static ControlMixer_t control_mixer;
+static PixelDeltaPwmPidActionProfile_t pixel_delta_pid_profile;
+static PixelDeltaPwmPidAction_t pixel_delta_pid_action;
 static imu_t guidance_imu = {0};
 static uint32_t guidance_last_loop_tick_ms;
+static uint8_t guidance_target_no_update_ticks;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -136,6 +143,10 @@ static void Guidance_PublishImuMotion(bool imu_data_valid)
     float ax = 0.0f;
     float ay = 0.0f;
     float az = 0.0f;
+    uint16_t dart_launch_counter_ticks = 0U;
+    float dart_launch_velocity_x_dps = 0.0f;
+    float dart_launch_velocity_y_dps = 0.0f;
+    float dart_launch_velocity_z_dps = 0.0f;
 
     if (++motion_pub_divider < ESP32_LINK_IMU_MOTION_PUBLISH_DIVIDER) {
         return;
@@ -145,8 +156,23 @@ static void Guidance_PublishImuMotion(bool imu_data_valid)
     if (imu_data_valid) {
         imu_get_gyro(&guidance_imu, &gx, &gy, &gz);
         imu_get_accel(&guidance_imu, &ax, &ay, &az);
+        imu_get_dart_launch_velocity_sample(&guidance_imu,
+                                            &dart_launch_counter_ticks,
+                                            &dart_launch_velocity_x_dps,
+                                            &dart_launch_velocity_y_dps,
+                                            &dart_launch_velocity_z_dps);
     }
-    (void)Esp32Link_PublishImuMotion(&esp32_link, gx, gy, gz, ax, ay, az);
+    (void)Esp32Link_PublishImuMotion(&esp32_link,
+                                     gx,
+                                     gy,
+                                     gz,
+                                     ax,
+                                     ay,
+                                     az,
+                                     dart_launch_counter_ticks,
+                                     dart_launch_velocity_x_dps,
+                                     dart_launch_velocity_y_dps,
+                                     dart_launch_velocity_z_dps);
 }
 
 static bool Guidance_UpdateImuAndPublishMotion(void)
@@ -236,8 +262,15 @@ int main(void)
   /* USER CODE BEGIN 2 */
   Esp32Link_Init(&esp32_link, &huart2, ESP32_LINK_TX_TIMEOUT_MS);
   GreenLightTaskProfile_ResetOutput(&green_light_task_profile.output);
+  GuidanceTargetSmoother_LoadDefaultConfig(&green_light_task_profile.params.measurement_smoother_config);
   GuidanceController_LoadDefaultConfig(&guidance_controller_config);
+  ControlMixer_LoadDefaultConfig(&control_mixer_config);
+  PixelDeltaPwmPidActionProfile_LoadDefault(&pixel_delta_pid_profile);
+  pixel_delta_pid_profile.params.horizontal_pwm_pid_config =
+      guidance_controller_config.horizontal_pwm_pid_config;
   GuidanceController_Init(&guidance_controller, &huart1, &guidance_controller_config);
+  ControlMixer_Init(&control_mixer, &control_mixer_config);
+  ControlMixer_ApplyOutputs(&control_mixer);
   Guidance_ApplyMeasurementGeometry(GREEN_LIGHT_TASK_DEFAULT_IMAGE_WIDTH,
                                     GREEN_LIGHT_TASK_DEFAULT_IMAGE_HEIGHT);
   (void)imu_init(&guidance_imu, &hspi1, GUIDANCE_IMU_MAHONY_KP, GUIDANCE_IMU_MAHONY_KI);
@@ -255,7 +288,9 @@ int main(void)
 #endif
 
   GreenLightTask_Init(&green_light_task, &green_light_task_profile);
+  PixelDeltaPwmPidAction_Init(&pixel_delta_pid_action, &pixel_delta_pid_profile);
   guidance_last_loop_tick_ms = HAL_GetTick();
+  guidance_target_no_update_ticks = 0U;
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -280,6 +315,7 @@ int main(void)
 
     {
       TaskActionResult_t task_result;
+      bool target_lost = false;
 
     (void)Guidance_UpdateImuAndPublishMotion();
 
@@ -294,29 +330,57 @@ int main(void)
     }
 
     task_result = GreenLightTask_Tick(&green_light_task);
-    guidance_controller.control_mode = guidance_controller_config.control_mode;
-    guidance_controller.horizontal_pwm_pid_config = guidance_controller_config.horizontal_pwm_pid_config;
-    guidance_controller.horizontal_pid.Kp = guidance_controller.horizontal_pwm_pid_config.kp;
-    guidance_controller.horizontal_pid.Ki = guidance_controller.horizontal_pwm_pid_config.ki;
-    guidance_controller.horizontal_pid.Kd = guidance_controller.horizontal_pwm_pid_config.kd;
-    guidance_controller.horizontal_pid.integral_limit =
-        guidance_controller.horizontal_pwm_pid_config.integral_limit;
-    guidance_controller.aim_config.setpoint_x =
-        (green_light_task_profile.input.setpoint.x == GUIDANCE_NO_TARGET_COORDINATE)
-            ? (uint16_t)(green_light_task_profile.input.measurement_width / 2U)
-            : green_light_task_profile.input.setpoint.x;
-    guidance_controller.aim_config.setpoint_y =
-        (green_light_task_profile.input.setpoint.y == GUIDANCE_NO_TARGET_COORDINATE)
-            ? (uint16_t)(green_light_task_profile.input.measurement_height / 2U)
-            : green_light_task_profile.input.setpoint.y;
-    if (task_result != TASK_ACTION_RUNNING) {
-      (void)GuidanceController_SetMeasurement(&guidance_controller,
-                                               &green_light_task_profile.output.measurement);
-    }
-    GuidanceController_Solve(&guidance_controller);
-    GuidanceController_ApplyOutputs(&guidance_controller);
+    pixel_delta_pid_profile.params.horizontal_pwm_pid_config =
+        guidance_controller_config.horizontal_pwm_pid_config;
+    pixel_delta_pid_profile.params.output_limit_us = GUIDANCE_HORIZONTAL_PID_OUTPUT_LIMIT_US;
 
-    if (task_result != TASK_ACTION_RUNNING) {
+    if ((task_result == TASK_ACTION_SUCCESS) && green_light_task_profile.output.target_detected) {
+      TaskActionResult_t control_result;
+
+      guidance_target_no_update_ticks = 0U;
+      pixel_delta_pid_profile.input.target_delta = green_light_task_profile.output.delta;
+      pixel_delta_pid_profile.input.target_detected = true;
+
+      if (guidance_controller_config.control_mode == GUIDANCE_CONTROL_MODE_HORIZONTAL_PWM_PID) {
+        control_result = PixelDeltaPwmPidAction_Tick(&pixel_delta_pid_action);
+        if (control_result == TASK_ACTION_FAILURE) {
+          PixelDeltaPwmPidAction_Reset(&pixel_delta_pid_action);
+          ControlMixer_ClearContribution(&control_mixer);
+        } else {
+          ControlMixer_SetContribution(&control_mixer,
+                                       &pixel_delta_pid_profile.output.contribution);
+        }
+        ControlMixer_Solve(&control_mixer);
+        ControlMixer_ApplyOutputs(&control_mixer);
+      } else {
+        PixelDeltaPwmPidAction_Reset(&pixel_delta_pid_action);
+        ControlMixer_ClearContribution(&control_mixer);
+        ControlMixer_Solve(&control_mixer);
+        ControlMixer_ApplyOutputs(&control_mixer);
+      }
+    } else {
+      target_lost = (task_result == TASK_ACTION_FAILURE);
+
+      if (task_result == TASK_ACTION_RUNNING) {
+        if (guidance_target_no_update_ticks < GUIDANCE_TARGET_LOST_NO_UPDATE_TICKS) {
+          guidance_target_no_update_ticks += 1U;
+        }
+        target_lost = (guidance_target_no_update_ticks >= GUIDANCE_TARGET_LOST_NO_UPDATE_TICKS);
+      } else {
+        guidance_target_no_update_ticks = GUIDANCE_TARGET_LOST_NO_UPDATE_TICKS;
+        target_lost = true;
+      }
+
+      if ((guidance_controller_config.control_mode != GUIDANCE_CONTROL_MODE_HORIZONTAL_PWM_PID) ||
+          target_lost) {
+        PixelDeltaPwmPidAction_Reset(&pixel_delta_pid_action);
+        ControlMixer_ClearContribution(&control_mixer);
+        ControlMixer_Solve(&control_mixer);
+        ControlMixer_ApplyOutputs(&control_mixer);
+      }
+    }
+
+    if ((task_result != TASK_ACTION_RUNNING) || target_lost) {
       esp32_telemetry.measurement = green_light_task_profile.output.measurement;
       esp32_telemetry.setpoint = green_light_task_profile.input.setpoint;
       esp32_telemetry.delta = green_light_task_profile.output.delta;
@@ -327,7 +391,7 @@ int main(void)
       esp32_telemetry.relative_attitude_error = guidance_controller.relative_attitude_error;
       esp32_telemetry.target_detected = green_light_task_profile.output.target_detected;
       esp32_telemetry.task_finished = true;
-      esp32_telemetry.task_success = (task_result == TASK_ACTION_SUCCESS);
+      esp32_telemetry.task_success = ((task_result == TASK_ACTION_SUCCESS) && !target_lost);
       (void)Esp32Link_PublishGuidanceTelemetry(&esp32_link, &esp32_telemetry);
     }
     }

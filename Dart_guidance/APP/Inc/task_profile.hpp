@@ -2,6 +2,7 @@
 #define DART_GUIDANCE_TASK_PROFILE_HPP
 
 #include "guidance_types.h"
+#include "target_smoother.h"
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -20,16 +21,20 @@ typedef struct
 
 typedef struct
 {
+    GuidanceTargetSmootherConfig_t measurement_smoother_config;
+} GreenLightTaskParams_t;
+
+typedef struct
+{
     GuidanceMeasurement_t measurement;
     GuidanceDelta_t delta;
     bool target_detected;
-    bool task_finished;
-    bool task_success;
 } GreenLightTaskOutput_t;
 
 typedef struct
 {
     GreenLightTaskInput_t input;
+    GreenLightTaskParams_t params;
     GreenLightTaskOutput_t output;
 } GreenLightTaskProfile_t;
 

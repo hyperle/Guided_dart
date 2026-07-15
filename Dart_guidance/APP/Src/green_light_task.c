@@ -18,8 +18,9 @@ static uint16_t GreenLightTask_ResolveSetpointAxis(uint16_t setpoint, uint16_t m
 static TaskActionResult_t AcquireMeasurementAction_OnEnter(TaskAction_t *action)
 {
     GreenLightTaskProfile_t *profile = (GreenLightTaskProfile_t *)action->profile;
+    GreenLightTask_t *task = (GreenLightTask_t *)action->context;
 
-    if (profile == NULL) {
+    if ((profile == NULL) || (task == NULL)) {
         return TASK_ACTION_FAILURE;
     }
 
@@ -33,6 +34,17 @@ static TaskActionResult_t AcquireMeasurementAction_OnEnter(TaskAction_t *action)
     if ((profile->output.measurement.x == GUIDANCE_NO_TARGET_COORDINATE) ||
         (profile->output.measurement.y == GUIDANCE_NO_TARGET_COORDINATE)) {
         profile->output.target_detected = false;
+        GuidanceTargetSmoother_Reset(&task->measurement_smoother);
+        return TASK_ACTION_FAILURE;
+    }
+
+    task->measurement_smoother.config = profile->params.measurement_smoother_config;
+    if (!GuidanceTargetSmoother_Update(&task->measurement_smoother,
+                                       &profile->input.upstream_measurement,
+                                       profile->input.measurement_width,
+                                       profile->input.measurement_height,
+                                       &profile->output.measurement)) {
+        profile->output.target_detected = false;
         return TASK_ACTION_FAILURE;
     }
 
@@ -42,8 +54,9 @@ static TaskActionResult_t AcquireMeasurementAction_OnEnter(TaskAction_t *action)
 static TaskActionResult_t AcquireMeasurementAction_OnRunning(TaskAction_t *action)
 {
     GreenLightTaskProfile_t *profile = (GreenLightTaskProfile_t *)action->profile;
+    GreenLightTask_t *task = (GreenLightTask_t *)action->context;
 
-    if (profile == NULL) {
+    if ((profile == NULL) || (task == NULL)) {
         return TASK_ACTION_FAILURE;
     }
 
@@ -55,6 +68,17 @@ static TaskActionResult_t AcquireMeasurementAction_OnRunning(TaskAction_t *actio
     profile->output.target_detected = true;
     if ((profile->output.measurement.x == GUIDANCE_NO_TARGET_COORDINATE) ||
         (profile->output.measurement.y == GUIDANCE_NO_TARGET_COORDINATE)) {
+        profile->output.target_detected = false;
+        GuidanceTargetSmoother_Reset(&task->measurement_smoother);
+        return TASK_ACTION_FAILURE;
+    }
+
+    task->measurement_smoother.config = profile->params.measurement_smoother_config;
+    if (!GuidanceTargetSmoother_Update(&task->measurement_smoother,
+                                       &profile->input.upstream_measurement,
+                                       profile->input.measurement_width,
+                                       profile->input.measurement_height,
+                                       &profile->output.measurement)) {
         profile->output.target_detected = false;
         return TASK_ACTION_FAILURE;
     }
@@ -99,49 +123,6 @@ static TaskActionResult_t ComputeDeltaAction_OnEnter(TaskAction_t *action)
     return TASK_ACTION_SUCCESS;
 }
 
-static TaskActionResult_t ComputeDeltaAction_OnRunning(TaskAction_t *action)
-{
-    (void)action;
-    return TASK_ACTION_SUCCESS;
-}
-
-static void ComputeDeltaAction_OnExit(TaskAction_t *action, TaskActionResult_t result)
-{
-    (void)action;
-    (void)result;
-}
-
-static TaskActionResult_t FinalizeTaskAction_OnEnter(TaskAction_t *action)
-{
-    (void)action;
-    return TASK_ACTION_RUNNING;
-}
-
-static TaskActionResult_t FinalizeTaskAction_OnRunning(TaskAction_t *action)
-{
-    GreenLightTaskProfile_t *profile = (GreenLightTaskProfile_t *)action->profile;
-
-    if (profile == NULL) {
-        return TASK_ACTION_FAILURE;
-    }
-
-    profile->output.task_finished = true;
-    profile->output.task_success = profile->output.target_detected;
-    return profile->output.target_detected ? TASK_ACTION_SUCCESS : TASK_ACTION_FAILURE;
-}
-
-static void FinalizeTaskAction_OnExit(TaskAction_t *action, TaskActionResult_t result)
-{
-    GreenLightTaskProfile_t *profile = (GreenLightTaskProfile_t *)action->profile;
-
-    if (profile == NULL) {
-        return;
-    }
-
-    profile->output.task_finished = true;
-    profile->output.task_success = (result == TASK_ACTION_SUCCESS);
-}
-
 void GreenLightTaskProfile_ResetOutput(GreenLightTaskOutput_t *output)
 {
     if (output == NULL) {
@@ -154,8 +135,6 @@ void GreenLightTaskProfile_ResetOutput(GreenLightTaskOutput_t *output)
     output->delta.delta_x = 0;
     output->delta.delta_y = 0;
     output->target_detected = false;
-    output->task_finished = false;
-    output->task_success = false;
 }
 
 void GreenLightTask_Init(GreenLightTask_t *task, GreenLightTaskProfile_t *profile)
@@ -165,6 +144,8 @@ void GreenLightTask_Init(GreenLightTask_t *task, GreenLightTaskProfile_t *profil
     }
 
     task->profile = profile;
+    GuidanceTargetSmoother_Init(&task->measurement_smoother,
+                                &profile->params.measurement_smoother_config);
 
     TaskAction_Init(&task->acquire_measurement_action,
                     profile,
@@ -176,19 +157,12 @@ void GreenLightTask_Init(GreenLightTask_t *task, GreenLightTaskProfile_t *profil
                     profile,
                     task,
                     ComputeDeltaAction_OnEnter,
-                    ComputeDeltaAction_OnRunning,
-                    ComputeDeltaAction_OnExit);
-    TaskAction_Init(&task->finalize_action,
-                    profile,
-                    task,
-                    FinalizeTaskAction_OnEnter,
-                    FinalizeTaskAction_OnRunning,
-                    FinalizeTaskAction_OnExit);
+                    NULL,
+                    NULL);
 
     task->sequence_slots[0].action = &task->acquire_measurement_action;
     task->sequence_slots[1].action = &task->compute_delta_action;
-    task->sequence_slots[2].action = &task->finalize_action;
-    TaskSequence_Init(&task->sequence_task, task->sequence_slots, 3U);
+    TaskSequence_Init(&task->sequence_task, task->sequence_slots, 2U);
 
     GreenLightTaskProfile_ResetOutput(&profile->output);
 }
@@ -200,6 +174,7 @@ void GreenLightTask_Reset(GreenLightTask_t *task)
     }
 
     TaskSequence_Reset(&task->sequence_task);
+    GuidanceTargetSmoother_Reset(&task->measurement_smoother);
     GreenLightTaskProfile_ResetOutput(&task->profile->output);
 }
 

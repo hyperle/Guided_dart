@@ -24,25 +24,25 @@
 #define GUIDANCE_DEFAULT_CONTROL_MODE GUIDANCE_CONTROL_MODE_HORIZONTAL_PWM_PID
 
 /* 四路舵机初始脉宽，单位 us。 */
-#define GUIDANCE_SERVO_INITIAL_PWM_US_3 2085U       //1  大左小右
-#define GUIDANCE_SERVO_INITIAL_PWM_US_0 1995U       //2  小左大右
-#define GUIDANCE_SERVO_INITIAL_PWM_US_2 2000U       //3  大左小右
-#define GUIDANCE_SERVO_INITIAL_PWM_US_1 1920U       //4  大左小右
+#define GUIDANCE_SERVO_INITIAL_PWM_US_3 2040U       //1  大左小右
+#define GUIDANCE_SERVO_INITIAL_PWM_US_0 2060U       //2  小左大右
+#define GUIDANCE_SERVO_INITIAL_PWM_US_2 2025U       //3  大左小右
+#define GUIDANCE_SERVO_INITIAL_PWM_US_1 1970U       //4  大左小右
 
 /* 水平 PID 默认 Kp；主要决定 delta_x 误差到 PWM 修正量的比例。 */
-#define GUIDANCE_HORIZONTAL_PID_KP 10.0f
+#define GUIDANCE_HORIZONTAL_PID_KP 1.0f
 
 /* 水平 PID 默认 Ki；用于消除长期偏差，过大容易积分累积。 */
 #define GUIDANCE_HORIZONTAL_PID_KI 0.05f
 
 /* 水平 PID 默认 Kd；用于抑制快速变化，目前默认关闭。 */
-#define GUIDANCE_HORIZONTAL_PID_KD 0.0f
+#define GUIDANCE_HORIZONTAL_PID_KD 0.01f
 
 /* 水平 PID 积分限幅；限制积分项最大绝对值，避免长时间丢靶后输出冲击。 */
 #define GUIDANCE_HORIZONTAL_PID_INTEGRAL_LIMIT 1000.0f
 
 /* 水平 PID 输出限幅，单位 us；限制零点附近的 PWM 修正量。 */
-#define GUIDANCE_HORIZONTAL_PID_OUTPUT_LIMIT_US 300.0f
+#define GUIDANCE_HORIZONTAL_PID_OUTPUT_LIMIT_US 100.0f
 
 /* 水平 PID 输出方向开关；置 true 时会反向 delta_x 对 PWM 的修正方向。 */
 #define GUIDANCE_HORIZONTAL_PID_INVERT_OUTPUT false

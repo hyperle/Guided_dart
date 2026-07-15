@@ -28,6 +28,10 @@ bool Esp32Link_PublishImuMotion(Esp32Link_t *link,
                                 float gz,
                                 float ax,
                                 float ay,
-                                float az);
+                                float az,
+                                uint16_t dart_launch_counter_ticks,
+                                float dart_launch_velocity_x_dps,
+                                float dart_launch_velocity_y_dps,
+                                float dart_launch_velocity_z_dps);
 
 #endif

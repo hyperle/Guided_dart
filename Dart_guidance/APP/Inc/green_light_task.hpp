@@ -3,6 +3,7 @@
 
 #include "task.hpp"
 #include "task_profile.hpp"
+#include "target_smoother.h"
 
 /* 默认测量图像宽度，单位 px；启动时先用它初始化 setpoint。 */
 #define GREEN_LIGHT_TASK_DEFAULT_IMAGE_WIDTH 320U
@@ -35,12 +36,12 @@ extern "C" {
 typedef struct
 {
     GreenLightTaskProfile_t *profile;
+    GuidanceTargetSmoother_t measurement_smoother;
 
     TaskAction_t acquire_measurement_action;
     TaskAction_t compute_delta_action;
-    TaskAction_t finalize_action;
 
-    TaskSequenceSlot_t sequence_slots[3];
+    TaskSequenceSlot_t sequence_slots[2];
     TaskSequence_t sequence_task;
 } GreenLightTask_t;
 

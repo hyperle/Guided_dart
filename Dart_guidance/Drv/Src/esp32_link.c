@@ -19,7 +19,8 @@ static int16_t Esp32Link_EncodeCentideg(float angle_deg)
 }
 
 #define ESP32_LINK_GUIDANCE_PAYLOAD_SIZE 28U
-#define ESP32_LINK_IMU_MOTION_PAYLOAD_SIZE 24U
+#define ESP32_LINK_IMU_MOTION_VALUE_COUNT 10U
+#define ESP32_LINK_IMU_MOTION_PAYLOAD_SIZE (ESP32_LINK_IMU_MOTION_VALUE_COUNT * 4U)
 #define ESP32_LINK_GUIDANCE_FRAME_SIZE (4U + ESP32_LINK_GUIDANCE_PAYLOAD_SIZE + 1U)
 #define ESP32_LINK_FLAG_TARGET_DETECTED (1U << 0U)
 #define ESP32_LINK_FLAG_TASK_FINISHED (1U << 1U)
@@ -122,12 +123,16 @@ bool Esp32Link_PublishImuMotion(Esp32Link_t *link,
                                 float gz,
                                 float ax,
                                 float ay,
-                                float az)
+                                float az,
+                                uint16_t dart_launch_counter_ticks,
+                                float dart_launch_velocity_x_dps,
+                                float dart_launch_velocity_y_dps,
+                                float dart_launch_velocity_z_dps)
 {
     uint8_t frame[4U + ESP32_LINK_IMU_MOTION_PAYLOAD_SIZE + 1U];
     uint8_t checksum = 0U;
     size_t index;
-    float motion_values[6];
+    float motion_values[ESP32_LINK_IMU_MOTION_VALUE_COUNT];
     uint8_t *payload_ptr;
     HAL_StatusTypeDef status;
 
@@ -146,6 +151,10 @@ bool Esp32Link_PublishImuMotion(Esp32Link_t *link,
     motion_values[3] = ax;
     motion_values[4] = ay;
     motion_values[5] = az;
+    motion_values[6] = (float)dart_launch_counter_ticks;
+    motion_values[7] = dart_launch_velocity_x_dps;
+    motion_values[8] = dart_launch_velocity_y_dps;
+    motion_values[9] = dart_launch_velocity_z_dps;
     payload_ptr = (uint8_t *)motion_values;
     for (index = 0U; index < ESP32_LINK_IMU_MOTION_PAYLOAD_SIZE; ++index) {
         frame[4U + index] = payload_ptr[index];

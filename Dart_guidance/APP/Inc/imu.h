@@ -14,6 +14,9 @@
 /* BMI088 加速度计满量程，单位 g；与 bmi088.c 中的 ACC_RANGE_24 配置保持一致。 */
 #define IMU_ACCEL_FULL_SCALE_G 24.0f
 
+/* 标准重力加速度，用于把 BMI088 的 g 单位采样值换算为 m/s^2。 */
+#define IMU_STANDARD_GRAVITY_MPS2 9.80665f
+
 /* 加速度可信窗口半宽，单位 g；模长偏离 1g 超过该值时切到 gyro-only。 */
 #define IMU_DEFAULT_ACCEL_TRUST_DELTA_G 0.35f
 
@@ -26,17 +29,31 @@
 /* 高动态后恢复延时，单位 ms；加速度恢复可信后等待该时间再恢复 accel+gyro Mahony 纠偏。 */
 #define IMU_DEFAULT_RECOVERY_DELAY_MS 150U
 
+/* DartLaunched 翻转默认使用 X 轴加速度，阈值单位 m/s^2。 */
+#define IMU_DEFAULT_DART_LAUNCH_ACCEL_AXIS IMU_ACCEL_AXIS_X
+#define IMU_DEFAULT_DART_LAUNCH_ACCEL_THRESHOLD_MPS2 16.0f
+#define IMU_DART_LAUNCH_COUNTER_LIMIT 1000U
+#define IMU_DART_LAUNCH_VELOCITY_SAMPLE_TICKS 10U
+
 /* Mahony 默认比例增益；越大越信任加速度纠偏，越小越依赖陀螺积分。 */
 #define GUIDANCE_IMU_MAHONY_KP 1.0f
 
 /* Mahony 默认积分增益；用于慢速偏置修正，目前默认关闭积分。 */
 #define GUIDANCE_IMU_MAHONY_KI 0.0f
 
+typedef enum {
+    IMU_ACCEL_AXIS_X = 0,
+    IMU_ACCEL_AXIS_Y = 1,
+    IMU_ACCEL_AXIS_Z = 2
+} ImuAccelAxis_t;
+
 typedef struct {
     float accel_trust_delta_g;
     float accel_pulse_threshold_g;
     float accel_axis_saturation_ratio;
+    float dart_launch_accel_threshold_mps2;
     uint16_t recovery_delay_ms;
+    uint8_t dart_launch_accel_axis;         // ImuAccelAxis_t
 } imu_config_t;
 
 /* IMU 状态结构体 */
@@ -71,6 +88,12 @@ typedef struct {
     uint8_t high_dynamic_mode;              // 当前是否处于高动态gyro-only模式
     uint8_t launch_reference_valid;         // 是否已锁存发射参考姿态
     uint8_t pulse_active;                   // 当前是否处于加速度脉冲中
+    uint8_t dart_launch_accel_active;       // DartLaunched 轴向加速度边沿锁存
+    int8_t DartLaunched;                    // 发射状态翻转变量，只在 1 和 -1 间跳变
+    uint16_t dart_launch_counter_ticks;     // DartLaunched 为 1 时 tick 计数，-1 时清零
+    float dart_launch_velocity_x_dps;       // tick 到 10 时锁存的有符号 X 轴角速度（deg/s）
+    float dart_launch_velocity_y_dps;       // tick 到 10 时锁存的有符号 Y 轴角速度（deg/s）
+    float dart_launch_velocity_z_dps;       // tick 到 10 时锁存的有符号 Z 轴角速度（deg/s）
     float accel_x;                          // 最新 X 轴加速度（g）
     float accel_y;                          // 最新 Y 轴加速度（g）
     float accel_z;                          // 最新 Z 轴加速度（g）
@@ -135,5 +158,14 @@ void imu_get_accel(imu_t *imu, float *ax, float *ay, float *az);
  * gx/gy/gz 为输出指针，可为 NULL。
  */
 void imu_get_gyro(imu_t *imu, float *gx, float *gy, float *gz);
+
+/**
+ * 获取 DartLaunched 计数 tick 和 tick=10 时锁存的有符号三轴角速度（deg/s）。
+ */
+void imu_get_dart_launch_velocity_sample(imu_t *imu,
+                                         uint16_t *counter_ticks,
+                                         float *speed_x_dps,
+                                         float *speed_y_dps,
+                                         float *speed_z_dps);
 
 #endif /* __IMU_H */

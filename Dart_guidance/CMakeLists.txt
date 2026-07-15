@@ -92,7 +92,12 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Lib/Src/pid.c
     APP/Src/imu.c
     APP/Src/task.c
+    APP/Src/target_smoother.c
     APP/Src/green_light_task.c
+    APP/Src/pixel_delta_pid_action.c
+    APP/Src/imu_velocity_recovery_action.c
+    APP/Src/timed_turn_pulse_action.c
+    APP/Src/control_mixer.c
     APP/Src/guidance_controller.c
 )
 

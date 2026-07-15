@@ -65,4 +65,10 @@ typedef struct
     float values[GUIDANCE_SERVO_COUNT];
 } GuidanceServoPulseUs_t;
 
+typedef struct
+{
+    bool horizontal_pwm_active;
+    float horizontal_pwm_us;
+} GuidanceControlContribution_t;
+
 #endif
