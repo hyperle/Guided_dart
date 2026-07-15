@@ -12,6 +12,11 @@ from camera_config import (
 )
 
 try:
+    import _thread
+except Exception:
+    _thread = None
+
+try:
     from pyb import LED
     _has_led = True
 except (ImportError, AttributeError):
@@ -60,8 +65,16 @@ SENSOR_WIDTH = 320
 SENSOR_HEIGHT = 240
 UART_PORT = 1
 UART_BAUDRATE = 115200
-MEASUREMENT_IMAGE_SIZE_STARTUP_FRAMES = 60
-MEASUREMENT_IMAGE_SIZE_REFRESH_MS = 1000
+MEASUREMENT_HEADER = 0x5A
+MEASUREMENT_LEGACY_LENGTH = 0x06
+MEASUREMENT_EXTENDED_LENGTH = 0x0A
+MEASUREMENT_LEGACY_FRAME_LENGTH = MEASUREMENT_LEGACY_LENGTH + 3
+MEASUREMENT_EXTENDED_FRAME_LENGTH = MEASUREMENT_EXTENDED_LENGTH + 3
+MEASUREMENT_NO_TARGET_COORDINATE = 0xFFFF
+MEASUREMENT_IMAGE_SIZE_STARTUP_FRAMES = 8
+MEASUREMENT_IMAGE_SIZE_REFRESH_MS = 0
+MEASUREMENT_ASYNC_UART_ENABLED = True
+MEASUREMENT_SENDER_IDLE_MS = 1
 MANUAL_EXPOSURE_US = 1000
 USB_DEBUG_POLL_INTERVAL_MS = 250
 USB_PREVIEW_JPEG_QUALITY = 70
@@ -81,6 +94,7 @@ COLOR_ERROR = (255, 0, 0)
 COLOR_TEXT = (255, 255, 255)
 
 recorder = None
+measurement_sender = None
 
 
 def target_search_status(result, debug):
@@ -250,11 +264,174 @@ def poll_usb_preview_request(vcp, current_active):
 def should_send_measurement_image_size(now_ms, last_image_size_ms, frame_index):
     if frame_index < MEASUREMENT_IMAGE_SIZE_STARTUP_FRAMES:
         return True
+    if MEASUREMENT_IMAGE_SIZE_REFRESH_MS <= 0:
+        return False
     return time.ticks_diff(now_ms, last_image_size_ms) >= MEASUREMENT_IMAGE_SIZE_REFRESH_MS
 
 
+def measurement_clamp_u16(value):
+    value = int(value)
+    if value < 0:
+        return 0
+    if value > 0xFFFF:
+        return 0xFFFF
+    return value
+
+
+def measurement_put_u16_be(packet, index, value):
+    value = measurement_clamp_u16(value)
+    packet[index] = (value >> 8) & 0xFF
+    packet[index + 1] = value & 0xFF
+
+
+def measurement_sender_worker(sender):
+    sender.run()
+
+
+class MeasurementSender:
+    def __init__(self, uart):
+        self._uart = uart
+        self._lock = None
+        if MEASUREMENT_ASYNC_UART_ENABLED and _thread is not None:
+            try:
+                self._lock = _thread.allocate_lock()
+            except Exception:
+                self._lock = None
+        self._running = False
+        self._failed = False
+        self._thread_start_attempted = False
+        self._latest_ready = False
+        self._latest_seq = 0
+        self._latest_x = MEASUREMENT_NO_TARGET_COORDINATE
+        self._latest_y = MEASUREMENT_NO_TARGET_COORDINATE
+        self._latest_area = 0
+        self._latest_image_width = 0
+        self._latest_image_height = 0
+        self._latest_include_image_size = False
+        self._sync_short_packet = bytearray(MEASUREMENT_LEGACY_FRAME_LENGTH)
+        self._sync_extended_packet = bytearray(MEASUREMENT_EXTENDED_FRAME_LENGTH)
+
+    def start(self):
+        if self._thread_start_attempted:
+            return False
+        self._thread_start_attempted = True
+        if self._lock is None:
+            return False
+        self._running = True
+        self._failed = False
+        try:
+            _thread.start_new_thread(measurement_sender_worker, (self,))
+        except Exception:
+            self._running = False
+            self._failed = True
+            return False
+        return True
+
+    def stop(self):
+        self._running = False
+
+    def publish(self, x, y, area, image_width, image_height, include_image_size):
+        if self._running and not self._failed and self._lock is not None:
+            self._lock.acquire()
+            self._latest_x = x
+            self._latest_y = y
+            self._latest_area = area
+            self._latest_image_width = image_width
+            self._latest_image_height = image_height
+            self._latest_include_image_size = include_image_size
+            self._latest_seq = (self._latest_seq + 1) & 0x3FFFFFFF
+            self._latest_ready = True
+            self._lock.release()
+            return True
+        return self._send_with_buffers(
+            x,
+            y,
+            area,
+            image_width,
+            image_height,
+            include_image_size,
+            self._sync_short_packet,
+            self._sync_extended_packet,
+        )
+
+    def run(self):
+        short_packet = bytearray(MEASUREMENT_LEGACY_FRAME_LENGTH)
+        extended_packet = bytearray(MEASUREMENT_EXTENDED_FRAME_LENGTH)
+        last_seq = -1
+        failed = False
+
+        try:
+            while self._running:
+                self._lock.acquire()
+                ready = self._latest_ready
+                seq = self._latest_seq
+                if (not ready) or (seq == last_seq):
+                    self._lock.release()
+                    time.sleep_ms(MEASUREMENT_SENDER_IDLE_MS)
+                    continue
+                x = self._latest_x
+                y = self._latest_y
+                area = self._latest_area
+                image_width = self._latest_image_width
+                image_height = self._latest_image_height
+                include_image_size = self._latest_include_image_size
+                self._lock.release()
+
+                if not self._send_with_buffers(
+                    x,
+                    y,
+                    area,
+                    image_width,
+                    image_height,
+                    include_image_size,
+                    short_packet,
+                    extended_packet,
+                ):
+                    failed = True
+                    break
+                last_seq = seq
+        except Exception:
+            failed = True
+
+        if failed:
+            self._failed = True
+        self._running = False
+
+    def _send_with_buffers(self, x, y, area, image_width, image_height, include_image_size, short_packet, extended_packet):
+        if include_image_size:
+            packet = extended_packet
+            packet[0] = MEASUREMENT_HEADER
+            packet[1] = MEASUREMENT_EXTENDED_LENGTH
+            measurement_put_u16_be(packet, 2, x)
+            measurement_put_u16_be(packet, 4, y)
+            measurement_put_u16_be(packet, 6, area)
+            measurement_put_u16_be(packet, 8, image_width)
+            measurement_put_u16_be(packet, 10, image_height)
+        else:
+            packet = short_packet
+            packet[0] = MEASUREMENT_HEADER
+            packet[1] = MEASUREMENT_LEGACY_LENGTH
+            measurement_put_u16_be(packet, 2, x)
+            measurement_put_u16_be(packet, 4, y)
+            measurement_put_u16_be(packet, 6, area)
+
+        checksum = 0
+        last_index = len(packet) - 1
+        for index in range(last_index):
+            checksum = (checksum + packet[index]) & 0xFF
+        packet[last_index] = checksum
+
+        try:
+            written = self._uart.write(packet)
+        except Exception:
+            return False
+        if written is not None and written != len(packet):
+            return False
+        return True
+
+
 def main():
-    global recorder
+    global recorder, measurement_sender
 
     blink_startup_indicator()
 
@@ -292,6 +469,7 @@ def main():
     usb_vcp = USB_VCP()
     clock = time.clock()
     detector = GreenLightDetector()
+    measurement_sender = MeasurementSender(uart)
     recorder = make_sd_recorder()
     usb_debug_active = False
     usb_preview_requested = False
@@ -325,28 +503,28 @@ def main():
         if include_image_size:
             last_measurement_image_size_ms = now_ms
 
+        if not include_image_size:
+            measurement_sender.start()
+
         if result is None:
             set_led_state(target_detected=False)
-            detector.send_measurement(
-                uart,
-                0xFFFF,
-                0xFFFF,
-                0,
-                image_width,
-                image_height,
-                include_image_size=include_image_size,
-            )
+            measurement_x = MEASUREMENT_NO_TARGET_COORDINATE
+            measurement_y = MEASUREMENT_NO_TARGET_COORDINATE
+            measurement_area = 0
         else:
             set_led_state(target_detected=True)
-            detector.send_measurement(
-                uart,
-                result["center_x"],
-                result["center_y"],
-                result["area"],
-                image_width,
-                image_height,
-                include_image_size=include_image_size,
-            )
+            measurement_x = result["center_x"]
+            measurement_y = result["center_y"]
+            measurement_area = result["area"]
+
+        measurement_sender.publish(
+            measurement_x,
+            measurement_y,
+            measurement_area,
+            image_width,
+            image_height,
+            include_image_size,
+        )
 
         frame_metadata = None
         if recorder is not None or usb_debug_active:
@@ -368,6 +546,11 @@ def main():
 try:
     main()
 except Exception:
+    try:
+        if measurement_sender is not None:
+            measurement_sender.stop()
+    except Exception:
+        pass
     try:
         if recorder is not None:
             recorder.close(quiet=True)

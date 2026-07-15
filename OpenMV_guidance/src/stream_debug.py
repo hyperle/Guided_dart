@@ -29,8 +29,8 @@ _MEASUREMENT_HEADER = 0x5A
 _MEASUREMENT_LEGACY_LENGTH = 0x06
 _MEASUREMENT_EXTENDED_LENGTH = 0x0A
 _MEASUREMENT_LENGTH = _MEASUREMENT_EXTENDED_LENGTH
-_CONTROL_IMAGE_SIZE_STARTUP_FRAMES = 60
-_CONTROL_IMAGE_SIZE_REFRESH_MS = 1000
+_CONTROL_IMAGE_SIZE_STARTUP_FRAMES = 8
+_CONTROL_IMAGE_SIZE_REFRESH_MS = 0
 _NO_TARGET_COORDINATE = 0xFFFF
 _OVERLAY_X = 2
 _OVERLAY_STATUS_Y = 2
@@ -179,6 +179,8 @@ def _send_control_measurement(uart, result, image_width, image_height, include_i
 def _should_send_control_image_size(now_ms, last_image_size_ms, frame_index):
     if frame_index < _CONTROL_IMAGE_SIZE_STARTUP_FRAMES:
         return True
+    if _CONTROL_IMAGE_SIZE_REFRESH_MS <= 0:
+        return False
     return time.ticks_diff(now_ms, last_image_size_ms) >= _CONTROL_IMAGE_SIZE_REFRESH_MS
 
 

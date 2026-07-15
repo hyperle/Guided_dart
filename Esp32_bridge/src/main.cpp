@@ -71,8 +71,10 @@ private:
   static constexpr uint16_t kNoTargetCoordinate = 0xFFFFU;
 
   static constexpr uint16_t kTelemetryMagic = 0xDA7AU;
-  static constexpr uint8_t kTelemetryVersion = 1U;
+  static constexpr uint8_t kTelemetryVersion = 2U;
   static constexpr uint8_t kTelemetryTypeSnapshot = 1U;
+  static constexpr uint8_t kImuMotionPayloadLegacySize = 24U;
+  static constexpr uint8_t kImuMotionPayloadExtendedSize = 40U;
   static constexpr uint16_t kTelemetryFlagTargetValid = 1U << 0U;
   static constexpr uint16_t kTelemetryFlagGuidanceSeen = 1U << 1U;
   static constexpr uint16_t kTelemetryFlagMotionSeen = 1U << 2U;
@@ -97,6 +99,10 @@ private:
     float accel_x;
     float accel_y;
     float accel_z;
+    uint16_t dart_launch_counter_ticks;
+    float dart_launch_velocity_x;
+    float dart_launch_velocity_y;
+    float dart_launch_velocity_z;
     uint16_t crc16;
   };
 
@@ -152,6 +158,10 @@ private:
     float accel_x = 0.0f;
     float accel_y = 0.0f;
     float accel_z = 0.0f;
+    uint16_t dart_launch_counter_ticks = 0U;
+    float dart_launch_velocity_x = 0.0f;
+    float dart_launch_velocity_y = 0.0f;
+    float dart_launch_velocity_z = 0.0f;
   };
 
   HardwareSerial bridge_uart_;
@@ -364,7 +374,9 @@ private:
   }
 
   void ApplyImuMotion(const uint8_t* payload, uint8_t payload_size, uint32_t now_ms) {
-    if ((payload == nullptr) || (payload_size != 24U)) {
+    if ((payload == nullptr) ||
+        ((payload_size != kImuMotionPayloadLegacySize) &&
+         (payload_size != kImuMotionPayloadExtendedSize))) {
       return;
     }
 
@@ -374,6 +386,21 @@ private:
     telemetry_.accel_x = ReadFloatLe(payload + 12U);
     telemetry_.accel_y = ReadFloatLe(payload + 16U);
     telemetry_.accel_z = ReadFloatLe(payload + 20U);
+
+    if (payload_size == kImuMotionPayloadExtendedSize) {
+      const float counter_ticks = ReadFloatLe(payload + 24U);
+      telemetry_.dart_launch_counter_ticks =
+          (counter_ticks <= 0.0f) ? 0U : static_cast<uint16_t>(counter_ticks + 0.5f);
+      telemetry_.dart_launch_velocity_x = ReadFloatLe(payload + 28U);
+      telemetry_.dart_launch_velocity_y = ReadFloatLe(payload + 32U);
+      telemetry_.dart_launch_velocity_z = ReadFloatLe(payload + 36U);
+    } else {
+      telemetry_.dart_launch_counter_ticks = 0U;
+      telemetry_.dart_launch_velocity_x = 0.0f;
+      telemetry_.dart_launch_velocity_y = 0.0f;
+      telemetry_.dart_launch_velocity_z = 0.0f;
+    }
+
     telemetry_.motion_seen = true;
     telemetry_.accel_seen = true;
     telemetry_.last_motion_ms = now_ms;
@@ -414,6 +441,10 @@ private:
     packet.accel_x = telemetry_.accel_x;
     packet.accel_y = telemetry_.accel_y;
     packet.accel_z = telemetry_.accel_z;
+    packet.dart_launch_counter_ticks = telemetry_.dart_launch_counter_ticks;
+    packet.dart_launch_velocity_x = telemetry_.dart_launch_velocity_x;
+    packet.dart_launch_velocity_y = telemetry_.dart_launch_velocity_y;
+    packet.dart_launch_velocity_z = telemetry_.dart_launch_velocity_z;
     packet.crc16 = Crc16Ccitt(reinterpret_cast<const uint8_t*>(&packet), sizeof(packet) - sizeof(packet.crc16));
 
     NotifyFrame(telemetry_characteristic_, reinterpret_cast<const uint8_t*>(&packet), sizeof(packet));

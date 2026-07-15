@@ -103,7 +103,7 @@ OPENMV_PORT=/dev/ttyACM0 ./.script/camera-control
 说明：
 
 - USB-C 在主机上通常表现为 `/dev/ttyACM*`，只负责预览、调试和临时运行脚本。
-- 默认预览模式下，OpenMV UART1 始终由 `/flash/main.py` 负责，以 `0x5A + x/y/area/image_width/image_height + checksum` 帧喂给 STM32；主机脚本只读取 USB 预览流。
+- 默认预览模式下，OpenMV UART1 始终由 `/flash/main.py` 负责：启动前几帧发送 `x/y/area/image_width/image_height` 扩展帧，常态发送 `x/y/area` 短帧；主机脚本只读取 USB 预览流。
 - 默认预览会在画面左上角叠加分辨率、帧率和目标像素坐标；高级参数仍可透传，例如 `./.script/camera-view --no-debug-detector`。
 - `src/main.py` 是上场入口；USB 被主机打开时，它会在同一识别循环里额外输出 `OMVJ` 预览帧，不切换到另一套检测代码。
 - `camera-record` 默认写入 `record/openmv_<timestamp>.mjpeg` 和同名 `.jsonl`；可用 `OPENMV_RECORD=/path/out.mjpeg` 覆盖。

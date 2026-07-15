@@ -34,10 +34,10 @@ DEFAULT_RECONNECT_DELAY = 1.5
 DEFAULT_REFRESH_HZ = 10.0
 DEFAULT_LOG_DIR = "logs"
 
-SNAPSHOT_FORMAT = "<HBBHHIIffffffffH"
+SNAPSHOT_FORMAT = "<HBBHHIIffffffffHfffH"
 SNAPSHOT_SIZE = struct.calcsize(SNAPSHOT_FORMAT)
 SNAPSHOT_MAGIC = 0xDA7A
-SNAPSHOT_VERSION = 1
+SNAPSHOT_VERSION = 2
 SNAPSHOT_TYPE = 1
 
 FLAG_TARGET_VALID = 1 << 0
@@ -61,6 +61,8 @@ class TelemetrySnapshot:
     target_y: float
     velocity: Vector3
     acceleration: Vector3
+    dart_launch_counter_ticks: int
+    dart_launch_velocity: Vector3
     received_at: float
     wall_time: datetime
 
@@ -161,6 +163,10 @@ class SnapshotDecoder:
             accel_x,
             accel_y,
             accel_z,
+            dart_launch_counter_ticks,
+            dart_launch_velocity_x,
+            dart_launch_velocity_y,
+            dart_launch_velocity_z,
         ) = fields
 
         if magic != SNAPSHOT_MAGIC:
@@ -179,6 +185,8 @@ class SnapshotDecoder:
             target_y=target_y,
             velocity=(velocity_x, velocity_y, velocity_z),
             acceleration=(accel_x, accel_y, accel_z),
+            dart_launch_counter_ticks=dart_launch_counter_ticks,
+            dart_launch_velocity=(dart_launch_velocity_x, dart_launch_velocity_y, dart_launch_velocity_z),
             received_at=time.monotonic(),
             wall_time=datetime.now().astimezone(),
         )
@@ -207,6 +215,10 @@ class CsvTelemetryLogger:
                 "accel_x_g",
                 "accel_y_g",
                 "accel_z_g",
+                "dart_launch_counter_ticks",
+                "dart_launch_velocity_x_dps",
+                "dart_launch_velocity_y_dps",
+                "dart_launch_velocity_z_dps",
             ]
         )
         self._file.flush()
@@ -228,6 +240,10 @@ class CsvTelemetryLogger:
                 f"{sample.acceleration[0]:.6f}",
                 f"{sample.acceleration[1]:.6f}",
                 f"{sample.acceleration[2]:.6f}",
+                sample.dart_launch_counter_ticks,
+                f"{sample.dart_launch_velocity[0]:.6f}",
+                f"{sample.dart_launch_velocity[1]:.6f}",
+                f"{sample.dart_launch_velocity[2]:.6f}",
             ]
         )
         self._file.flush()
@@ -614,6 +630,13 @@ def render_dashboard(store: TelemetryStore) -> None:
     print(
         "accel    "
         f"{sample.acceleration[0]:10.3f} {sample.acceleration[1]:10.3f} {sample.acceleration[2]:10.3f} g"
+    )
+    print(
+        f"launch_tick={sample.dart_launch_counter_ticks:04d} "
+        "tick10_speed "
+        f"{sample.dart_launch_velocity[0]:10.3f} "
+        f"{sample.dart_launch_velocity[1]:10.3f} "
+        f"{sample.dart_launch_velocity[2]:10.3f} deg/s"
     )
     if store.status_text:
         print(f"\nESP32 status: {store.status_text}")
