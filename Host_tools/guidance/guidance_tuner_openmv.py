@@ -292,7 +292,6 @@ class OpenMvEvaluator:
             "roundness_min_x1000": int(params.roundness_min_x1000),
             "merge_margin": int(params.merge_margin),
             "track_window_radius_px": int(params.track_window_radius_px),
-            "center_filter_gain_x100": int(params.center_filter_gain_x100),
             "max_missed_frames": int(params.max_missed_frames),
             "ring_detection_enabled": int(params.ring_detection_enabled),
             "ring_min_roundness_x1000": int(params.ring_min_roundness_x1000),

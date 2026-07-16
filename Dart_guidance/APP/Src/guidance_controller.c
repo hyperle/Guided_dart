@@ -174,6 +174,11 @@ void GuidanceController_LoadDefaultConfig(GuidanceController_Config_t *config)
     config->horizontal_pwm_pid_config.kd = GUIDANCE_HORIZONTAL_PID_KD;
     config->horizontal_pwm_pid_config.integral_limit = GUIDANCE_HORIZONTAL_PID_INTEGRAL_LIMIT;
     config->horizontal_pwm_pid_config.invert_output = GUIDANCE_HORIZONTAL_PID_INVERT_OUTPUT;
+    config->vertical_pwm_pid_config.kp = GUIDANCE_VERTICAL_PID_KP;
+    config->vertical_pwm_pid_config.ki = GUIDANCE_VERTICAL_PID_KI;
+    config->vertical_pwm_pid_config.kd = GUIDANCE_VERTICAL_PID_KD;
+    config->vertical_pwm_pid_config.integral_limit = GUIDANCE_VERTICAL_PID_INTEGRAL_LIMIT;
+    config->vertical_pwm_pid_config.invert_output = GUIDANCE_VERTICAL_PID_INVERT_OUTPUT;
 }
 
 void GuidanceController_Init(GuidanceController_t *controller,
@@ -191,6 +196,7 @@ void GuidanceController_Init(GuidanceController_t *controller,
     controller->relative_attitude_error.roll_deg = 0.0f;
     controller->control_mode = config->control_mode;
     controller->horizontal_pwm_pid_config = config->horizontal_pwm_pid_config;
+    controller->vertical_pwm_pid_config = config->vertical_pwm_pid_config;
 
     GuidanceController_InitAimConfig(&controller->aim_config, &config->aim_config);
     GuidanceController_ClearAimCommand(&controller->aim_command, 0.0f, 0.0f);

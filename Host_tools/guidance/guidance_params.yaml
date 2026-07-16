@@ -35,7 +35,6 @@ green_light:
   openmv_roundness_min_x1000: 300
   openmv_merge_margin: 0
   openmv_track_window_radius_px: 120
-  openmv_center_filter_gain_x100: 70
   openmv_max_missed_frames: 6
   openmv_ring_detection_enabled: 1
   openmv_ring_min_roundness_x1000: 500

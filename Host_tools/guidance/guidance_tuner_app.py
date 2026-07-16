@@ -106,7 +106,6 @@ class VideoTunerApp:
         self.roundness_min_var = tk.IntVar(value=defaults.roundness_min_x1000)
         self.merge_margin_var = tk.IntVar(value=defaults.merge_margin)
         self.track_window_radius_var = tk.IntVar(value=defaults.track_window_radius_px)
-        self.center_filter_gain_var = tk.IntVar(value=defaults.center_filter_gain_x100)
         self.max_missed_frames_var = tk.IntVar(value=defaults.max_missed_frames)
         self.ring_detection_enabled_var = tk.IntVar(value=defaults.ring_detection_enabled)
         self.ring_min_roundness_var = tk.IntVar(value=defaults.ring_min_roundness_x1000)
@@ -244,7 +243,6 @@ class VideoTunerApp:
         tracking_box = ttk.LabelFrame(self.control_frame, text="Tracking / Validation")
         tracking_box.pack(fill=tk.X, padx=8, pady=8)
         self._add_scale(tracking_box, "Track Radius", self.track_window_radius_var, 1, 200, 1)
-        self._add_scale(tracking_box, "Center Filter x100", self.center_filter_gain_var, 0, 100, 1)
         self._add_scale(tracking_box, "Max Missed Frames", self.max_missed_frames_var, 1, 20, 1)
 
         sweep_box = ttk.LabelFrame(self.control_frame, text="Sweep Debug Mode")
@@ -518,7 +516,6 @@ class VideoTunerApp:
             roundness_min_x1000=int(clamp(int(self.roundness_min_var.get()), 0, 1000)),
             merge_margin=max(0, int(self.merge_margin_var.get())),
             track_window_radius_px=int(clamp(int(self.track_window_radius_var.get()), 1, 200)),
-            center_filter_gain_x100=int(clamp(int(self.center_filter_gain_var.get()), 0, 100)),
             max_missed_frames=max(1, int(self.max_missed_frames_var.get())),
             ring_detection_enabled=1 if int(self.ring_detection_enabled_var.get()) != 0 else 0,
             ring_min_roundness_x1000=int(clamp(int(self.ring_min_roundness_var.get()), 0, 1000)),
@@ -569,7 +566,6 @@ class VideoTunerApp:
         self.roundness_min_var.set(run_config.detector_params.roundness_min_x1000)
         self.merge_margin_var.set(run_config.detector_params.merge_margin)
         self.track_window_radius_var.set(run_config.detector_params.track_window_radius_px)
-        self.center_filter_gain_var.set(run_config.detector_params.center_filter_gain_x100)
         self.max_missed_frames_var.set(run_config.detector_params.max_missed_frames)
         self.ring_detection_enabled_var.set(run_config.detector_params.ring_detection_enabled)
         self.ring_min_roundness_var.set(run_config.detector_params.ring_min_roundness_x1000)
@@ -1043,7 +1039,6 @@ class VideoTunerApp:
                 f"  roundness_min_x1000={detector_params.roundness_min_x1000}",
                 f"  merge_margin={detector_params.merge_margin}",
                 f"  track_window_radius_px={detector_params.track_window_radius_px}",
-                f"  center_filter_gain_x100={detector_params.center_filter_gain_x100}",
                 f"  max_missed_frames={detector_params.max_missed_frames}",
                 f"  ring_detection_enabled={detector_params.ring_detection_enabled}",
                 f"  ring_min_roundness_x1000={detector_params.ring_min_roundness_x1000}",
@@ -1250,7 +1245,7 @@ class VideoTunerApp:
                 f"B=({detector_params.threshold_b_min},{detector_params.threshold_b_max}) "
                 f"min_area={detector_params.min_area} max_area={detector_params.max_area} "
                 f"roundness={detector_params.roundness_min_x1000} merge={detector_params.merge_margin} "
-                f"track_radius={detector_params.track_window_radius_px} filter={detector_params.center_filter_gain_x100} "
+                f"track_radius={detector_params.track_window_radius_px} "
                 f"max_missed={detector_params.max_missed_frames} center={result.filtered_center} area={result.area} radius={result.radius_px} reason={result.reason}"
             )
 
@@ -1427,7 +1422,6 @@ class VideoTunerApp:
                 f"  openmv_roundness_min_x1000: {params.roundness_min_x1000}",
                 f"  openmv_merge_margin: {params.merge_margin}",
                 f"  openmv_track_window_radius_px: {params.track_window_radius_px}",
-                f"  openmv_center_filter_gain_x100: {params.center_filter_gain_x100}",
                 f"  openmv_max_missed_frames: {params.max_missed_frames}",
                 f"  openmv_ring_detection_enabled: {params.ring_detection_enabled}",
                 f"  openmv_ring_min_roundness_x1000: {params.ring_min_roundness_x1000}",

@@ -18,7 +18,7 @@
 #define GREEN_LIGHT_TASK_SETPOINT_X 160U
 
 /* 固定目标点 Y 坐标，单位 px；仅当 GREEN_LIGHT_TASK_SETPOINT_USE_IMAGE_CENTER 为 0 时生效。 */
-#define GREEN_LIGHT_TASK_SETPOINT_Y 120U
+#define GREEN_LIGHT_TASK_SETPOINT_Y 140U
 
 /* 任务与控制主循环周期，单位 ms；同时影响 IMU 更新、控制输出和 telemetry 刷新节奏。 */
 #define GREEN_LIGHT_TASK_LOOP_PERIOD_MS 10U

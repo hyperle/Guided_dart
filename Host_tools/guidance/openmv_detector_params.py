@@ -17,7 +17,6 @@ OPENMV_DETECTOR_PARAM_FIELDS = (
     ("openmv_roundness_min_x1000", "roundness_min_x1000"),
     ("openmv_merge_margin", "merge_margin"),
     ("openmv_track_window_radius_px", "track_window_radius_px"),
-    ("openmv_center_filter_gain_x100", "center_filter_gain_x100"),
     ("openmv_max_missed_frames", "max_missed_frames"),
     ("openmv_ring_detection_enabled", "ring_detection_enabled"),
     ("openmv_ring_min_roundness_x1000", "ring_min_roundness_x1000"),

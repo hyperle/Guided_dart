@@ -25,9 +25,9 @@
 
 /* 四路舵机初始脉宽，单位 us。 */
 #define GUIDANCE_SERVO_INITIAL_PWM_US_3 2040U       //1  大左小右
-#define GUIDANCE_SERVO_INITIAL_PWM_US_0 2060U       //2  小左大右
-#define GUIDANCE_SERVO_INITIAL_PWM_US_2 2025U       //3  大左小右
-#define GUIDANCE_SERVO_INITIAL_PWM_US_1 1970U       //4  大左小右
+#define GUIDANCE_SERVO_INITIAL_PWM_US_0 2120U       //2  小左大右
+#define GUIDANCE_SERVO_INITIAL_PWM_US_2 1950U       //3  大左小右
+#define GUIDANCE_SERVO_INITIAL_PWM_US_1 1990U       //4  大左小右
 
 /* 水平 PID 默认 Kp；主要决定 delta_x 误差到 PWM 修正量的比例。 */
 #define GUIDANCE_HORIZONTAL_PID_KP 1.0f
@@ -46,6 +46,24 @@
 
 /* 水平 PID 输出方向开关；置 true 时会反向 delta_x 对 PWM 的修正方向。 */
 #define GUIDANCE_HORIZONTAL_PID_INVERT_OUTPUT false
+
+/* 竖直 PID 默认 Kp；主要决定 delta_y 误差到 PWM 修正量的比例。 */
+#define GUIDANCE_VERTICAL_PID_KP 1.0f
+
+/* 竖直 PID 默认 Ki；用于消除长期偏差，过大容易积分累积。 */
+#define GUIDANCE_VERTICAL_PID_KI 0.05f
+
+/* 竖直 PID 默认 Kd；用于抑制快速变化。 */
+#define GUIDANCE_VERTICAL_PID_KD 0.01f
+
+/* 竖直 PID 积分限幅；限制积分项最大绝对值，避免长时间丢靶后输出冲击。 */
+#define GUIDANCE_VERTICAL_PID_INTEGRAL_LIMIT 1000.0f
+
+/* 竖直 PID 输出限幅，单位 us；限制零点附近的 PWM 修正量。 */
+#define GUIDANCE_VERTICAL_PID_OUTPUT_LIMIT_US 100.0f
+
+/* 竖直 PID 输出方向开关；置 true 时会反向 delta_y 对 PWM 的修正方向。 */
+#define GUIDANCE_VERTICAL_PID_INVERT_OUTPUT false
 
 typedef enum
 {
@@ -70,11 +88,14 @@ typedef struct
     bool invert_output;
 } GuidanceHorizontalPwmPidConfig_t;
 
+typedef GuidanceHorizontalPwmPidConfig_t GuidanceVerticalPwmPidConfig_t;
+
 typedef struct
 {
     GuidanceAimConfig_t aim_config;
     GuidanceControlMode_t control_mode;
     GuidanceHorizontalPwmPidConfig_t horizontal_pwm_pid_config;
+    GuidanceVerticalPwmPidConfig_t vertical_pwm_pid_config;
 } GuidanceController_Config_t;
 
 typedef struct
@@ -83,6 +104,7 @@ typedef struct
     GuidanceAimCommand_t aim_command;
     GuidanceControlMode_t control_mode;
     GuidanceHorizontalPwmPidConfig_t horizontal_pwm_pid_config;
+    GuidanceVerticalPwmPidConfig_t vertical_pwm_pid_config;
     PID_t horizontal_pid;
     GuidanceMeasurement_t measurement;
     GuidanceRelativeAttitudeError_t relative_attitude_error;

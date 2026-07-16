@@ -69,6 +69,8 @@ typedef struct
 {
     bool horizontal_pwm_active;
     float horizontal_pwm_us;
+    bool vertical_pwm_active;
+    float vertical_pwm_us;
 } GuidanceControlContribution_t;
 
 #endif

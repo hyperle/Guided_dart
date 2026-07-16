@@ -23,6 +23,8 @@ void ControlMixer_ClearContribution(ControlMixer_t *mixer)
 
     mixer->contribution.horizontal_pwm_active = false;
     mixer->contribution.horizontal_pwm_us = 0.0f;
+    mixer->contribution.vertical_pwm_active = false;
+    mixer->contribution.vertical_pwm_us = 0.0f;
 }
 
 void ControlMixer_Init(ControlMixer_t *mixer, const ControlMixer_Config_t *config)
@@ -75,6 +77,14 @@ void ControlMixer_Solve(ControlMixer_t *mixer)
         mixer->output_pulse_us.values[0] += horizontal_us;
         mixer->output_pulse_us.values[2] -= horizontal_us;
         mixer->output_pulse_us.values[1] += horizontal_us;
+    }
+
+    if (mixer->contribution.vertical_pwm_active) {
+        float vertical_us = mixer->contribution.vertical_pwm_us;
+        mixer->output_pulse_us.values[0] -= vertical_us;
+        mixer->output_pulse_us.values[1] += vertical_us;
+        mixer->output_pulse_us.values[2] += vertical_us;
+        mixer->output_pulse_us.values[3] += vertical_us;
     }
 
     for (index = 0U; index < GUIDANCE_SERVO_COUNT; ++index) {

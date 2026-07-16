@@ -268,6 +268,8 @@ int main(void)
   PixelDeltaPwmPidActionProfile_LoadDefault(&pixel_delta_pid_profile);
   pixel_delta_pid_profile.params.horizontal_pwm_pid_config =
       guidance_controller_config.horizontal_pwm_pid_config;
+  pixel_delta_pid_profile.params.vertical_pwm_pid_config =
+      guidance_controller_config.vertical_pwm_pid_config;
   GuidanceController_Init(&guidance_controller, &huart1, &guidance_controller_config);
   ControlMixer_Init(&control_mixer, &control_mixer_config);
   ControlMixer_ApplyOutputs(&control_mixer);
@@ -332,7 +334,10 @@ int main(void)
     task_result = GreenLightTask_Tick(&green_light_task);
     pixel_delta_pid_profile.params.horizontal_pwm_pid_config =
         guidance_controller_config.horizontal_pwm_pid_config;
+    pixel_delta_pid_profile.params.vertical_pwm_pid_config =
+        guidance_controller_config.vertical_pwm_pid_config;
     pixel_delta_pid_profile.params.output_limit_us = GUIDANCE_HORIZONTAL_PID_OUTPUT_LIMIT_US;
+    pixel_delta_pid_profile.params.vertical_output_limit_us = GUIDANCE_VERTICAL_PID_OUTPUT_LIMIT_US;
 
     if ((task_result == TASK_ACTION_SUCCESS) && green_light_task_profile.output.target_detected) {
       TaskActionResult_t control_result;

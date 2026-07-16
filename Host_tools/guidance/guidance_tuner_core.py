@@ -37,7 +37,6 @@ class DetectorParams:
     roundness_min_x1000: int
     merge_margin: int
     track_window_radius_px: int
-    center_filter_gain_x100: int
     max_missed_frames: int
     ring_detection_enabled: int
     ring_min_roundness_x1000: int

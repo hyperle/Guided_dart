@@ -15,7 +15,6 @@ DEFAULT_DETECTOR_PARAMS = {
     "roundness_min_x1000": 300,
     "merge_margin": 0,
     "track_window_radius_px": 120,
-    "center_filter_gain_x100": 70,
     "max_missed_frames": 6,
     "ring_detection_enabled": 1,
     "ring_min_roundness_x1000": 500,
@@ -83,10 +82,10 @@ _SOLID_SAMPLE_OFFSETS_X100 = (
 )
 
 _ROI_MIN_HALF_SIZE_PX = 10
-_ROI_RADIUS_SCALE_X100 = 180
-_ROI_RADIUS_PAD_PX = 5
-_BLOB_X_STRIDE = 2
-_BLOB_Y_STRIDE = 1
+_ROI_RADIUS_SCALE_X100 = 150
+_ROI_RADIUS_PAD_PX = 2
+_BLOB_X_STRIDE = 3
+_BLOB_Y_STRIDE = 2
 _RING_INNER_MIN_HITS = 6
 _RING_INNER_MIN_RADIUS_X100 = 20
 _RING_INNER_MAX_RADIUS_X100 = 85
@@ -781,10 +780,7 @@ class GreenLightDetector:
             self._missed_frames = 0
             return center
 
-        gain = self.params["center_filter_gain_x100"]
-        filtered_x = ((self._last_center[0] * (100 - gain)) + (center[0] * gain) + 50) // 100
-        filtered_y = ((self._last_center[1] * (100 - gain)) + (center[1] * gain) + 50) // 100
-        self._last_center = (filtered_x, filtered_y)
+        self._last_center = center
         self._missed_frames = 0
         return self._last_center
 

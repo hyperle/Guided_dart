@@ -17,17 +17,27 @@
 
 ---
 
-## 2. 水平 PID 参数
+## 2. 水平 / 竖直 PID 参数
 
 当前生效路径：`PixelDeltaPwmPidAction`，参数在 `guidance_controller.h` 定义，`main.c` 注入。
+水平 PID 消费 `delta_x`，竖直 PID 消费 `delta_y`，两轴同时闭环。
 
 | 宏 | 文件 | 默认值 | 说明 |
 |---|---|---|---|
-| `GUIDANCE_HORIZONTAL_PID_KP` | `guidance_controller.h:36` | `1.0f` | 比例增益。delta_x 像素误差 → PWM us 修正量 |
-| `GUIDANCE_HORIZONTAL_PID_KI` | `guidance_controller.h:38` | `0.05f` | 积分增益。消除稳态静差 |
-| `GUIDANCE_HORIZONTAL_PID_KD` | `guidance_controller.h:40` | `0.01f` | 微分增益。抑制突变，当前接近关闭 |
-| `GUIDANCE_HORIZONTAL_PID_INTEGRAL_LIMIT` | `guidance_controller.h:42` | `1000.0f` | 积分项绝对值上限。防止丢靶后积分饱和冲击 |
-| `GUIDANCE_HORIZONTAL_PID_OUTPUT_LIMIT_US` | `guidance_controller.h:45` | `100.0f` | PID 输出幅值上限 (us)。限制零点附近的 PWM 加减幅度 |
+| `GUIDANCE_HORIZONTAL_PID_KP` | `guidance_controller.h:33` | `1.0f` | 水平比例增益。delta_x 像素误差 → PWM us 修正量 |
+| `GUIDANCE_HORIZONTAL_PID_KI` | `guidance_controller.h:36` | `0.05f` | 水平积分增益。消除稳态静差 |
+| `GUIDANCE_HORIZONTAL_PID_KD` | `guidance_controller.h:39` | `0.01f` | 水平微分增益。抑制突变，当前接近关闭 |
+| `GUIDANCE_HORIZONTAL_PID_INTEGRAL_LIMIT` | `guidance_controller.h:42` | `1000.0f` | 水平积分项绝对值上限。防止丢靶后积分饱和冲击 |
+| `GUIDANCE_HORIZONTAL_PID_OUTPUT_LIMIT_US` | `guidance_controller.h:45` | `100.0f` | 水平 PID 输出幅值上限 (us)。限制零点附近的 PWM 加减幅度 |
+| `GUIDANCE_HORIZONTAL_PID_INVERT_OUTPUT` | `guidance_controller.h:48` | `false` | 水平输出方向翻转。`true` 反转 delta_x→PWM 正负号 |
+| `GUIDANCE_VERTICAL_PID_KP` | `guidance_controller.h:51` | `1.0f` | 竖直比例增益。delta_y 像素误差 → PWM us 修正量 |
+| `GUIDANCE_VERTICAL_PID_KI` | `guidance_controller.h:54` | `0.05f` | 竖直积分增益。消除稳态静差 |
+| `GUIDANCE_VERTICAL_PID_KD` | `guidance_controller.h:57` | `0.01f` | 竖直微分增益。抑制突变 |
+| `GUIDANCE_VERTICAL_PID_INTEGRAL_LIMIT` | `guidance_controller.h:60` | `1000.0f` | 竖直积分项绝对值上限。防止丢靶后积分饱和冲击 |
+| `GUIDANCE_VERTICAL_PID_OUTPUT_LIMIT_US` | `guidance_controller.h:63` | `100.0f` | 竖直 PID 输出幅值上限 (us)。限制零点附近的 PWM 加减幅度 |
+| `GUIDANCE_VERTICAL_PID_INVERT_OUTPUT` | `guidance_controller.h:66` | `false` | 竖直输出方向翻转。`true` 反转 delta_y→PWM 正负号 |
+
+> 竖直方向软关闭：设 `GUIDANCE_VERTICAL_PID_KP=0` 即可只保留水平闭环，不做竖直修正。
 
 ---
 
@@ -92,7 +102,7 @@
 
 > 零点修改：改 `guidance_controller.h:27-30` 的四路 `GUIDANCE_SERVO_INITIAL_PWM_US_x`。
 > 物理上下限修改：改 `servo.h:31,34` 的 `SERVO_PULSE_MIN_US` / `SERVO_PULSE_MAX_US`。
-> MIXER 方向修改：改 `control_mixer.c:74-77` 的加减符号矩阵。
+> MIXER 方向修改：改 `control_mixer.c:74-87` 的水平/竖直混控加减符号矩阵。
 
 ---
 
@@ -191,9 +201,13 @@
 |---|---|---|
 | 启用/禁用平滑器 | `GUIDANCE_TARGET_SMOOTHER_DEFAULT_ENABLE` | `target_smoother.h:16` |
 | 调节平滑力度 | `GUIDANCE_TARGET_SMOOTHER_DEFAULT_ALPHA_Q15` / `BETA_Q15` | `target_smoother.h:19,22` |
-| 调 PID 强弱 | `GUIDANCE_HORIZONTAL_PID_KP` / `KI` / `KD` | `guidance_controller.h:36-40` |
-| 限制 PWM 摆动幅度 | `GUIDANCE_HORIZONTAL_PID_OUTPUT_LIMIT_US` | `guidance_controller.h:45` |
-| 翻转 PID 输出方向 | `GUIDANCE_HORIZONTAL_PID_INVERT_OUTPUT` | `guidance_controller.h:48` |
+| 调水平 PID 强弱 | `GUIDANCE_HORIZONTAL_PID_KP` / `KI` / `KD` | `guidance_controller.h:33-39` |
+| 调竖直 PID 强弱 | `GUIDANCE_VERTICAL_PID_KP` / `KI` / `KD` | `guidance_controller.h:51-57` |
+| 限制水平 PWM 摆动幅度 | `GUIDANCE_HORIZONTAL_PID_OUTPUT_LIMIT_US` | `guidance_controller.h:45` |
+| 限制竖直 PWM 摆动幅度 | `GUIDANCE_VERTICAL_PID_OUTPUT_LIMIT_US` | `guidance_controller.h:63` |
+| 翻转水平 PID 输出方向 | `GUIDANCE_HORIZONTAL_PID_INVERT_OUTPUT` | `guidance_controller.h:48` |
+| 翻转竖直 PID 输出方向 | `GUIDANCE_VERTICAL_PID_INVERT_OUTPUT` | `guidance_controller.h:66` |
+| 软关闭竖直控制 | `GUIDANCE_VERTICAL_PID_KP = 0` | `guidance_controller.h:51` |
 | 改 setpoint 坐标 | `GREEN_LIGHT_TASK_SETPOINT_X` / `Y` | `green_light_task.hpp:28,30` |
 | setpoint 改为画面中心 | `GREEN_LIGHT_TASK_SETPOINT_USE_IMAGE_CENTER` | `green_light_task.hpp:25` |
 | 改舵机零点 | `GUIDANCE_SERVO_INITIAL_PWM_US_0~3` | `guidance_controller.h:27-30` |

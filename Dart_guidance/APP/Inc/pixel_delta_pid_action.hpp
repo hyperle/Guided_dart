@@ -20,7 +20,9 @@ typedef struct
 typedef struct
 {
     GuidanceHorizontalPwmPidConfig_t horizontal_pwm_pid_config;
+    GuidanceVerticalPwmPidConfig_t vertical_pwm_pid_config;
     float output_limit_us;
+    float vertical_output_limit_us;
 } PixelDeltaPwmPidActionParams_t;
 
 typedef struct
@@ -40,6 +42,7 @@ typedef struct
     PixelDeltaPwmPidActionProfile_t *profile;
     TaskAction_t action;
     PID_t pid;
+    PID_t vertical_pid;
 } PixelDeltaPwmPidAction_t;
 
 void PixelDeltaPwmPidActionProfile_LoadDefault(PixelDeltaPwmPidActionProfile_t *profile);
