@@ -89,53 +89,31 @@
 - 伺服电机参数（在 `servo.h` 中定义）
 - UART 通信波特率（在 `usart.h` 中定义）
 
-### 主机热调参
 
-主机侧可通过 [Host_tools/guidance/guidance_params.yaml](/home/hyperlee/guided_dart/Host_tools/guidance/guidance_params.yaml:1) 管理当前在线参数，配合 [Host_tools/guidance/guidance_param_sync.py](/home/hyperlee/guided_dart/Host_tools/guidance/guidance_param_sync.py:1) 将变更通过串口发送给 `ESP32`，再由 `ESP32` 转发到无线控制板。
+### BLE 遥测可视化
 
-参数协议已抽到顶层共享定义 [protocol/guidance_protocol.yaml](/home/hyperlee/guided_dart/protocol/guidance_protocol.yaml:1)。主机脚本直接读取这份 schema，STM32 侧则在构建前自动生成 [Drv/Inc/guidance_protocol_generated.h](/home/hyperlee/guided_dart/Dart_guidance/Drv/Inc/guidance_protocol_generated.h:1)，因此保持“单一真源”，同时不影响热传参链路。
+ESP32 蓝牙桥现在走稳定 snapshot 流：STM32 通过 USART2 向 ESP32 发送二进制上行帧，ESP32 聚合后以固定频率通过 BLE notification 发布目标位置、三轴角速度和三轴加速度。USART1 继续用于 OpenMV 到 STM32 的目标测量输入。
 
-参数文件采用受限 YAML 子集，当前支持：
-
-- `green_light.setpoint_x / setpoint_y`
-- 绿灯检测器阈值、面积、填充率、跟踪窗口、滤波增益、丢帧容忍
-- `controller.control_mode`
-- `controller.pid_kp / pid_ki / pid_kd / pid_integral_limit / pid_output_limit_us / pid_invert_output`
-- `controller.zero_pulse_us_0..3`
-
-一次性推送：
+运行方式：
 
 ```bash
-python3 ../Host_tools/guidance/guidance_param_sync.py --config ../Host_tools/guidance/guidance_params.yaml
+./.script/ble-connect
 ```
 
-也可以通过仓库内的一键启动脚本直接运行：
+常用参数：
 
 ```bash
-./.script/param-push
+./.script/ble-connect --scan
+./.script/ble-connect --address AA:BB:CC:DD:EE:FF
+./.script/ble-connect --plot
+./.script/ble-connect --no-log
 ```
 
-监听文件并在保存后自动热更新：
-
-```bash
-python3 ../Host_tools/guidance/guidance_param_sync.py --config ../Host_tools/guidance/guidance_params.yaml --watch
-```
-
-也可以通过仓库内的一键启动脚本直接运行：
-
-```bash
-./.script/param-sync
-```
-
-关闭监听可使用：
-
-```bash
-./.script/param-sync-kill
-```
+默认终端仪表会显示连接状态、接收频率、丢包数、目标 `<x, y>`、三轴速度 `deg/s` 和三轴加速度 `g`；目标丢失时显示 `<-1, -1>`。`--plot` 会额外打开 matplotlib 实时曲线窗口。
 
 ### 终端追踪图形查看
 
-新增了一个独立的终端查看器 [Host_tools/guidance/guidance_terminal_viewer.py](/home/hyperlee/guided_dart/Host_tools/guidance/guidance_terminal_viewer.py:1)，用于实时查看 `setpoint` 与绿灯测量值的对位情况。
+独立终端查看器 [Host_tools/guidance/guidance_terminal_viewer.py](/home/hyperlee/guided_dart/Host_tools/guidance/guidance_terminal_viewer.py:1) 用于实时查看 `setpoint` 与绿灯测量值的对位情况。
 
 运行方式：
 
@@ -149,7 +127,7 @@ python3 ../Host_tools/guidance/guidance_terminal_viewer.py --config ../Host_tool
 ./.script/track-viewer
 ```
 
-它会复用与热传参脚本相同的 `serial / ble` 连接配置，并在终端中持续刷新：
+它会复用 `serial / ble` 连接配置，并在终端中持续刷新：
 
 - 以当前图像宽高绘制边框
 - 在 `setpoint` 位置绘制“短竖直径 + 一三象限圆弧”
@@ -158,20 +136,14 @@ python3 ../Host_tools/guidance/guidance_terminal_viewer.py --config ../Host_tool
 
 说明：
 
-- 终端查看器兼容旧版 `18-byte payload` telemetry，但旧固件下会退回到默认图像尺寸，并根据 `area` 近似反推半径
+- 终端查看器兼容旧版 `18-byte payload` telemetry，但旧固件下会回退到默认图像尺寸，并根据 `area` 近似反推半径
 - 当前固件已将 `image_width / image_height / measurement_radius_px` 一并放入 telemetry，查看器优先使用扩展字段
 - 若使用 BLE 模式，仍需先安装 `bleak`
 
-说明：
-
-- 脚本只依赖 Python 3 标准库，默认按当前固件的 `0xA5 0x5A + type + len + checksum` 协议逐项发送参数并等待 `ParamAck`
-- `float` 参数会按 IEEE754 `float32` 打包，下位机在线解包并刷新对应运行时变量
-- 当前串口实现基于 `termios`，适用于 Linux / macOS 主机环境
-
 ### 协议与目录解耦
 
-- `../protocol/`：顶层协议单一真源，定义消息类型、参数 key、ACK 状态
-- `../Host_tools/guidance/`：主机侧调参与终端查看工具，与 `Dart_guidance`、`Esp32_bridge` 同级，不参与 STM32 固件烧录
+- `../protocol/`：顶层协议单一真源，定义上行帧头和消息类型
+- `../Host_tools/guidance/`：主机侧终端查看与 OpenMV 调试工具，与 `Dart_guidance`、`Esp32_bridge` 同级，不参与 STM32 固件烧录
 - `Drv/Inc/guidance_protocol_generated.h`：由 schema 自动生成的 STM32 侧头文件
 
 这样做的目的不是缩小板端 bin 体积，而是避免主机端与固件端手写两份协议常量后逐渐漂移。
@@ -183,33 +155,36 @@ python3 ../Host_tools/guidance/guidance_terminal_viewer.py --config ../Host_tool
 
 ### OpenMV USB-C 相机预览
 
-这个功能是独立调试工具：主机用 Type-C/USB 直连 OpenMV，临时运行 OpenMV 端帧源并在本机播放相机画面。它不经过控制板 UART1，也不会把预览逻辑挂进 `OpenMV_guidance/src/main.py`。
-
-运行：
+相机调试入口按功能拆成短脚本，不需要在日常命令里记底层参数：
 
 ```bash
-./.script/openmv-ports
-./.script/camera-stream --port /dev/ttyACM0
+./.script/camera-ports
+./.script/camera-view
+./.script/camera-control
+./.script/camera-photo
+./.script/camera-record
+./.script/camera-dump
 ```
 
-工具会输出本地预览地址，默认是：
+`camera-view`/`camera-control` 默认只监听 OpenMV 上电入口 `/flash/main.py` 输出的 USB 预览帧，不打断相机、不进入 Raw REPL、不临时运行另一套 OpenMV 代码。工具会输出本地预览地址，默认是：
 
 ```text
 http://127.0.0.1:8081/
 ```
 
-只抓一帧：
+相机脚本默认自动选择 OpenMV USB 口；如果自动选择失败，先运行 `camera-ports`，再用环境变量指定：
 
 ```bash
-./.script/camera-grab --port /dev/ttyACM0
+OPENMV_PORT=/dev/ttyACM0 ./.script/camera-control
 ```
 
 说明：
 
-- OpenMV 的 USB-C 在主机上通常表现为 `/dev/ttyACM*`；这是 OpenMV USB VCP 调试通道，不是 OpenMV 到 STM32 的 UART1。
-- 默认预览会在画面左上角叠加分辨率、帧率和目标像素坐标；需要原始画面可加 `--no-debug-detector`。
-- 按 Ctrl+C 退出后，工具默认复位 OpenMV，使其重新回到正常上场入口。
-- 需要排查帧流时可使用 `--raw-dump /tmp/openmv.bin`，再运行 `./.script/parse-frames /tmp/openmv.bin`。
+- OpenMV 的 USB-C 在主机上通常表现为 `/dev/ttyACM*`，这是 OpenMV USB VCP 调试通道，不是 OpenMV 到 STM32 的 UART1。
+- 使用默认预览时，目标坐标仍由 `/flash/main.py` 从 OpenMV UART1 发到 STM32 USART1，控制板继续按现有 `GuidanceController` 逻辑映射到舵机 PWM。
+- 默认预览会在画面左上角叠加分辨率、帧率和目标像素坐标；高级参数仍可透传，例如 `./.script/camera-view --no-debug-detector`。
+- 按 Ctrl+C 退出默认只关闭主机预览，不复位 OpenMV。旧的临时 Raw REPL 预览仍可通过 `--raw-repl` 显式启用。
+- `camera-photo` 默认抓图到 `/tmp/omv_photo.jpg`；`camera-record` 默认写入 `record/`；`camera-dump` 默认写入 `/tmp/openmv.bin`，可再运行 `./.script/parse-frames /tmp/openmv.bin` 提取 JPEG。
 
 ### OpenMV 视频内录与导出
 
@@ -219,21 +194,4 @@ OpenMV 端现在会在运行时自动进行 MJPEG 分段录像：
 - 默认单段 `15s`，最多保留 `12` 段
 - 达到段数上限或剩余空间不足时会自动删除最旧录像
 
-主机侧不需要直连 OpenMV，只连接控制板串口即可导出录像。仓库提供了两个脚本：
-
-```bash
-./.script/record-list
-./.script/record-pull
-```
-
-说明：
-
-- `record-list`：列出当前板上可下载的录像段
-- `record-pull`：默认下载最新一段到仓库 `record/` 目录
-- 若要下载指定文件，可直接运行：
-
-```bash
-python3 Host_tools/guidance/guidance_video_fetch.py pull --name rec_00012.mjpeg
-```
-
-导出流程为：主机先通过现有参数协议让 STM32 进入 OpenMV 透传模式，再经该透传访问 OpenMV 的 MicroPython REPL 拉取录像文件。
+录像文件保存在 OpenMV 本地文件系统或 SD 卡中。当前控制链路不再提供经 STM32 的 OpenMV 透传导出；需要取回录像时请使用 OpenMV USB/SD 卡工具。

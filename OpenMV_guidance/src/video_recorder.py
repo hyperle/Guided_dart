@@ -7,6 +7,7 @@ import time
 _SD_ROOTS = ("/sdcard", "/sd")
 _SEGMENT_PREFIX = "rec_"
 _SEGMENT_SUFFIX = ".mjpeg"
+_METADATA_SUFFIX = ".jsonl"
 
 
 def _join_path(base, name):
@@ -33,6 +34,75 @@ def _entry_name(item):
     return name
 
 
+def _sdcard_block_device():
+    try:
+        import pyb
+        sdcard = pyb.SDCard()
+        del pyb
+        return sdcard
+    except Exception:
+        pass
+
+    try:
+        import machine
+        sdcard = machine.SDCard(1)
+        del machine
+        return sdcard
+    except Exception:
+        return None
+
+
+def _mount_sdcard_if_needed():
+    for candidate in _SD_ROOTS:
+        if _path_exists(candidate):
+            return candidate
+
+    sdcard = _sdcard_block_device()
+    if sdcard is None:
+        return ""
+
+    try:
+        import vfs
+        vfs.mount(vfs.VfsFat(sdcard), "/sdcard")
+        del vfs
+        if _path_exists("/sdcard"):
+            return "/sdcard"
+    except Exception:
+        pass
+
+    return ""
+
+
+def _json_escape(value):
+    text = str(value)
+    text = text.replace(chr(92), chr(92) + chr(92))
+    return text.replace(chr(34), chr(92) + chr(34))
+
+
+def _json_value(value):
+    if value is None:
+        return "null"
+    if value is True:
+        return "true"
+    if value is False:
+        return "false"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        return str(value)
+    if isinstance(value, tuple) or isinstance(value, list):
+        parts = []
+        for item in value:
+            parts.append(_json_value(item))
+        return "[" + ",".join(parts) + "]"
+    if isinstance(value, dict):
+        parts = []
+        for key, item in value.items():
+            parts.append("\"%s\":%s" % (_json_escape(key), _json_value(item)))
+        return "{" + ",".join(parts) + "}"
+    return "\"%s\"" % _json_escape(value)
+
+
 class RollingMjpegRecorder:
     def __init__(self,
                  directory_name="recordings",
@@ -53,12 +123,14 @@ class RollingMjpegRecorder:
         self._enabled = False
         self._writer = None
         self._writer_path = ""
+        self._metadata_file = None
+        self._metadata_path = ""
+        self._segment_frame_index = 0
         self._segment_index = 0
         self._segment_start_ms = 0
         self._last_sync_ms = 0
 
         if not self._storage_root:
-            print("recording disabled: no SD card")
             return
 
         self._recordings_dir = _join_path(self._storage_root, self._directory_name)
@@ -67,7 +139,6 @@ class RollingMjpegRecorder:
         self._segment_index = self._next_segment_index()
         self._prune_segments()
         self._enabled = True
-        print("recording dir:", self._recordings_dir)
 
     def is_enabled(self):
         return self._enabled
@@ -78,7 +149,7 @@ class RollingMjpegRecorder:
     def close(self, quiet=True):
         self._close_writer(quiet)
 
-    def add_frame(self, img):
+    def add_frame(self, img, metadata=None):
         if (not self._enabled) or (img is None):
             return
 
@@ -94,12 +165,11 @@ class RollingMjpegRecorder:
                 return
 
         try:
-            self._write_current_frame(img, now_ms)
-        except Exception as exc:
-            print("recording write failed:", exc)
-            self._recover_after_write_failure(img)
+            self._write_current_frame(img, now_ms, metadata)
+        except Exception:
+            self._recover_after_write_failure(img, metadata)
 
-    def _recover_after_write_failure(self, img):
+    def _recover_after_write_failure(self, img, metadata):
         self._close_writer()
         if not self._remove_oldest_available_segment():
             self._disable()
@@ -110,22 +180,37 @@ class RollingMjpegRecorder:
             return
 
         try:
-            self._write_current_frame(img, now_ms)
-        except Exception as exc:
-            print("recording retry failed:", exc)
+            self._write_current_frame(img, now_ms, metadata)
+        except Exception:
             self._disable()
 
-    def _write_current_frame(self, img, now_ms):
+    def _write_current_frame(self, img, now_ms, metadata):
         self._writer.add_frame(img, quality=self._jpeg_quality)
+        self._write_metadata_line(img, now_ms, metadata)
+        self._segment_frame_index += 1
         if time.ticks_diff(now_ms, self._last_sync_ms) >= self._sync_interval_ms:
             self._writer.sync()
+            if self._metadata_file is not None:
+                try:
+                    self._metadata_file.flush()
+                except Exception:
+                    pass
             self._last_sync_ms = now_ms
 
+    def _write_metadata_line(self, img, now_ms, metadata):
+        if self._metadata_file is None:
+            return
+        record = {
+            "frame_index": self._segment_frame_index,
+            "target_search": "metadata_missing",
+        }
+        if metadata is not None and metadata.get("target_search", ""):
+            record["target_search"] = metadata.get("target_search")
+        self._metadata_file.write(_json_value(record))
+        self._metadata_file.write("\n")
+
     def _detect_storage_root(self):
-        for candidate in _SD_ROOTS:
-            if _path_exists(candidate):
-                return candidate
-        return ""
+        return _mount_sdcard_if_needed()
 
     def _ensure_recordings_dir(self):
         if _path_exists(self._recordings_dir):
@@ -134,8 +219,7 @@ class RollingMjpegRecorder:
         try:
             os.mkdir(self._recordings_dir)
             return True
-        except OSError as exc:
-            print("recording disabled: mkdir failed:", exc)
+        except OSError:
             return False
 
     def _disable(self):
@@ -154,14 +238,23 @@ class RollingMjpegRecorder:
         try:
             self._writer.close()
             os.sync()
-            if not quiet:
-                print("recording closed:", self._writer_path)
-        except Exception as exc:
-            if not quiet:
-                print("recording close failed:", exc)
+        except Exception:
+            pass
 
         self._writer = None
         self._writer_path = ""
+        if self._metadata_file is not None:
+            try:
+                self._metadata_file.flush()
+            except Exception:
+                pass
+            try:
+                self._metadata_file.close()
+            except Exception:
+                pass
+        self._metadata_file = None
+        self._metadata_path = ""
+        self._segment_frame_index = 0
         gc.collect()
 
     def _open_new_segment(self, width, height, now_ms):
@@ -180,21 +273,38 @@ class RollingMjpegRecorder:
     def _try_open_new_segment(self, width, height, now_ms):
         try:
             path = self._segment_path(self._segment_index)
+            metadata_path = self._metadata_path_for_segment(self._segment_index)
             self._writer = mjpeg.Mjpeg(path, width, height)
+            self._metadata_file = open(metadata_path, "w")
             self._writer_path = path
+            self._metadata_path = metadata_path
+            self._segment_frame_index = 0
             self._segment_start_ms = now_ms
             self._last_sync_ms = now_ms
             self._segment_index += 1
-            print("recording started:", path)
             return True
-        except Exception as exc:
+        except Exception:
+            try:
+                if self._writer is not None:
+                    self._writer.close()
+            except Exception:
+                pass
+            try:
+                if self._metadata_file is not None:
+                    self._metadata_file.close()
+            except Exception:
+                pass
             self._writer = None
             self._writer_path = ""
-            print("recording open failed:", exc)
+            self._metadata_file = None
+            self._metadata_path = ""
             return False
 
     def _segment_path(self, index):
         return _join_path(self._recordings_dir, "%s%05d%s" % (_SEGMENT_PREFIX, index, _SEGMENT_SUFFIX))
+
+    def _metadata_path_for_segment(self, index):
+        return _join_path(self._recordings_dir, "%s%05d%s" % (_SEGMENT_PREFIX, index, _METADATA_SUFFIX))
 
     def _list_segment_entries(self):
         entries = []
@@ -242,13 +352,15 @@ class RollingMjpegRecorder:
 
         oldest = entries.pop(0)
         path = _join_path(self._recordings_dir, oldest)
+        metadata_name = oldest[:-len(_SEGMENT_SUFFIX)] + _METADATA_SUFFIX
+        metadata_path = _join_path(self._recordings_dir, metadata_name)
         try:
             os.remove(path)
+            if _path_exists(metadata_path):
+                os.remove(metadata_path)
             os.sync()
-            print("recording removed:", path)
             return True
-        except OSError as exc:
-            print("recording remove failed:", exc)
+        except OSError:
             return False
 
     def _remove_oldest_available_segment(self):
@@ -266,6 +378,3 @@ class RollingMjpegRecorder:
             if not self._remove_oldest_segment(entries):
                 break
 
-        free_bytes = self._free_bytes()
-        if free_bytes < self._min_free_bytes:
-            print("recording low space:", free_bytes)

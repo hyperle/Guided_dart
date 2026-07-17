@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from typing import Iterator
 
@@ -13,6 +14,37 @@ class VideoSource:
         self.frame_count = frame_count
         self.width = width
         self.height = height
+        self.metadata_path = self._sidecar_path(path)
+        self._metadata = self._load_sidecar_metadata(self.metadata_path)
+
+    @staticmethod
+    def _sidecar_path(path: str) -> str:
+        base, _suffix = os.path.splitext(path)
+        return base + ".jsonl"
+
+    @staticmethod
+    def _load_sidecar_metadata(path: str) -> list[dict]:
+        if not os.path.isfile(path):
+            return []
+        records: list[dict] = []
+        with open(path, "r", encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    records.append(json.loads(line))
+                except json.JSONDecodeError:
+                    records.append({})
+        return records
+
+    def has_metadata(self) -> bool:
+        return bool(self._metadata)
+
+    def get_metadata(self, index: int) -> dict | None:
+        if index < 0 or index >= len(self._metadata):
+            return None
+        return self._metadata[index]
 
     def get_frame(self, index: int) -> np.ndarray:
         raise NotImplementedError

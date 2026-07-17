@@ -1,56 +1,39 @@
-FRAME_HEADER = (0xA5, 0x5A)
 MEASUREMENT_HEADER = 0x5A
-MEASUREMENT_LENGTH = 0x0A
-PARAM_TYPE_SET = 0x10
-PARAM_TYPE_ACK = 0x11
+MEASUREMENT_LEGACY_LENGTH = 0x06
+MEASUREMENT_EXTENDED_LENGTH = 0x0A
+MEASUREMENT_LENGTH = MEASUREMENT_EXTENDED_LENGTH
 
-STATUS_APPLIED = 0x00
-STATUS_UNKNOWN_KEY = 0x01
-STATUS_INVALID_VALUE = 0x02
-STATUS_INVALID_LENGTH = 0x03
-
-from generated_guidance_params import OPENMV_DETECTOR_PARAMS
-
-KEY_DETECTOR_MIN_GREEN_CHANNEL = 0x10
-KEY_DETECTOR_MIN_GREEN_DOMINANCE = 0x11
-KEY_DETECTOR_MIN_BLOB_PIXELS = 0x12
-KEY_DETECTOR_MAX_BLOB_PIXELS = 0x13
-KEY_DETECTOR_SMALL_BLOB_PIXELS = 0x14
-KEY_DETECTOR_MIN_FILL_RATIO_SMALL_X100 = 0x15
-KEY_DETECTOR_MIN_FILL_RATIO_LARGE_X100 = 0x16
-KEY_DETECTOR_TRACK_WINDOW_RADIUS_PX = 0x17
-KEY_DETECTOR_CENTER_FILTER_GAIN_X100 = 0x18
-KEY_DETECTOR_MAX_MISSED_FRAMES = 0x19
-KEY_OPENMV_THRESHOLD_L_MIN = 0x30
-KEY_OPENMV_THRESHOLD_L_MAX = 0x31
-KEY_OPENMV_THRESHOLD_A_MIN = 0x32
-KEY_OPENMV_THRESHOLD_A_MAX = 0x33
-KEY_OPENMV_THRESHOLD_B_MIN = 0x34
-KEY_OPENMV_THRESHOLD_B_MAX = 0x35
-KEY_OPENMV_MIN_AREA = 0x36
-KEY_OPENMV_MAX_AREA = 0x37
-KEY_OPENMV_ROUNDNESS_MIN_X1000 = 0x38
-KEY_OPENMV_MERGE_MARGIN = 0x39
-KEY_OPENMV_TRACK_WINDOW_RADIUS_PX = 0x3A
-KEY_OPENMV_CENTER_FILTER_GAIN_X100 = 0x3B
-KEY_OPENMV_MAX_MISSED_FRAMES = 0x3C
-KEY_OPENMV_RING_DETECTION_ENABLED = 0x3D
-KEY_OPENMV_RING_MIN_ROUNDNESS_X1000 = 0x3E
-KEY_OPENMV_RING_MIN_ASPECT_X100 = 0x3F
-KEY_OPENMV_RING_MIN_FILL_X100 = 0x40
-KEY_OPENMV_RING_MAX_FILL_X100 = 0x41
-KEY_OPENMV_RING_MIN_CENTER_WHITE_X100 = 0x42
-KEY_OPENMV_RING_CENTER_SAMPLE_RATIO_X100 = 0x43
-KEY_OPENMV_RING_CENTER_MIN_BRIGHTNESS = 0x44
-KEY_OPENMV_RING_CENTER_MAX_CHANNEL_DELTA = 0x45
-KEY_OPENMV_RING_MIN_OUTER_DIAMETER_PX = 0x46
-KEY_OPENMV_THRESHOLD_SMALL_L_MIN = 0x47
-KEY_OPENMV_THRESHOLD_SMALL_L_MAX = 0x48
-KEY_OPENMV_THRESHOLD_SMALL_A_MIN = 0x49
-KEY_OPENMV_THRESHOLD_SMALL_A_MAX = 0x4A
-KEY_OPENMV_THRESHOLD_SMALL_B_MIN = 0x4B
-KEY_OPENMV_THRESHOLD_SMALL_B_MAX = 0x4C
-KEY_OPENMV_THRESHOLD_SMALL_AREA_MAX = 0x4D
+DEFAULT_DETECTOR_PARAMS = {
+    "threshold_l_min": 12,
+    "threshold_l_max": 100,
+    "threshold_a_min": -110,
+    "threshold_a_max": -14,
+    "threshold_b_min": -40,
+    "threshold_b_max": 64,
+    "min_area": 100,
+    "max_area": 36000,
+    "roundness_min_x1000": 300,
+    "merge_margin": 0,
+    "track_window_radius_px": 120,
+    "max_missed_frames": 6,
+    "ring_detection_enabled": 1,
+    "ring_min_roundness_x1000": 500,
+    "ring_min_aspect_x100": 75,
+    "ring_min_fill_x100": 10,
+    "ring_max_fill_x100": 70,
+    "ring_min_center_white_x100": 0,
+    "ring_center_sample_ratio_x100": 35,
+    "ring_center_min_brightness": 500,
+    "ring_center_max_channel_delta": 80,
+    "ring_min_outer_diameter_px": 12,
+    "threshold_small_l_min": 12,
+    "threshold_small_l_max": 100,
+    "threshold_small_a_min": -110,
+    "threshold_small_a_max": -14,
+    "threshold_small_b_min": -40,
+    "threshold_small_b_max": 64,
+    "threshold_small_area_max": 16,
+}
 
 _EDGE_SAMPLE_OFFSETS_X100 = (
     (100, 0),
@@ -98,11 +81,11 @@ _SOLID_SAMPLE_OFFSETS_X100 = (
     (-40, -40),
 )
 
-_ROI_MIN_HALF_SIZE_PX = 28
-_ROI_RADIUS_SCALE_X100 = 400
-_ROI_RADIUS_PAD_PX = 12
-_BLOB_X_STRIDE = 2
-_BLOB_Y_STRIDE = 1
+_ROI_MIN_HALF_SIZE_PX = 10
+_ROI_RADIUS_SCALE_X100 = 150
+_ROI_RADIUS_PAD_PX = 2
+_BLOB_X_STRIDE = 3
+_BLOB_Y_STRIDE = 2
 _RING_INNER_MIN_HITS = 6
 _RING_INNER_MIN_RADIUS_X100 = 20
 _RING_INNER_MAX_RADIUS_X100 = 85
@@ -138,11 +121,6 @@ def checksum_bytes(values):
     return total
 
 
-def u32_to_i32(value):
-    if value & 0x80000000:
-        return -((~value + 1) & 0xFFFFFFFF)
-    return value
-
 
 def pixel_channels(pixel):
     if isinstance(pixel, tuple) or isinstance(pixel, list):
@@ -160,15 +138,44 @@ def pixel_channels(pixel):
     return value, value, value
 
 
+def point_in_roi(point, roi):
+    if point is None or roi is None:
+        return False
+    x, y = point
+    rx, ry, rw, rh = roi
+    return (x >= rx) and (x < (rx + rw)) and (y >= ry) and (y < (ry + rh))
+
+
+def target_touches_roi_edge(target, roi):
+    if target is None or roi is None:
+        return False
+    radius = int(target.get("radius", 1) or 1)
+    if radius < 1:
+        radius = 1
+    center_x = int(target["center_x"])
+    center_y = int(target["center_y"])
+    rx, ry, rw, rh = roi
+    target_left = center_x - radius
+    target_top = center_y - radius
+    target_right = center_x + radius
+    target_bottom = center_y + radius
+    roi_right = rx + rw - 1
+    roi_bottom = ry + rh - 1
+    overlaps_roi = (target_right >= rx and target_left <= roi_right and
+                    target_bottom >= ry and target_top <= roi_bottom)
+    return (overlaps_roi and
+            (target_left <= rx or target_top <= ry or
+             target_right >= roi_right or target_bottom >= roi_bottom))
+
+
 class GreenLightDetector:
     def __init__(self):
-        self.params = dict(OPENMV_DETECTOR_PARAMS)
-        self._param_rx_state = 0
-        self._param_rx_buffer = bytearray()
+        self.params = dict(DEFAULT_DETECTOR_PARAMS)
         self._last_center = None
         self._last_radius = None
         self._missed_frames = 0
         self._last_area = None
+        self.last_debug = None
 
     def threshold_tuple(self):
         return (
@@ -220,183 +227,23 @@ class GreenLightDetector:
         self._last_area = None
         self._missed_frames = 0
 
-    def send_measurement(self, uart, x, y, area, image_width=0, image_height=0):
+    def send_measurement(self, uart, x, y, area, image_width=0, image_height=0, include_image_size=True):
         packet = bytearray()
         packet.append(MEASUREMENT_HEADER)
-        packet.append(MEASUREMENT_LENGTH)
+        packet.append(MEASUREMENT_EXTENDED_LENGTH if include_image_size else MEASUREMENT_LEGACY_LENGTH)
         packet.append((x >> 8) & 0xFF)
         packet.append(x & 0xFF)
         packet.append((y >> 8) & 0xFF)
         packet.append(y & 0xFF)
         packet.append((area >> 8) & 0xFF)
         packet.append(area & 0xFF)
-        packet.append((image_width >> 8) & 0xFF)
-        packet.append(image_width & 0xFF)
-        packet.append((image_height >> 8) & 0xFF)
-        packet.append(image_height & 0xFF)
+        if include_image_size:
+            packet.append((image_width >> 8) & 0xFF)
+            packet.append(image_width & 0xFF)
+            packet.append((image_height >> 8) & 0xFF)
+            packet.append(image_height & 0xFF)
         packet.append(checksum_bytes(packet))
         uart.write(packet)
-
-    def send_param_ack(self, uart, key, status, value):
-        frame = bytearray()
-        frame.append(FRAME_HEADER[0])
-        frame.append(FRAME_HEADER[1])
-        frame.append(PARAM_TYPE_ACK)
-        frame.append(key)
-        frame.append(status)
-        frame.append(value & 0xFF)
-        frame.append((value >> 8) & 0xFF)
-        frame.append((value >> 16) & 0xFF)
-        frame.append((value >> 24) & 0xFF)
-        frame.append(checksum_bytes(frame))
-        uart.write(frame)
-
-    def apply_param(self, key, value_u32):
-        signed_value = u32_to_i32(value_u32)
-
-        if key == KEY_OPENMV_THRESHOLD_L_MIN or key == KEY_DETECTOR_MIN_GREEN_CHANNEL:
-            self.params["threshold_l_min"] = clamp(signed_value, 0, 100)
-            return STATUS_APPLIED, self.params["threshold_l_min"]
-        if key == KEY_OPENMV_THRESHOLD_L_MAX:
-            self.params["threshold_l_max"] = clamp(signed_value, 0, 100)
-            return STATUS_APPLIED, self.params["threshold_l_max"]
-        if key == KEY_OPENMV_THRESHOLD_A_MIN or key == KEY_DETECTOR_MIN_GREEN_DOMINANCE:
-            self.params["threshold_a_min"] = clamp(signed_value, -128, 127)
-            return STATUS_APPLIED, self.params["threshold_a_min"] & 0xFFFFFFFF
-        if key == KEY_OPENMV_THRESHOLD_A_MAX:
-            self.params["threshold_a_max"] = clamp(signed_value, -128, 127)
-            return STATUS_APPLIED, self.params["threshold_a_max"] & 0xFFFFFFFF
-        if key == KEY_OPENMV_THRESHOLD_B_MIN:
-            self.params["threshold_b_min"] = clamp(signed_value, -128, 127)
-            return STATUS_APPLIED, self.params["threshold_b_min"] & 0xFFFFFFFF
-        if key == KEY_OPENMV_THRESHOLD_B_MAX:
-            self.params["threshold_b_max"] = clamp(signed_value, -128, 127)
-            return STATUS_APPLIED, self.params["threshold_b_max"] & 0xFFFFFFFF
-        if key == KEY_OPENMV_MIN_AREA or key == KEY_DETECTOR_MIN_BLOB_PIXELS:
-            self.params["min_area"] = clamp(value_u32, 1, 20000)
-            return STATUS_APPLIED, self.params["min_area"]
-        if key == KEY_OPENMV_MAX_AREA or key == KEY_DETECTOR_MAX_BLOB_PIXELS:
-            self.params["max_area"] = clamp(value_u32, 0, 50000)
-            return STATUS_APPLIED, self.params["max_area"]
-        if key == KEY_OPENMV_ROUNDNESS_MIN_X1000:
-            self.params["roundness_min_x1000"] = clamp(value_u32, 0, 1000)
-            return STATUS_APPLIED, self.params["roundness_min_x1000"]
-        if key == KEY_OPENMV_MERGE_MARGIN:
-            self.params["merge_margin"] = clamp(value_u32, 0, 50)
-            return STATUS_APPLIED, self.params["merge_margin"]
-        if key == KEY_OPENMV_TRACK_WINDOW_RADIUS_PX or key == KEY_DETECTOR_TRACK_WINDOW_RADIUS_PX:
-            self.params["track_window_radius_px"] = clamp(value_u32, 1, 200)
-            return STATUS_APPLIED, self.params["track_window_radius_px"]
-        if key == KEY_OPENMV_CENTER_FILTER_GAIN_X100 or key == KEY_DETECTOR_CENTER_FILTER_GAIN_X100:
-            self.params["center_filter_gain_x100"] = clamp(value_u32, 0, 100)
-            return STATUS_APPLIED, self.params["center_filter_gain_x100"]
-        if key == KEY_OPENMV_MAX_MISSED_FRAMES or key == KEY_DETECTOR_MAX_MISSED_FRAMES:
-            self.params["max_missed_frames"] = clamp(value_u32, 1, 255)
-            return STATUS_APPLIED, self.params["max_missed_frames"]
-        if key == KEY_OPENMV_RING_DETECTION_ENABLED:
-            self.params["ring_detection_enabled"] = 1 if value_u32 != 0 else 0
-            return STATUS_APPLIED, self.params["ring_detection_enabled"]
-        if key == KEY_OPENMV_RING_MIN_ROUNDNESS_X1000:
-            self.params["ring_min_roundness_x1000"] = clamp(value_u32, 0, 1000)
-            return STATUS_APPLIED, self.params["ring_min_roundness_x1000"]
-        if key == KEY_OPENMV_RING_MIN_ASPECT_X100:
-            self.params["ring_min_aspect_x100"] = clamp(value_u32, 1, 100)
-            return STATUS_APPLIED, self.params["ring_min_aspect_x100"]
-        if key == KEY_OPENMV_RING_MIN_FILL_X100:
-            self.params["ring_min_fill_x100"] = clamp(value_u32, 0, 100)
-            return STATUS_APPLIED, self.params["ring_min_fill_x100"]
-        if key == KEY_OPENMV_RING_MAX_FILL_X100:
-            self.params["ring_max_fill_x100"] = clamp(value_u32, 0, 100)
-            return STATUS_APPLIED, self.params["ring_max_fill_x100"]
-        if key == KEY_OPENMV_RING_MIN_CENTER_WHITE_X100:
-            self.params["ring_min_center_white_x100"] = clamp(value_u32, 0, 100)
-            return STATUS_APPLIED, self.params["ring_min_center_white_x100"]
-        if key == KEY_OPENMV_RING_CENTER_SAMPLE_RATIO_X100:
-            self.params["ring_center_sample_ratio_x100"] = clamp(value_u32, 5, 100)
-            return STATUS_APPLIED, self.params["ring_center_sample_ratio_x100"]
-        if key == KEY_OPENMV_RING_CENTER_MIN_BRIGHTNESS:
-            self.params["ring_center_min_brightness"] = clamp(value_u32, 0, 255)
-            return STATUS_APPLIED, self.params["ring_center_min_brightness"]
-        if key == KEY_OPENMV_RING_CENTER_MAX_CHANNEL_DELTA:
-            self.params["ring_center_max_channel_delta"] = clamp(value_u32, 0, 255)
-            return STATUS_APPLIED, self.params["ring_center_max_channel_delta"]
-        if key == KEY_OPENMV_RING_MIN_OUTER_DIAMETER_PX:
-            self.params["ring_min_outer_diameter_px"] = clamp(value_u32, 1, 240)
-            return STATUS_APPLIED, self.params["ring_min_outer_diameter_px"]
-
-        if key == KEY_OPENMV_THRESHOLD_SMALL_L_MIN:
-            self.params["threshold_small_l_min"] = clamp(signed_value, 0, 100)
-            return STATUS_APPLIED, self.params["threshold_small_l_min"]
-        if key == KEY_OPENMV_THRESHOLD_SMALL_L_MAX:
-            self.params["threshold_small_l_max"] = clamp(signed_value, 0, 100)
-            return STATUS_APPLIED, self.params["threshold_small_l_max"]
-        if key == KEY_OPENMV_THRESHOLD_SMALL_A_MIN:
-            self.params["threshold_small_a_min"] = clamp(signed_value, -128, 127)
-            return STATUS_APPLIED, self.params["threshold_small_a_min"] & 0xFFFFFFFF
-        if key == KEY_OPENMV_THRESHOLD_SMALL_A_MAX:
-            self.params["threshold_small_a_max"] = clamp(signed_value, -128, 127)
-            return STATUS_APPLIED, self.params["threshold_small_a_max"] & 0xFFFFFFFF
-        if key == KEY_OPENMV_THRESHOLD_SMALL_B_MIN:
-            self.params["threshold_small_b_min"] = clamp(signed_value, -128, 127)
-            return STATUS_APPLIED, self.params["threshold_small_b_min"] & 0xFFFFFFFF
-        if key == KEY_OPENMV_THRESHOLD_SMALL_B_MAX:
-            self.params["threshold_small_b_max"] = clamp(signed_value, -128, 127)
-            return STATUS_APPLIED, self.params["threshold_small_b_max"] & 0xFFFFFFFF
-        if key == KEY_OPENMV_THRESHOLD_SMALL_AREA_MAX:
-            self.params["threshold_small_area_max"] = clamp(value_u32, 1, 50000)
-            return STATUS_APPLIED, self.params["threshold_small_area_max"]
-
-        return STATUS_UNKNOWN_KEY, 0
-
-    def _process_param_byte(self, uart, byte_value):
-        if self._param_rx_state == 0:
-            if byte_value == FRAME_HEADER[0]:
-                self._param_rx_buffer = bytearray([byte_value])
-                self._param_rx_state = 1
-            return
-
-        if self._param_rx_state == 1:
-            if byte_value == FRAME_HEADER[1]:
-                self._param_rx_buffer.append(byte_value)
-                self._param_rx_state = 2
-            elif byte_value == FRAME_HEADER[0]:
-                self._param_rx_buffer = bytearray([byte_value])
-            else:
-                self._param_rx_state = 0
-                self._param_rx_buffer = bytearray()
-            return
-
-        if self._param_rx_state == 2:
-            if byte_value != PARAM_TYPE_SET:
-                self._param_rx_state = 0
-                self._param_rx_buffer = bytearray()
-                return
-            self._param_rx_buffer.append(byte_value)
-            self._param_rx_state = 3
-            return
-
-        self._param_rx_buffer.append(byte_value)
-        if len(self._param_rx_buffer) < 9:
-            return
-
-        key = self._param_rx_buffer[3]
-        checksum = self._param_rx_buffer[8]
-        if checksum_bytes(self._param_rx_buffer[:8]) != checksum:
-            self.send_param_ack(uart, key, STATUS_INVALID_LENGTH, 0)
-        else:
-            value_u32 = (self._param_rx_buffer[4] |
-                         (self._param_rx_buffer[5] << 8) |
-                         (self._param_rx_buffer[6] << 16) |
-                         (self._param_rx_buffer[7] << 24))
-            status, ack_value = self.apply_param(key, value_u32)
-            self.send_param_ack(uart, key, status, ack_value & 0xFFFFFFFF)
-
-        self._param_rx_state = 0
-        self._param_rx_buffer = bytearray()
-
-    def poll_params(self, uart):
-        while uart.any() > 0:
-            self._process_param_byte(uart, uart.readchar())
 
     def _area_passes(self, area):
         if area < self.params["min_area"]:
@@ -933,34 +780,108 @@ class GreenLightDetector:
             self._missed_frames = 0
             return center
 
-        gain = self.params["center_filter_gain_x100"]
-        filtered_x = ((self._last_center[0] * (100 - gain)) + (center[0] * gain) + 50) // 100
-        filtered_y = ((self._last_center[1] * (100 - gain)) + (center[1] * gain) + 50) // 100
-        self._last_center = (filtered_x, filtered_y)
+        self._last_center = center
         self._missed_frames = 0
         return self._last_center
 
-    def process_frame(self, img):
+    def process_frame(self, img, collect_debug_blobs=False):
         threshold = self._active_threshold()
         roi = self._resolve_roi(img.width(), img.height())
+        missed_before = self._missed_frames
 
         blobs = self._scan_blobs(img, threshold, roi)
         best_target = self._find_best_target(img, blobs)
+        roi_blob_count = len(blobs)
+        roi_target_found = (roi is not None and best_target is not None)
+        selected_blobs = blobs
+        selected_scan = "roi" if roi is not None else "full"
+        fallback_used = False
+        fallback_reason = ""
+        full_target_found = False
+        full_target_selected = False
+        target_search = "search_roi" if roi is not None else "full_frame_search"
 
         if self._full_scan_due(roi, best_target):
+            fallback_used = True
+            if best_target is None:
+                if roi_blob_count > 0:
+                    fallback_reason = "roi_no_valid_target"
+                else:
+                    fallback_reason = "roi_empty"
+            else:
+                fallback_reason = "tracking_recovery_after_miss"
+
             full_blobs = self._scan_blobs(img, threshold, None)
             full_target = self._find_best_target(img, full_blobs)
+            full_target_found = full_target is not None
             if full_target is not None:
                 if best_target is None or self._target_score(full_target) > (self._target_score(best_target) + 250):
                     best_target = full_target
+                    selected_blobs = full_blobs
+                    selected_scan = "full"
+                    full_target_selected = True
+                    if target_touches_roi_edge(full_target, roi):
+                        target_search = "search_roi_too_small"
+                    else:
+                        target_search = "full_frame_search"
 
         if best_target is None:
             self._update_track(None)
+            target_search = "target_not_found"
+            self.last_debug = {
+                "search_roi": roi,
+                "target_search": target_search,
+                "roi_active": roi is not None,
+                "roi_blob_count": roi_blob_count,
+                "roi_target_found": False,
+                "fallback_used": fallback_used,
+                "fallback_reason": fallback_reason,
+                "full_target_found": full_target_found,
+                "full_target_selected": full_target_selected,
+                "selected_scan": "none" if fallback_used else selected_scan,
+                "target_in_search_roi": False,
+                "tracking_lost": (roi is not None and self._last_center is None),
+                "missed_frames_before": missed_before,
+                "missed_frames_after": self._missed_frames,
+                "detected": False,
+                "raw_center": None,
+                "filtered_center": None,
+                "area": 0,
+                "radius": 0,
+                "source": "",
+            }
+            if collect_debug_blobs:
+                self.last_debug["debug_blobs"] = selected_blobs
             return None
 
-        filtered_center = self._update_track((best_target["center_x"], best_target["center_y"]))
+        raw_center = (best_target["center_x"], best_target["center_y"])
+        filtered_center = self._update_track(raw_center)
         self._last_radius = best_target["radius"]
         self._last_area = best_target["area"]
+        self.last_debug = {
+            "search_roi": roi,
+            "target_search": target_search,
+            "roi_active": roi is not None,
+            "roi_blob_count": roi_blob_count,
+            "roi_target_found": roi_target_found,
+            "fallback_used": fallback_used,
+            "fallback_reason": fallback_reason,
+            "full_target_found": full_target_found,
+            "full_target_selected": full_target_selected,
+            "selected_scan": selected_scan,
+            "target_in_search_roi": point_in_roi(raw_center, roi),
+            "tracking_lost": False,
+            "missed_frames_before": missed_before,
+            "missed_frames_after": self._missed_frames,
+            "detected": True,
+            "raw_center": raw_center,
+            "filtered_center": filtered_center,
+            "area": best_target["area"],
+            "radius": best_target["radius"],
+            "source": best_target["source"],
+        }
+        if collect_debug_blobs:
+            self.last_debug["debug_blobs"] = selected_blobs
         return {
             "center_x": filtered_center[0],
             "center_y": filtered_center[1],

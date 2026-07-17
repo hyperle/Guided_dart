@@ -7,10 +7,6 @@
 transport:
   mode: serial
 
-sync:
-  ack_timeout_ms: 300
-  watch_interval_ms: 200
-
 serial:
   port: /dev/ttyUSB0
   baudrate: 115200
@@ -20,9 +16,7 @@ ble:
   address: "14:63:93:C6:F0:DE"
   connect_timeout_ms: 8000
   service_uuid: 4fafc201-1fb5-459e-8fcc-c5c9c331914b
-  downlink_char_uuid: beb5483e-36e1-4688-b7f5-ea07361b26a8
   uplink_char_uuid: 9f6c1db5-0b3b-4d1d-8a4d-11dd5c3a4f21
-  ack_char_uuid: de24d570-5f81-4d6b-8e4d-2f1309367d91
 
 viewer:
   fallback_image_width: 320
@@ -30,8 +24,6 @@ viewer:
   refresh_ms: 50
 
 green_light:
-  setpoint_x: 120
-  setpoint_y: 140
   openmv_threshold_l_min: 12
   openmv_threshold_l_max: 100
   openmv_threshold_a_min: -110
@@ -42,8 +34,7 @@ green_light:
   openmv_max_area: 36000
   openmv_roundness_min_x1000: 300
   openmv_merge_margin: 0
-  openmv_track_window_radius_px: 100
-  openmv_center_filter_gain_x100: 70
+  openmv_track_window_radius_px: 120
   openmv_max_missed_frames: 6
   openmv_ring_detection_enabled: 1
   openmv_ring_min_roundness_x1000: 500
@@ -62,22 +53,3 @@ green_light:
   openmv_threshold_small_b_min: -40
   openmv_threshold_small_b_max: 64
   openmv_threshold_small_area_max: 16
-
-controller:
-  control_mode: 1
-  pid_kp: 1.5
-  pid_ki: 0.2
-  pid_kd: 0.0
-  pid_integral_limit: 1000.0
-  pid_output_limit_us: 600.0
-  pid_invert_output: false
-  zero_pulse_us_0: 1500
-  zero_pulse_us_1: 1500
-  zero_pulse_us_2: 1500
-  zero_pulse_us_3: 1500
-
-imu:
-  accel_trust_delta_g: 0.35
-  accel_pulse_threshold_g: 2.0
-  accel_axis_saturation_ratio: 0.98
-  recovery_delay_ms: 150

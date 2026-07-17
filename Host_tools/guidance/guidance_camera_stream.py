@@ -5,6 +5,7 @@ import argparse
 import configparser
 import contextlib
 import http.server
+import json
 import socketserver
 import struct
 import sys
@@ -36,7 +37,10 @@ RAW_REPL_ENTER = b"\x01"
 RAW_REPL_EXIT = b"\x02"
 RAW_REPL_PROMPT = b"raw REPL; CTRL-B to exit\r\n>"
 FRAME_MAGIC = b"OMVJ"
+PASSIVE_PREVIEW_REQUEST = b"OMVP\n"
 FRAME_HEADER_STRUCT = struct.Struct(">IHHI")
+METADATA_MAGIC = b"OMVM"
+METADATA_HEADER_STRUCT = struct.Struct(">I")
 
 
 @dataclass(frozen=True)
@@ -46,6 +50,7 @@ class CameraFrame:
     height: int
     ticks_ms: int
     received_at_s: float
+    metadata: dict[str, object] | None = None
 
 
 class LatestFrameStore:
@@ -177,10 +182,11 @@ class OpenMvUsbStream:
         self._read_timeout_s = float(read_timeout_s)
         self._port = None
         self._stream_started = False
+        self._passive_preview_requested = False
+        self._last_passive_request_s = 0.0
 
     def __enter__(self) -> "OpenMvUsbStream":
         self._port = serial.Serial(self._port_name, self._baudrate, timeout=self._read_timeout_s, write_timeout=2.0)
-        self.enter_raw_repl()
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
@@ -216,6 +222,7 @@ class OpenMvUsbStream:
         deadline = time.monotonic() + timeout_s
         data = bytearray()
         while time.monotonic() < deadline:
+            self._send_passive_preview_request()
             chunk = port.read(1)
             if not chunk:
                 continue
@@ -233,6 +240,18 @@ class OpenMvUsbStream:
             if chunk:
                 data.extend(chunk)
         return bytes(data)
+
+    def request_passive_preview(self) -> None:
+        self._passive_preview_requested = True
+        self._send_passive_preview_request(force=True)
+
+    def _send_passive_preview_request(self, force: bool = False) -> None:
+        if not self._passive_preview_requested:
+            return
+        now = time.monotonic()
+        if force or now - self._last_passive_request_s >= 0.5:
+            self._write_all(PASSIVE_PREVIEW_REQUEST)
+            self._last_passive_request_s = now
 
     def enter_raw_repl(self) -> None:
         self._drain(0.2)
@@ -256,7 +275,13 @@ class OpenMvUsbStream:
         self._read_until(b"OK", 5.0)
         self._stream_started = True
 
-    def read_frame(self, timeout_s: float, max_frame_bytes: int) -> CameraFrame:
+    def read_frame(
+        self,
+        timeout_s: float,
+        max_frame_bytes: int,
+        expect_metadata: bool = False,
+        max_metadata_bytes: int = 16 * 1024,
+    ) -> CameraFrame:
         self._sync_to_magic(timeout_s)
         header = self._read_exact(FRAME_HEADER_STRUCT.size, timeout_s)
         length, width, height, ticks_ms = FRAME_HEADER_STRUCT.unpack(header)
@@ -265,19 +290,36 @@ class OpenMvUsbStream:
         jpeg = self._read_exact(length, timeout_s)
         if not jpeg.startswith(b"\xff\xd8"):
             raise ValueError("received payload is not a JPEG frame")
+        metadata = self._read_metadata(timeout_s, max_metadata_bytes) if expect_metadata else None
         return CameraFrame(
             jpeg=jpeg,
             width=int(width),
             height=int(height),
             ticks_ms=int(ticks_ms),
             received_at_s=time.monotonic(),
+            metadata=metadata,
         )
+
+    def _read_metadata(self, timeout_s: float, max_metadata_bytes: int) -> dict[str, object]:
+        magic = self._read_exact(len(METADATA_MAGIC), timeout_s)
+        if magic != METADATA_MAGIC:
+            raise ValueError(f"invalid metadata magic {magic!r}")
+        header = self._read_exact(METADATA_HEADER_STRUCT.size, timeout_s)
+        (length,) = METADATA_HEADER_STRUCT.unpack(header)
+        if length <= 0 or length > max_metadata_bytes:
+            raise ValueError(f"invalid metadata length {length}")
+        payload = self._read_exact(length, timeout_s)
+        decoded = json.loads(payload.decode("utf-8"))
+        if not isinstance(decoded, dict):
+            raise ValueError("metadata payload is not a JSON object")
+        return decoded
 
     def _sync_to_magic(self, timeout_s: float) -> None:
         port = self._ensure_open()
         deadline = time.monotonic() + timeout_s
         window = bytearray()
         while time.monotonic() < deadline:
+            self._send_passive_preview_request()
             chunk = port.read(1)
             if not chunk:
                 continue
@@ -370,6 +412,10 @@ def build_stream_options(args: argparse.Namespace) -> dict[str, object]:
         "exposure_us": int(args.exposure_us),
         "annotate": bool(args.annotate),
         "debug_detector": bool(args.debug_detector),
+        "emit_metadata": bool(metadata_logging_enabled(args)),
+        "control_uart": bool(args.control_uart),
+        "control_uart_port": int(args.control_uart_port),
+        "control_uart_baudrate": int(args.control_uart_baudrate),
     }
 
 
@@ -387,6 +433,87 @@ def start_http_server(host: str, port: int, frame_store: LatestFrameStore, verbo
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     return server
+
+
+def metadata_logging_enabled(args: argparse.Namespace) -> bool:
+    return bool(args.metadata_jsonl or args.record_metadata)
+
+
+def resolve_metadata_jsonl_path(args: argparse.Namespace) -> Path | None:
+    if args.metadata_jsonl:
+        return Path(args.metadata_jsonl)
+    if args.record_metadata:
+        if not args.record_mjpeg:
+            raise RuntimeError("--record-metadata requires --record-mjpeg or --metadata-jsonl")
+        return Path(args.record_mjpeg).with_suffix(".jsonl")
+    return None
+
+
+def _metadata_int(value, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _point_touches_roi_edge(center_x: int, center_y: int, radius: int, roi) -> bool:
+    if not isinstance(roi, (list, tuple)) or len(roi) < 4:
+        return False
+    rx, ry, rw, rh = (_metadata_int(roi[0]), _metadata_int(roi[1]), _metadata_int(roi[2]), _metadata_int(roi[3]))
+    radius = max(1, int(radius))
+    target_left = center_x - radius
+    target_top = center_y - radius
+    target_right = center_x + radius
+    target_bottom = center_y + radius
+    roi_right = rx + rw - 1
+    roi_bottom = ry + rh - 1
+    overlaps_roi = (
+        target_right >= rx
+        and target_left <= roi_right
+        and target_bottom >= ry
+        and target_top <= roi_bottom
+    )
+    return overlaps_roi and (
+        target_left <= rx
+        or target_top <= ry
+        or target_right >= roi_right
+        or target_bottom >= roi_bottom
+    )
+
+
+def _target_search_from_metadata(metadata: dict[str, object] | None) -> str:
+    if not metadata:
+        return "metadata_missing"
+    status = str(metadata.get("target_search") or "")
+    if status:
+        return status
+    if not bool(metadata.get("detector_available", True)):
+        return "detector_unavailable"
+    if bool(metadata.get("debug_detector", True)) is False:
+        return "detector_disabled"
+    if not bool(metadata.get("detected", False)):
+        return "target_not_found"
+    selected_scan = str(metadata.get("selected_scan") or "")
+    if selected_scan == "roi" or bool(metadata.get("target_in_search_roi", False)):
+        return "search_roi"
+    if bool(metadata.get("full_target_selected", False)):
+        center_x = _metadata_int(metadata.get("center_x", -1), -1)
+        center_y = _metadata_int(metadata.get("center_y", -1), -1)
+        radius = _metadata_int(metadata.get("radius", 1), 1)
+        if center_x >= 0 and center_y >= 0 and _point_touches_roi_edge(center_x, center_y, radius, metadata.get("search_roi")):
+            return "search_roi_too_small"
+    return "full_frame_search"
+
+
+def write_metadata_line(handle, sequence: int, frame: CameraFrame) -> None:
+    metadata = frame.metadata or {}
+    record: dict[str, object] = {
+        "frame_index": _metadata_int(metadata.get("frame_index"), max(0, int(sequence) - 1)),
+        "target_search": _target_search_from_metadata(metadata),
+    }
+    handle.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")))
+    handle.write("\n")
+    handle.flush()
 
 
 def write_optional_frame_files(args: argparse.Namespace, sequence: int, frame: CameraFrame) -> None:
@@ -409,8 +536,11 @@ def write_optional_frame_files(args: argparse.Namespace, sequence: int, frame: C
 
 def run_preview(args: argparse.Namespace) -> int:
     stream_script = Path(args.openmv_script).resolve()
-    if not stream_script.is_file():
-        raise RuntimeError(f"OpenMV stream script not found: {stream_script}")
+    if args.raw_repl:
+        if not stream_script.is_file():
+            raise RuntimeError(f"OpenMV stream script not found: {stream_script}")
+        if args.control_uart and not args.debug_detector:
+            raise RuntimeError("--control-uart requires the OpenMV detector; remove --no-debug-detector")
 
     port, baudrate = resolve_port(args)
     frame_store = LatestFrameStore()
@@ -419,23 +549,54 @@ def run_preview(args: argparse.Namespace) -> int:
         server = start_http_server(args.http_host, args.http_port, frame_store, args.http_logs)
         print(f"OpenMV preview: http://{args.http_host}:{args.http_port}/")
     print(f"Using OpenMV USB device: {port}")
+    if args.raw_repl:
+        print("Raw REPL mode: interrupting OpenMV and running the host stream helper")
+        if args.control_uart:
+            print(
+                f"Forwarding detector measurements to control UART{args.control_uart_port} "
+                f"at {args.control_uart_baudrate} baud"
+            )
+    else:
+        print("Passive mode: listening to /flash/main.py without interrupting OpenMV")
+        if args.control_uart:
+            print("Passive mode keeps UART1 under /flash/main.py; --control-uart is ignored")
 
-    stream_options = build_stream_options(args)
+    metadata_jsonl_path = resolve_metadata_jsonl_path(args)
+    stream_options = build_stream_options(args) if args.raw_repl else {}
     max_frame_bytes = max(4096, int(args.max_frame_bytes))
+    max_metadata_bytes = max(256, int(args.max_metadata_bytes))
     status_interval_s = max(0.2, float(args.status_interval))
     sequence = 0
     last_status_at = time.monotonic()
     bytes_since_status = 0
     frames_since_status = 0
+    expect_metadata = bool(metadata_jsonl_path is not None or not args.raw_repl)
 
+    metadata_handle = None
     try:
+        if metadata_jsonl_path is not None:
+            metadata_jsonl_path.parent.mkdir(parents=True, exist_ok=True)
+            metadata_mode = "a" if args.record_metadata and not args.metadata_jsonl else "w"
+            metadata_handle = open(metadata_jsonl_path, metadata_mode, encoding="utf-8")
+            print(f"OpenMV metadata log: {metadata_jsonl_path}")
         with OpenMvUsbStream(port, baudrate) as stream:
             try:
-                stream.start_stream(stream_script, stream_options)
+                if args.raw_repl:
+                    stream.enter_raw_repl()
+                    stream.start_stream(stream_script, stream_options)
+                else:
+                    stream.request_passive_preview()
                 while True:
-                    frame = stream.read_frame(timeout_s=float(args.frame_timeout), max_frame_bytes=max_frame_bytes)
+                    frame = stream.read_frame(
+                        timeout_s=float(args.frame_timeout),
+                        max_frame_bytes=max_frame_bytes,
+                        expect_metadata=expect_metadata,
+                        max_metadata_bytes=max_metadata_bytes,
+                    )
                     sequence = frame_store.update(frame)
                     write_optional_frame_files(args, sequence, frame)
+                    if metadata_handle is not None:
+                        write_metadata_line(metadata_handle, sequence, frame)
 
                     if args.snapshot:
                         output_path = Path(args.snapshot)
@@ -460,8 +621,11 @@ def run_preview(args: argparse.Namespace) -> int:
                         frames_since_status = 0
                         bytes_since_status = 0
             finally:
-                stream.stop_and_reset(reset=not args.no_reset)
+                if args.raw_repl:
+                    stream.stop_and_reset(reset=not args.no_reset)
     finally:
+        if metadata_handle is not None:
+            metadata_handle.close()
         if server is not None:
             server.shutdown()
             server.server_close()
@@ -469,10 +633,9 @@ def run_preview(args: argparse.Namespace) -> int:
             sys.stdout.write("\n")
     return 0
 
-
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Preview OpenMV camera frames over the board's USB-C connection without using the control-board UART"
+        description="Preview OpenMV camera frames over USB-C, optionally forwarding detector measurements to the control-board UART"
     )
     parser.add_argument("--config", default=str(DEFAULT_CONFIG_PATH), help="OpenMV config path used for default port/baudrate")
     parser.add_argument("--port", default="", help="OpenMV USB CDC device, for example /dev/ttyACM0")
@@ -484,6 +647,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--snapshot", default="", help="capture one frame to this JPEG path and exit")
     parser.add_argument("--save-dir", default="", help="optional directory to save every received JPEG frame")
     parser.add_argument("--record-mjpeg", default="", help="append received JPEG frames to this MJPEG file for video-tuner")
+    parser.add_argument("--record-metadata", action="store_true", help="write a compact JSONL sidecar next to --record-mjpeg with frame_index and target_search per frame")
+    parser.add_argument("--metadata-jsonl", default="", help="write one compact target-search JSON object per received frame to this host-side path")
     parser.add_argument("--raw-dump", default="", help="optional binary dump path using the OMVJ frame format")
     parser.add_argument("--framesize", default="QVGA", choices=["QQVGA", "QVGA", "VGA"], help="OpenMV sensor frame size")
     parser.add_argument("--width", type=int, default=640, help="sensor window width; use 0 to keep full frame")
@@ -498,10 +663,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--annotate", action="store_true", help="draw OpenMV-side pixel size and FPS text when detector overlay is disabled")
     parser.add_argument("--debug-detector", dest="debug_detector", action="store_true", default=True, help="run GreenLightDetector on the OpenMV preview stream and draw target overlays")
     parser.add_argument("--no-debug-detector", dest="debug_detector", action="store_false", help="stream raw preview frames without detector overlays")
+    parser.add_argument("--control-uart", action="store_true", help="raw-REPL mode only: forward detector x/y/area to the STM32 over OpenMV UART1")
+    parser.add_argument("--control-uart-port", type=int, default=1, help="OpenMV UART port used by --control-uart")
+    parser.add_argument("--control-uart-baudrate", type=int, default=115200, help="baudrate used by --control-uart")
+    parser.add_argument("--raw-repl", action="store_true", help="legacy mode: interrupt OpenMV and run src/stream_debug.py from RAM")
     parser.add_argument("--frame-timeout", type=float, default=5.0, help="seconds to wait for a frame before failing")
     parser.add_argument("--max-frame-bytes", type=int, default=512 * 1024, help="reject frames larger than this many bytes")
+    parser.add_argument("--max-metadata-bytes", type=int, default=16 * 1024, help="reject per-frame metadata payloads larger than this many bytes before compacting")
     parser.add_argument("--status-interval", type=float, default=1.0, help="seconds between terminal status updates")
-    parser.add_argument("--no-reset", action="store_true", help="leave OpenMV in REPL instead of resetting back to main.py on exit")
+    parser.add_argument("--no-reset", action="store_true", help="legacy raw-REPL mode only: leave OpenMV in REPL instead of resetting back to main.py on exit")
     return parser
 
 

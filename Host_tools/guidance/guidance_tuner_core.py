@@ -12,7 +12,7 @@ from openmv_detector_params import load_openmv_detector_param_dict
 DISPLAY_MAX_WIDTH = 480
 DISPLAY_MAX_HEIGHT = 360
 CV_FONT = cv2.FONT_HERSHEY_SIMPLEX
-LOCAL_PREVIEW_NOTE = "Mask and host preview update locally; OpenMV verdict is shown when connected."
+LOCAL_PREVIEW_NOTE = "Host mask/preview update locally. Single-frame OpenMV probes are stateless; use sequence replay or validation for real tracking ROI feedback."
 
 
 @dataclass
@@ -37,7 +37,6 @@ class DetectorParams:
     roundness_min_x1000: int
     merge_margin: int
     track_window_radius_px: int
-    center_filter_gain_x100: int
     max_missed_frames: int
     ring_detection_enabled: int
     ring_min_roundness_x1000: int
@@ -126,6 +125,16 @@ class DetectionDebug:
     area: int
     radius_px: int
     source: str = ""
+    fallback_reason: str = ""
+    roi_active: bool = False
+    roi_target_found: bool = False
+    target_in_search_roi: bool = False
+    selected_scan: str = ""
+    full_target_found: bool = False
+    full_target_selected: bool = False
+    tracking_lost: bool = False
+    missed_frames_before: int = 0
+    missed_frames_after: int = 0
 
 
 @dataclass
@@ -142,6 +151,17 @@ class ValidationFrameResult:
     radius_px: int
     exposure_scale: float
     gain_scale: float
+    search_roi: tuple[int, int, int, int] | None = None
+    fallback_reason: str = ""
+    roi_active: bool = False
+    roi_target_found: bool = False
+    target_in_search_roi: bool = False
+    selected_scan: str = ""
+    full_target_found: bool = False
+    full_target_selected: bool = False
+    tracking_lost: bool = False
+    missed_frames_before: int = 0
+    missed_frames_after: int = 0
 
 
 @dataclass
@@ -413,6 +433,7 @@ def evaluate_host_frame(
         area=area,
         radius_px=radius_px,
         source=best_candidate.source if best_candidate is not None else "",
+        selected_scan="host",
     )
 
 

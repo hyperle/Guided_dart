@@ -1,0 +1,225 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import os
+import sys
+import time
+
+CTRL_C = b"\x03"
+CTRL_D = b"\x04"
+RAW_REPL_ENTER = b"\x01"
+RAW_REPL_EXIT = b"\x02"
+RAW_REPL_PROMPT = b"raw REPL; CTRL-B to exit\r\n>"
+TASK_CHOICES = ("skip-on", "skip-off", "fix-sd-boot")
+
+
+class RawReplSession:
+    def __init__(self, port: str, baudrate: int):
+        try:
+            import serial
+        except ImportError as exc:
+            raise RuntimeError("pyserial is required: python3 -m pip install pyserial") from exc
+        self._serial_mod = serial
+        self._port_name = port
+        self._baudrate = baudrate
+        self._serial = None
+        self._reset_requested = False
+
+    def __enter__(self) -> "RawReplSession":
+        self._serial = self._serial_mod.Serial(self._port_name, self._baudrate, timeout=0.1)
+        self._enter_raw_repl()
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        try:
+            if self._serial is not None and not self._reset_requested:
+                self._write(RAW_REPL_EXIT)
+                time.sleep(0.1)
+        finally:
+            if self._serial is not None:
+                self._serial.close()
+                self._serial = None
+
+    def _write(self, data: bytes) -> None:
+        if self._serial is None:
+            raise RuntimeError("serial port is not open")
+        self._serial.write(data)
+        self._serial.flush()
+
+    def _read_until(self, marker: bytes, timeout_s: float) -> bytes:
+        if self._serial is None:
+            raise RuntimeError("serial port is not open")
+        deadline = time.monotonic() + timeout_s
+        data = bytearray()
+        while time.monotonic() < deadline:
+            chunk = self._serial.read(1)
+            if not chunk:
+                continue
+            data.extend(chunk)
+            if data.endswith(marker):
+                return bytes(data)
+        raise TimeoutError(f"timeout waiting for {marker!r}, got {bytes(data)!r}")
+
+    def _drain(self, timeout_s: float = 0.2) -> None:
+        if self._serial is None:
+            raise RuntimeError("serial port is not open")
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            self._serial.read(1024)
+
+    def _enter_raw_repl(self) -> None:
+        self._drain()
+        self._write(CTRL_C)
+        time.sleep(0.1)
+        self._write(CTRL_C)
+        time.sleep(0.1)
+        self._write(RAW_REPL_EXIT)
+        time.sleep(0.05)
+        self._drain()
+        self._write(RAW_REPL_ENTER)
+        self._read_until(RAW_REPL_PROMPT, 2.0)
+        self._write(CTRL_D)
+        self._read_until(RAW_REPL_PROMPT, 4.0)
+
+    def exec_raw(self, source: str, timeout_s: float = 10.0) -> str:
+        self._write(source.encode("utf-8"))
+        self._write(CTRL_D)
+        self._read_until(b"OK", 2.0)
+        stdout_frame = self._read_until(b"\x04", timeout_s)
+        stderr_frame = self._read_until(b"\x04", timeout_s)
+        stdout = stdout_frame[:-1].decode("utf-8", errors="replace")
+        stderr = stderr_frame[:-1].decode("utf-8", errors="replace")
+        if stderr:
+            raise RuntimeError(stderr)
+        return stdout
+
+    def hard_reset(self) -> None:
+        self._reset_requested = True
+        self._write(b"import machine\nmachine.reset()\n")
+        self._write(CTRL_D)
+        time.sleep(0.2)
+
+
+def command_source(task: str) -> str:
+    if task == "skip-on":
+        return '''import os
+f = open("/flash/SKIPSD", "w")
+f.close()
+try:
+    os.sync()
+except Exception:
+    pass
+print("SKIPSD enabled")
+'''
+    if task == "skip-off":
+        return '''import os
+try:
+    os.remove("/flash/SKIPSD")
+except OSError:
+    pass
+try:
+    os.sync()
+except Exception:
+    pass
+print("SKIPSD disabled")
+'''
+    if task == "fix-sd-boot":
+        return '''import os
+import vfs
+
+STUB = "import os\\nos.chdir(\\\"/flash\\\")\\nexec(open(\\\"/flash/main.py\\\").read())\\n"
+TMP = "/sdcard/main.py.tmp"
+DST = "/sdcard/main.py"
+
+
+def _path_exists(path):
+    try:
+        os.stat(path)
+        return True
+    except OSError:
+        return False
+
+
+def _mount_sdcard():
+    if _path_exists("/sdcard"):
+        return
+    sdcard = None
+    try:
+        import pyb
+        sdcard = pyb.SDCard()
+        del pyb
+    except Exception:
+        try:
+            import machine
+            sdcard = machine.SDCard(1)
+            del machine
+        except Exception:
+            sdcard = None
+    if sdcard is None:
+        raise RuntimeError("SD card block device is not available")
+    vfs.mount(vfs.VfsFat(sdcard), "/sdcard")
+
+
+_mount_sdcard()
+f = open(TMP, "w")
+f.write(STUB)
+f.flush()
+f.close()
+try:
+    os.sync()
+except Exception:
+    pass
+try:
+    os.remove(DST)
+except OSError:
+    pass
+os.rename(TMP, DST)
+try:
+    os.sync()
+except Exception:
+    pass
+f = open(DST, "r")
+data = f.read()
+f.close()
+if data != STUB:
+    raise RuntimeError("SD boot stub verification failed")
+print("repaired /sdcard/main.py boot stub")
+'''
+    raise ValueError(task)
+
+
+def parse_args(argv: list[str]) -> argparse.Namespace:
+    fixed_task = os.environ.get("OPENMV_REPL_TASK", "")
+    parser = argparse.ArgumentParser(
+        prog=os.environ.get("OPENMV_REPL_PROG"),
+        description="Run a small OpenMV raw-REPL maintenance task",
+    )
+    if fixed_task:
+        parser.set_defaults(task=fixed_task)
+    else:
+        parser.add_argument("task", choices=TASK_CHOICES)
+    parser.add_argument("--port", default=os.environ.get("OPENMV_PORT", "/dev/ttyACM0"), help="OpenMV serial port")
+    parser.add_argument("--baudrate", type=int, default=int(os.environ.get("OPENMV_BAUDRATE", "115200")), help="serial baudrate")
+    parser.add_argument("--no-reset", action="store_true", help="do not reset after the task")
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str]) -> int:
+    args = parse_args(argv)
+    with RawReplSession(args.port, args.baudrate) as session:
+        output = session.exec_raw(command_source(args.task), timeout_s=15.0).strip()
+        if output:
+            print(output)
+        if not args.no_reset:
+            session.hard_reset()
+            print("triggered hard reset")
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main(sys.argv[1:]))
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        raise SystemExit(1)
