@@ -93,6 +93,40 @@ Orchestrator 负责 action 排序、串行推进、并行叠加、阻断插入�
 
 如果某个 action 是长期闭环控制，它仍然可以保持 `TASK_ACTION_RUNNING`，直到 orchestrator 根据外部事件、模式切换或任务阶段显式退出它。
 
+### Hook 事件
+
+`hook` 是 task 向后续 `GuidanceOrchestrator / planner` 抛出的轻量一次性事件，用于表达“本 task 尚未完成，但可以触发某个特定任务或计划分支”。它不是 action 的完成结果，也不和 `waiting` 强绑定；task 可以在 `running` 时抛 hook 后继续运行，也可以抛 hook 后进入等待，后续 `waiting` 机制单独管理。
+
+当前模板在 `TaskSequence_t` 内置一个 `TaskHook_t` 单槽：
+
+- `TaskSequence_EmitHook(sequence, hook_id)` 抛出 hook；`TASK_HOOK_ID_NONE` 无效。
+- planner 可通过 `TaskSequence_SetHookNotify(sequence, callback, context)` 注册即时回调；回调返回 `true` 表示已处理，模板会自动清 pending。
+- 未注册回调或回调未处理时，hook 保持 pending，可由 `TaskSequence_HasHook` / `TaskSequence_ConsumeHook` 显式读取。
+- 单槽 pending 未消费前再次 `EmitHook` 会失败，避免覆盖旧 hook。
+- `TaskSequence_Tick` 与 `TaskAction_Tick` 的推进语义不因 hook 改变，hook 只作为调度侧事件存在。
+
+后续 planner 应维护 `hook_id -> task/plan` 的静态映射。这样常态 tick 不需要扫描所有 task 的 hook 状态；只有 task 主动 emit 时才触发回调或留下 pending。
+
+### Waiting 挂起与恢复
+
+`waiting` 表示 task 暂时不能继续推进，但还没有成功或失败。它用于等待外部数据、等待某个 task 完成、等待时间窗口或等待 planner 决策。`waiting` 与 `hook` 是正交概念：task 可以只等待不抛 hook，也可以抛 hook 后继续 `running`，也可以抛 hook 后进入 waiting。
+
+`waiting` 不应做成每 tick 扫描所有 task 的轮询状态。推荐由 planner 维护 ready/wait 两类静态表：
+
+- ready 表只保存本 tick 可能推进的 task，控制主循环只 tick ready task。
+- waiting task 从 ready 表移除，挂到对应等待源，例如 `data_ready`、`task_done`、`timeout`。
+- 数据到达、被等待 task 完成或超时事件发生时，由事件源通知 planner，再把对应 task 放回 ready 表。
+- 等待期间不调用 `TaskSequence_Tick`，避免 action 在条件未满足时反复空转。
+
+恢复时只解除挂起，不重置任务进度：
+
+- 保留 `TaskSequence.current_index`。
+- 保留当前 `TaskAction.phase` 与 action 自身上下文。
+- 清除 waiting 标志和等待目标后重新进入 ready 表。
+- 下一个控制 tick 继续从原 action/sequence 位置推进。
+
+只有等待超时、依赖任务失败或 planner 显式放弃当前任务时，才调用 reset/exit/fallback。这样 waiting 的常态成本接近事件驱动，而不是按 task 数量线性增长。
+
 ## 文件放置建议
 
 新增 task/action 时采用一组头文件和实现文件：

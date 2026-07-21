@@ -96,7 +96,7 @@ static void GuidanceController_SolveHorizontalPwmPid(GuidanceController_t *contr
         GuidanceController_ClearAimCommand(&controller->aim_command,
                                            controller->relative_attitude_error.pitch_deg,
                                            controller->relative_attitude_error.roll_deg);
-        Controller_Left_Turn(controller);
+        Controller_Horizontal_Turn(controller);
         return;
     }
 
@@ -113,7 +113,7 @@ static void GuidanceController_SolveHorizontalPwmPid(GuidanceController_t *contr
     }
     controller->horizontal_pid.output = output_us;
 
-    Controller_Left_Turn(controller);
+    Controller_Horizontal_Turn(controller);
 
     controller->aim_command.target_detected = true;
     controller->aim_command.pixel_error.x = delta_x;
@@ -136,7 +136,7 @@ static void GuidanceController_SolveVerticalPwmPid(GuidanceController_t *control
         GuidanceController_ClearAimCommand(&controller->aim_command,
                                            controller->relative_attitude_error.pitch_deg,
                                            controller->relative_attitude_error.roll_deg);
-        Controller_Left_Turn(controller);
+        Controller_Horizontal_Turn(controller);
         return;
     }
 
@@ -153,7 +153,7 @@ static void GuidanceController_SolveVerticalPwmPid(GuidanceController_t *control
     }
     controller->horizontal_pid.output = output_us;
 
-    Controller_Up_Turn(controller);
+    Controller_Vertical_Turn(controller);
 
     controller->aim_command.target_detected = true;
     controller->aim_command.pixel_error.y = delta_y;
@@ -206,7 +206,7 @@ void GuidanceController_Init(GuidanceController_t *controller,
              controller->horizontal_pwm_pid_config.kd,
              (float)GUIDANCE_CONTROLLER_LOOP_PERIOD_MS * 0.001f,
              controller->horizontal_pwm_pid_config.integral_limit);
-    Controller_Left_Turn(controller);
+    Controller_Horizontal_Turn(controller);
 
     Servo_Init();
     GuidanceController_ApplyOutputs(controller);
@@ -258,7 +258,7 @@ void GuidanceController_Solve(GuidanceController_t *controller)
         GuidanceController_ClearAimCommand(&controller->aim_command,
                                            controller->relative_attitude_error.pitch_deg,
                                            controller->relative_attitude_error.roll_deg);
-        Controller_Left_Turn(controller);
+        Controller_Horizontal_Turn(controller);
         return;
     }
 
@@ -271,7 +271,7 @@ void GuidanceController_Solve(GuidanceController_t *controller)
     GuidanceController_ClearAimCommand(&controller->aim_command,
                                        controller->relative_attitude_error.pitch_deg,
                                        controller->relative_attitude_error.roll_deg);
-    Controller_Left_Turn(controller);
+    Controller_Horizontal_Turn(controller);
 }
 
 void GuidanceController_ApplyOutputs(const GuidanceController_t *controller)
@@ -283,7 +283,7 @@ void GuidanceController_ApplyOutputs(const GuidanceController_t *controller)
     Servo_SetPulseUsBatch(controller->servo_pulse_us.values);
 }
 
-void Controller_Left_Turn(GuidanceController_t *controller)
+void Controller_Horizontal_Turn(GuidanceController_t *controller)
 {
     float output_us;
 
@@ -299,7 +299,7 @@ void Controller_Left_Turn(GuidanceController_t *controller)
 }
 
 
-void Controller_Up_Turn(GuidanceController_t *controller)
+void Controller_Vertical_Turn(GuidanceController_t *controller)
 {
     float output_us;
 

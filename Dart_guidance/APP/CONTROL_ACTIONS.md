@@ -134,7 +134,7 @@ TaskActionResult_t TimedTurnPulseAction_Evaluate(
 
 ### 默认参数
 
-默认复用 `Controller_Up_Turn` 的四舵机方向矩阵：
+默认复用 `Controller_Vertical_Turn` 的四舵机方向矩阵：
 
 ```text
 servo_direction = [-1, +1, +1, +1]

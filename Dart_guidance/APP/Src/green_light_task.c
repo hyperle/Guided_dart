@@ -24,6 +24,11 @@ static TaskActionResult_t AcquireMeasurementAction_OnEnter(TaskAction_t *action)
         return TASK_ACTION_FAILURE;
     }
 
+    if (profile->output.target_detected) {
+        task->last_valid_measurement = profile->output.measurement;
+        task->has_last_valid_measurement = true;
+    }
+
     GreenLightTaskProfile_ResetOutput(&profile->output);
     if (!profile->input.upstream_measurement_ready) {
         return TASK_ACTION_RUNNING;
@@ -48,6 +53,8 @@ static TaskActionResult_t AcquireMeasurementAction_OnEnter(TaskAction_t *action)
         return TASK_ACTION_FAILURE;
     }
 
+    task->last_valid_measurement = profile->output.measurement;
+    task->has_last_valid_measurement = true;
     return TASK_ACTION_SUCCESS;
 }
 
@@ -83,6 +90,8 @@ static TaskActionResult_t AcquireMeasurementAction_OnRunning(TaskAction_t *actio
         return TASK_ACTION_FAILURE;
     }
 
+    task->last_valid_measurement = profile->output.measurement;
+    task->has_last_valid_measurement = true;
     return TASK_ACTION_SUCCESS;
 }
 
@@ -146,6 +155,10 @@ void GreenLightTask_Init(GreenLightTask_t *task, GreenLightTaskProfile_t *profil
     task->profile = profile;
     GuidanceTargetSmoother_Init(&task->measurement_smoother,
                                 &profile->params.measurement_smoother_config);
+    task->last_valid_measurement.x = GUIDANCE_NO_TARGET_COORDINATE;
+    task->last_valid_measurement.y = GUIDANCE_NO_TARGET_COORDINATE;
+    task->last_valid_measurement.area = 0U;
+    task->has_last_valid_measurement = false;
 
     TaskAction_Init(&task->acquire_measurement_action,
                     profile,

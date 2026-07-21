@@ -15,10 +15,10 @@
 #define GREEN_LIGHT_TASK_SETPOINT_USE_IMAGE_CENTER 0U
 
 /* 固定目标点 X 坐标，单位 px；仅当 GREEN_LIGHT_TASK_SETPOINT_USE_IMAGE_CENTER 为 0 时生效。 */
-#define GREEN_LIGHT_TASK_SETPOINT_X 160U
+#define GREEN_LIGHT_TASK_SETPOINT_X 120U
 
 /* 固定目标点 Y 坐标，单位 px；仅当 GREEN_LIGHT_TASK_SETPOINT_USE_IMAGE_CENTER 为 0 时生效。 */
-#define GREEN_LIGHT_TASK_SETPOINT_Y 140U
+#define GREEN_LIGHT_TASK_SETPOINT_Y 200U
 
 /* 任务与控制主循环周期，单位 ms；同时影响 IMU 更新、控制输出和 telemetry 刷新节奏。 */
 #define GREEN_LIGHT_TASK_LOOP_PERIOD_MS 10U
@@ -37,6 +37,9 @@ typedef struct
 {
     GreenLightTaskProfile_t *profile;
     GuidanceTargetSmoother_t measurement_smoother;
+
+    GuidanceMeasurement_t last_valid_measurement;
+    bool has_last_valid_measurement;
 
     TaskAction_t acquire_measurement_action;
     TaskAction_t compute_delta_action;

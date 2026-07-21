@@ -3,6 +3,7 @@ import time
 import ustruct
 from pyb import UART, USB_VCP
 from camera_config import (
+    TARGET_EXPOSURE_SWITCH_FLAG,
     SD_RECORD_FLAG,
     SD_RECORD_SEGMENT_DURATION_MS,
     SD_RECORD_MAX_SEGMENTS,
@@ -62,6 +63,11 @@ UART_PORT = 1
 UART_BAUDRATE = 115200
 MEASUREMENT_IMAGE_SIZE_STARTUP_FRAMES = 30
 MANUAL_EXPOSURE_US = 250
+SEARCH_EXPOSURE_US = 1000
+LOCKED_EXPOSURE_US = 300
+LOCK_EXPOSURE_AREA_THRESHOLD = 500
+LOCKED_EXPOSURE_MAX_MISSED_FRAMES = 50
+EXPOSURE_SETTLE_FRAMES = 3
 USB_DEBUG_POLL_INTERVAL_MS = 250
 USB_PREVIEW_JPEG_QUALITY = 70
 USB_PREVIEW_FPS_LIMIT = 12
@@ -275,6 +281,9 @@ def main():
             min_free_bytes=SD_RECORD_MIN_FREE_BYTES,
         )
 
+    target_exposure_switch_enabled = TARGET_EXPOSURE_SWITCH_FLAG
+    initial_exposure_us = SEARCH_EXPOSURE_US if target_exposure_switch_enabled else MANUAL_EXPOSURE_US
+
     sensor.reset()
     sensor.set_pixformat(sensor.RGB565)
     sensor.set_framesize(sensor.QVGA)
@@ -282,19 +291,41 @@ def main():
     sensor.skip_frames(time=2000)
     sensor.set_auto_gain(False)
     sensor.set_auto_whitebal(False)
-    sensor.set_auto_exposure(False, exposure_us=MANUAL_EXPOSURE_US)
+    sensor.set_auto_exposure(False, exposure_us=initial_exposure_us)
     sensor.skip_frames(time=500)
+    sensor.set_transpose(True)
+    sensor.set_hmirror(True)
 
     uart = UART(UART_PORT, UART_BAUDRATE, timeout_char=1000)
     usb_vcp = USB_VCP()
     clock = time.clock()
     detector = GreenLightDetector()
+    detector_params = detector.params
+    detector_default_max_missed_frames = detector_params["max_missed_frames"]
+    set_detector_full_scan_fallback = detector.set_full_scan_fallback_enabled
     recorder = make_sd_recorder()
+    sensor_snapshot = sensor.snapshot
+    process_frame = detector.process_frame
+    send_measurement = detector.send_measurement
+    set_led = set_led_state
+    set_fixed_exposure_api = sensor.set_auto_exposure
+    no_target_coordinate = 0xFFFF
+    startup_image_size_frames = MEASUREMENT_IMAGE_SIZE_STARTUP_FRAMES
+    cached_image_width = 0
+    cached_image_height = 0
+    search_exposure_us = SEARCH_EXPOSURE_US
+    locked_exposure_us = LOCKED_EXPOSURE_US
+    lock_area_threshold = LOCK_EXPOSURE_AREA_THRESHOLD
+    locked_max_missed_frames = LOCKED_EXPOSURE_MAX_MISSED_FRAMES
+    exposure_settle_frame_count = EXPOSURE_SETTLE_FRAMES
     usb_debug_active = False
     usb_preview_requested = False
     last_usb_debug_poll_ms = 0
     next_usb_preview_frame_ms = time.ticks_ms()
     usb_preview_min_interval_ms = max(1, 1000 // USB_PREVIEW_FPS_LIMIT)
+    exposure_locked = False
+    exposure_missed_frames = 0
+    exposure_settle_frames = 0
     frame_index = 0
 
     while True:
@@ -308,39 +339,65 @@ def main():
             usb_debug_active = next_usb_debug_active
 
         clock.tick()
-        img = sensor.snapshot()
-        image_width = img.width()
-        image_height = img.height()
+        img = sensor_snapshot()
+        if cached_image_width == 0:
+            cached_image_width = img.width()
+            cached_image_height = img.height()
 
-        result = detector.process_frame(img)
-        include_image_size = should_send_measurement_image_size(frame_index)
+        result = process_frame(img)
+        include_image_size = frame_index < startup_image_size_frames
 
         if result is None:
-            set_led_state(target_detected=False)
-            detector.send_measurement(
+            if target_exposure_switch_enabled:
+                if exposure_settle_frames > 0:
+                    exposure_settle_frames -= 1
+                elif exposure_locked:
+                    exposure_missed_frames += 1
+                    if exposure_missed_frames > locked_max_missed_frames:
+                        set_detector_full_scan_fallback(True)
+                        detector_params["max_missed_frames"] = detector_default_max_missed_frames
+                        set_fixed_exposure_api(False, exposure_us=search_exposure_us)
+                        exposure_locked = False
+                        exposure_missed_frames = 0
+                        exposure_settle_frames = exposure_settle_frame_count
+            set_led(target_detected=False)
+            send_measurement(
                 uart,
-                0xFFFF,
-                0xFFFF,
+                no_target_coordinate,
+                no_target_coordinate,
                 0,
-                image_width,
-                image_height,
+                cached_image_width,
+                cached_image_height,
                 include_image_size=include_image_size,
             )
         else:
-            set_led_state(target_detected=True)
-            detector.send_measurement(
+            area = result["area"]
+            if target_exposure_switch_enabled:
+                if exposure_settle_frames > 0:
+                    exposure_settle_frames -= 1
+                elif exposure_locked:
+                    exposure_missed_frames = 0
+                elif area > lock_area_threshold:
+                    set_fixed_exposure_api(False, exposure_us=locked_exposure_us)
+                    set_detector_full_scan_fallback(False)
+                    detector_params["max_missed_frames"] = locked_max_missed_frames
+                    exposure_locked = True
+                    exposure_missed_frames = 0
+                    exposure_settle_frames = exposure_settle_frame_count
+            set_led(target_detected=True)
+            send_measurement(
                 uart,
                 result["center_x"],
                 result["center_y"],
-                result["area"],
-                image_width,
-                image_height,
+                area,
+                cached_image_width,
+                cached_image_height,
                 include_image_size=include_image_size,
             )
 
         frame_metadata = None
         if recorder is not None or usb_debug_active:
-            frame_metadata = make_frame_metadata(detector, result, image_width, image_height, now_ms, frame_index)
+            frame_metadata = make_frame_metadata(detector, result, cached_image_width, cached_image_height, now_ms, frame_index)
         if recorder is not None:
             recorder.add_frame(img, frame_metadata)
 

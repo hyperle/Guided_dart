@@ -124,6 +124,6 @@ void GuidanceController_Solve(GuidanceController_t *controller);
 void GuidanceController_ApplyOutputs(const GuidanceController_t *controller);
 void GuidanceController_RunControl(GuidanceController_t *controller);
 void GuidanceController_RunOnce(GuidanceController_t *controller);
-void Controller_Left_Turn(GuidanceController_t *controller);
-void Controller_Up_Turn(GuidanceController_t *controller);
+void Controller_Horizontal_Turn(GuidanceController_t *controller);
+void Controller_Vertical_Turn(GuidanceController_t *controller);
 #endif

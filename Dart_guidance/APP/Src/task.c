@@ -2,6 +2,46 @@
 
 #include <stddef.h>
 
+void TaskHook_Reset(TaskHook_t *hook)
+{
+    if (hook == NULL) {
+        return;
+    }
+
+    hook->pending = false;
+    hook->id = TASK_HOOK_ID_NONE;
+    hook->source = NULL;
+}
+
+bool TaskHook_Emit(TaskHook_t *hook, TaskHookId_t hook_id, void *source)
+{
+    if ((hook == NULL) || (hook_id == TASK_HOOK_ID_NONE) || hook->pending) {
+        return false;
+    }
+
+    hook->pending = true;
+    hook->id = hook_id;
+    hook->source = source;
+    return true;
+}
+
+bool TaskHook_Consume(TaskHook_t *hook, TaskHookId_t *hook_id, void **source)
+{
+    if ((hook == NULL) || !hook->pending) {
+        return false;
+    }
+
+    if (hook_id != NULL) {
+        *hook_id = hook->id;
+    }
+    if (source != NULL) {
+        *source = hook->source;
+    }
+
+    TaskHook_Reset(hook);
+    return true;
+}
+
 void TaskAction_Init(TaskAction_t *action,
                      void *profile,
                      void *context,
@@ -93,6 +133,9 @@ void TaskSequence_Init(TaskSequence_t *sequence, TaskSequenceSlot_t *slots, size
     sequence->slot_count = slot_count;
     sequence->current_index = 0U;
     sequence->interrupt_depth = 0U;
+    TaskHook_Reset(&sequence->hook);
+    sequence->on_hook = NULL;
+    sequence->hook_context = NULL;
     for (index = 0U; index < TASK_INTERRUPT_STACK_CAPACITY; ++index) {
         sequence->interrupt_stack[index] = NULL;
     }
@@ -108,6 +151,7 @@ void TaskSequence_Reset(TaskSequence_t *sequence)
 
     sequence->current_index = 0U;
     sequence->interrupt_depth = 0U;
+    TaskHook_Reset(&sequence->hook);
 
     for (index = 0U; index < sequence->slot_count; ++index) {
         if ((sequence->slots != NULL) && (sequence->slots[index].action != NULL)) {
@@ -137,6 +181,56 @@ bool TaskSequence_PushInterrupt(TaskSequence_t *sequence, TaskAction_t *interrup
     sequence->interrupt_stack[sequence->interrupt_depth] = interrupt_action;
     sequence->interrupt_depth += 1U;
     return true;
+}
+
+void TaskSequence_SetHookNotify(TaskSequence_t *sequence,
+                                TaskHookNotifyFn_t on_hook,
+                                void *hook_context)
+{
+    if (sequence == NULL) {
+        return;
+    }
+
+    sequence->on_hook = on_hook;
+    sequence->hook_context = hook_context;
+}
+
+bool TaskSequence_EmitHook(TaskSequence_t *sequence, TaskHookId_t hook_id)
+{
+    bool handled;
+
+    if (sequence == NULL) {
+        return false;
+    }
+
+    if (!TaskHook_Emit(&sequence->hook, hook_id, sequence)) {
+        return false;
+    }
+
+    if (sequence->on_hook == NULL) {
+        return true;
+    }
+
+    handled = sequence->on_hook(sequence->hook_context, &sequence->hook);
+    if (handled) {
+        TaskHook_Reset(&sequence->hook);
+    }
+
+    return true;
+}
+
+bool TaskSequence_HasHook(const TaskSequence_t *sequence)
+{
+    return (sequence != NULL) && sequence->hook.pending;
+}
+
+bool TaskSequence_ConsumeHook(TaskSequence_t *sequence, TaskHookId_t *hook_id, void **source)
+{
+    if (sequence == NULL) {
+        return false;
+    }
+
+    return TaskHook_Consume(&sequence->hook, hook_id, source);
 }
 
 TaskActionResult_t TaskSequence_Tick(TaskSequence_t *sequence)

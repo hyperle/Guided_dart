@@ -3,20 +3,25 @@ MEASUREMENT_LEGACY_LENGTH = 0x06
 MEASUREMENT_EXTENDED_LENGTH = 0x0A
 MEASUREMENT_LENGTH = MEASUREMENT_EXTENDED_LENGTH
 
+try:
+    from camera_config import BLOB_RING_DETECTION_FLAG
+except ImportError:
+    BLOB_RING_DETECTION_FLAG = 1
+
 DEFAULT_DETECTOR_PARAMS = {
-    "threshold_l_min": 12,
+    "threshold_l_min": 20,
     "threshold_l_max": 100,
     "threshold_a_min": -110,
     "threshold_a_max": -14,
     "threshold_b_min": -40,
     "threshold_b_max": 64,
-    "min_area": 100,
-    "max_area": 36000,
+    "min_area": 20,
+    "max_area": 3600,
     "roundness_min_x1000": 300,
     "merge_margin": 0,
     "track_window_radius_px": 120,
     "max_missed_frames": 6,
-    "ring_detection_enabled": 1,
+    "ring_detection_enabled": BLOB_RING_DETECTION_FLAG,
     "ring_min_roundness_x1000": 500,
     "ring_min_aspect_x100": 75,
     "ring_min_fill_x100": 10,
@@ -26,7 +31,7 @@ DEFAULT_DETECTOR_PARAMS = {
     "ring_center_min_brightness": 500,
     "ring_center_max_channel_delta": 80,
     "ring_min_outer_diameter_px": 12,
-    "threshold_small_l_min": 12,
+    "threshold_small_l_min": 20,
     "threshold_small_l_max": 100,
     "threshold_small_a_min": -110,
     "threshold_small_a_max": -14,
@@ -84,8 +89,8 @@ _SOLID_SAMPLE_OFFSETS_X100 = (
 _ROI_MIN_HALF_SIZE_PX = 10
 _ROI_RADIUS_SCALE_X100 = 150
 _ROI_RADIUS_PAD_PX = 2
-_BLOB_X_STRIDE = 3
-_BLOB_Y_STRIDE = 2
+_BLOB_X_STRIDE = 2
+_BLOB_Y_STRIDE = 1
 _RING_INNER_MIN_HITS = 6
 _RING_INNER_MIN_RADIUS_X100 = 20
 _RING_INNER_MAX_RADIUS_X100 = 85
@@ -95,7 +100,7 @@ _BACKGROUND_OUTER_PAD_MIN_PX = 8
 _MIN_BACKGROUND_SAMPLES = 6
 _EMISSION_MODE_SOLID = 0
 _EMISSION_MODE_RING = 1
-_MIN_SOLID_GREEN_SAMPLES_X100 = 35
+_MIN_SOLID_GREEN_SAMPLES_X100 = 50
 _MIN_RING_GREEN_SAMPLES_X100 = 35
 _HARD_MIN_GREEN_SAMPLES_X100 = 20
 _RING_SOLID_LIKE_FILL_X100 = 70
@@ -175,7 +180,11 @@ class GreenLightDetector:
         self._last_radius = None
         self._missed_frames = 0
         self._last_area = None
+        self._full_scan_fallback_enabled = True
         self.last_debug = None
+
+    def set_full_scan_fallback_enabled(self, enabled):
+        self._full_scan_fallback_enabled = bool(enabled)
 
     def threshold_tuple(self):
         return (
@@ -691,6 +700,8 @@ class GreenLightDetector:
         return score
 
     def _should_skip_ring_check(self, solid, metrics):
+        if self.params["ring_detection_enabled"] == 0:
+            return True
         return (solid is not None and
                 self.params["ring_min_center_white_x100"] <= 0 and
                 metrics["green_fill_x100"] > _RING_SOLID_LIKE_FILL_X100)
@@ -761,7 +772,7 @@ class GreenLightDetector:
                               margin=merge_margin)
 
     def _full_scan_due(self, roi, best_target):
-        if roi is None:
+        if roi is None or not self._full_scan_fallback_enabled:
             return False
         return best_target is None or self._missed_frames > 0
 

@@ -30,8 +30,8 @@ green_light:
   openmv_threshold_a_max: -14
   openmv_threshold_b_min: -40
   openmv_threshold_b_max: 64
-  openmv_min_area: 100
-  openmv_max_area: 36000
+  openmv_min_area: 5
+  openmv_max_area: 2000
   openmv_roundness_min_x1000: 300
   openmv_merge_margin: 0
   openmv_track_window_radius_px: 120
