@@ -97,6 +97,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     APP/Src/pixel_delta_pid_action.c
     APP/Src/imu_velocity_recovery_action.c
     APP/Src/timed_turn_pulse_action.c
+    APP/Src/guidance_planner.c
     APP/Src/control_mixer.c
     APP/Src/guidance_controller.c
 )

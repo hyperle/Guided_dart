@@ -28,6 +28,7 @@
 /* USER CODE BEGIN Includes */
 #include "control_mixer.h"
 #include "guidance_controller.h"
+#include "guidance_planner.h"
 #include "green_light_task.hpp"
 #include "esp32_link.h"
 #include "imu.h"
@@ -60,6 +61,7 @@ static Esp32Link_t esp32_link;
 static GuidanceTelemetry_t esp32_telemetry;
 static GuidanceController_Config_t guidance_controller_config;
 static GuidanceController_t guidance_controller;
+static GuidancePlanner_t guidance_planner;
 static ControlMixer_Config_t control_mixer_config;
 static ControlMixer_t control_mixer;
 static PixelDeltaPwmPidActionProfile_t pixel_delta_pid_profile;
@@ -291,6 +293,7 @@ int main(void)
 
   GreenLightTask_Init(&green_light_task, &green_light_task_profile);
   PixelDeltaPwmPidAction_Init(&pixel_delta_pid_action, &pixel_delta_pid_profile);
+  GuidancePlanner_Init(&guidance_planner);
   guidance_last_loop_tick_ms = HAL_GetTick();
   guidance_target_no_update_ticks = 0U;
   /* USER CODE END 2 */
@@ -316,89 +319,161 @@ int main(void)
     }
 
     {
+      GuidancePlannerInput_t planner_input;
+      const GuidancePlannerOutput_t *planner_output;
       TaskActionResult_t task_result;
       bool target_lost = false;
+      bool imu_data_valid;
+      uint16_t planner_setpoint_x;
+      uint16_t planner_setpoint_y;
 
-    (void)Guidance_UpdateImuAndPublishMotion();
+      imu_data_valid = Guidance_UpdateImuAndPublishMotion();
 
-    green_light_task_profile.input.upstream_measurement_ready =
-        uart_receiver_get_data(&green_light_task_profile.input.upstream_measurement.x,
-                               &green_light_task_profile.input.upstream_measurement.y,
-                               &green_light_task_profile.input.upstream_measurement.area);
-    if (!green_light_task_profile.input.upstream_measurement_ready) {
-      green_light_task_profile.input.upstream_measurement.x = GUIDANCE_NO_TARGET_COORDINATE;
-      green_light_task_profile.input.upstream_measurement.y = GUIDANCE_NO_TARGET_COORDINATE;
-      green_light_task_profile.input.upstream_measurement.area = 0U;
-    }
+      green_light_task_profile.input.upstream_measurement_ready =
+          uart_receiver_get_data(&green_light_task_profile.input.upstream_measurement.x,
+                                 &green_light_task_profile.input.upstream_measurement.y,
+                                 &green_light_task_profile.input.upstream_measurement.area);
+      if (!green_light_task_profile.input.upstream_measurement_ready) {
+        green_light_task_profile.input.upstream_measurement.x = GUIDANCE_NO_TARGET_COORDINATE;
+        green_light_task_profile.input.upstream_measurement.y = GUIDANCE_NO_TARGET_COORDINATE;
+        green_light_task_profile.input.upstream_measurement.area = 0U;
+      }
 
-    task_result = GreenLightTask_Tick(&green_light_task);
-    pixel_delta_pid_profile.params.horizontal_pwm_pid_config =
-        guidance_controller_config.horizontal_pwm_pid_config;
-    pixel_delta_pid_profile.params.vertical_pwm_pid_config =
-        guidance_controller_config.vertical_pwm_pid_config;
-    pixel_delta_pid_profile.params.output_limit_us = GUIDANCE_HORIZONTAL_PID_OUTPUT_LIMIT_US;
-    pixel_delta_pid_profile.params.vertical_output_limit_us = GUIDANCE_VERTICAL_PID_OUTPUT_LIMIT_US;
+      task_result = GreenLightTask_Tick(&green_light_task);
 
-    if ((task_result == TASK_ACTION_SUCCESS) && green_light_task_profile.output.target_detected) {
-      TaskActionResult_t control_result;
+      planner_input.imu_data_valid = imu_data_valid;
+      planner_input.accel_x_g = guidance_imu.accel_x;
+      planner_input.accel_y_g = guidance_imu.accel_y;
+      planner_input.accel_z_g = guidance_imu.accel_z;
+      planner_input.gyro_x_dps = 0.0f;
+      planner_input.gyro_y_dps = 0.0f;
+      planner_input.gyro_z_dps = 0.0f;
+      if (imu_data_valid) {
+        imu_get_gyro(&guidance_imu,
+                     &planner_input.gyro_x_dps,
+                     &planner_input.gyro_y_dps,
+                     &planner_input.gyro_z_dps);
+      }
+      planner_input.accel_axis = guidance_imu.config.dart_launch_accel_axis;
+      planner_input.accel_threshold_mps2 =
+          guidance_imu.config.dart_launch_accel_threshold_mps2;
+      planner_input.target_delta = green_light_task_profile.output.delta;
+      planner_input.target_detected =
+          ((task_result == TASK_ACTION_SUCCESS) && green_light_task_profile.output.target_detected);
+      planner_input.yaw_recovery_delta = planner_input.target_delta;
+      planner_input.yaw_recovery_target_available = planner_input.target_detected;
+      if (!planner_input.yaw_recovery_target_available &&
+          green_light_task.has_last_valid_measurement) {
+        planner_setpoint_x = green_light_task_profile.input.setpoint.x;
+        planner_setpoint_y = green_light_task_profile.input.setpoint.y;
+        if (planner_setpoint_x == GUIDANCE_NO_TARGET_COORDINATE) {
+          planner_setpoint_x =
+              (uint16_t)(green_light_task_profile.input.measurement_width / 2U);
+        }
+        if (planner_setpoint_y == GUIDANCE_NO_TARGET_COORDINATE) {
+          planner_setpoint_y =
+              (uint16_t)(green_light_task_profile.input.measurement_height / 2U);
+        }
+        planner_input.yaw_recovery_delta.delta_x =
+            (int16_t)((int32_t)green_light_task.last_valid_measurement.x -
+                      (int32_t)planner_setpoint_x);
+        planner_input.yaw_recovery_delta.delta_y =
+            (int16_t)((int32_t)planner_setpoint_y -
+                      (int32_t)green_light_task.last_valid_measurement.y);
+        planner_input.yaw_recovery_target_available = true;
+      }
+      (void)GuidancePlanner_Tick(&guidance_planner, &planner_input);
+      planner_output = &guidance_planner.output;
 
-      guidance_target_no_update_ticks = 0U;
-      pixel_delta_pid_profile.input.target_delta = green_light_task_profile.output.delta;
-      pixel_delta_pid_profile.input.target_detected = true;
+      if (!planner_output->default_pid_task_enabled) {
+        if (planner_output->timed_turn_started ||
+            planner_output->yaw_recovery_started ||
+            planner_output->flight_end_detected) {
+          PixelDeltaPwmPidAction_Reset(&pixel_delta_pid_action);
+          guidance_target_no_update_ticks = GUIDANCE_TARGET_LOST_NO_UPDATE_TICKS;
+        }
+        ControlMixer_ClearContribution(&control_mixer);
+        if (planner_output->override_pwm_active &&
+            (planner_output->override_pulse_us != NULL)) {
+          control_mixer.output_pulse_us = *planner_output->override_pulse_us;
+        } else if (planner_output->override_contribution != NULL) {
+          ControlMixer_SetContribution(&control_mixer,
+                                       planner_output->override_contribution);
+          ControlMixer_Solve(&control_mixer);
+        } else {
+          ControlMixer_Solve(&control_mixer);
+        }
+        ControlMixer_ApplyOutputs(&control_mixer);
+        continue;
+      }
 
-      if (guidance_controller_config.control_mode == GUIDANCE_CONTROL_MODE_HORIZONTAL_PWM_PID) {
-        control_result = PixelDeltaPwmPidAction_Tick(&pixel_delta_pid_action);
-        if (control_result == TASK_ACTION_FAILURE) {
+      pixel_delta_pid_profile.params.horizontal_pwm_pid_config =
+          guidance_controller_config.horizontal_pwm_pid_config;
+      pixel_delta_pid_profile.params.vertical_pwm_pid_config =
+          guidance_controller_config.vertical_pwm_pid_config;
+      pixel_delta_pid_profile.params.output_limit_us = GUIDANCE_HORIZONTAL_PID_OUTPUT_LIMIT_US;
+      pixel_delta_pid_profile.params.vertical_output_limit_us = GUIDANCE_VERTICAL_PID_OUTPUT_LIMIT_US;
+
+      if ((task_result == TASK_ACTION_SUCCESS) && green_light_task_profile.output.target_detected) {
+        TaskActionResult_t control_result;
+
+        guidance_target_no_update_ticks = 0U;
+        pixel_delta_pid_profile.input.target_delta = green_light_task_profile.output.delta;
+        pixel_delta_pid_profile.input.target_detected = true;
+
+        if (guidance_controller_config.control_mode == GUIDANCE_CONTROL_MODE_HORIZONTAL_PWM_PID) {
+          control_result = PixelDeltaPwmPidAction_Tick(&pixel_delta_pid_action);
+          if (control_result == TASK_ACTION_FAILURE) {
+            PixelDeltaPwmPidAction_Reset(&pixel_delta_pid_action);
+            ControlMixer_ClearContribution(&control_mixer);
+          } else {
+            ControlMixer_SetContribution(&control_mixer,
+                                         &pixel_delta_pid_profile.output.contribution);
+          }
+          ControlMixer_Solve(&control_mixer);
+          ControlMixer_ApplyOutputs(&control_mixer);
+        } else {
           PixelDeltaPwmPidAction_Reset(&pixel_delta_pid_action);
           ControlMixer_ClearContribution(&control_mixer);
+          ControlMixer_Solve(&control_mixer);
+          ControlMixer_ApplyOutputs(&control_mixer);
+        }
+      } else {
+        target_lost = (task_result == TASK_ACTION_FAILURE);
+
+        if (task_result == TASK_ACTION_RUNNING) {
+          if (guidance_target_no_update_ticks < GUIDANCE_TARGET_LOST_NO_UPDATE_TICKS) {
+            guidance_target_no_update_ticks += 1U;
+          }
+          target_lost = (guidance_target_no_update_ticks >= GUIDANCE_TARGET_LOST_NO_UPDATE_TICKS);
         } else {
-          ControlMixer_SetContribution(&control_mixer,
-                                       &pixel_delta_pid_profile.output.contribution);
+          guidance_target_no_update_ticks = GUIDANCE_TARGET_LOST_NO_UPDATE_TICKS;
+          target_lost = true;
         }
-        ControlMixer_Solve(&control_mixer);
-        ControlMixer_ApplyOutputs(&control_mixer);
-      } else {
-        PixelDeltaPwmPidAction_Reset(&pixel_delta_pid_action);
-        ControlMixer_ClearContribution(&control_mixer);
-        ControlMixer_Solve(&control_mixer);
-        ControlMixer_ApplyOutputs(&control_mixer);
-      }
-    } else {
-      target_lost = (task_result == TASK_ACTION_FAILURE);
 
-      if (task_result == TASK_ACTION_RUNNING) {
-        if (guidance_target_no_update_ticks < GUIDANCE_TARGET_LOST_NO_UPDATE_TICKS) {
-          guidance_target_no_update_ticks += 1U;
+        if ((guidance_controller_config.control_mode != GUIDANCE_CONTROL_MODE_HORIZONTAL_PWM_PID) ||
+            target_lost) {
+          PixelDeltaPwmPidAction_Reset(&pixel_delta_pid_action);
+          ControlMixer_ClearContribution(&control_mixer);
+          ControlMixer_Solve(&control_mixer);
+          ControlMixer_ApplyOutputs(&control_mixer);
         }
-        target_lost = (guidance_target_no_update_ticks >= GUIDANCE_TARGET_LOST_NO_UPDATE_TICKS);
-      } else {
-        guidance_target_no_update_ticks = GUIDANCE_TARGET_LOST_NO_UPDATE_TICKS;
-        target_lost = true;
       }
 
-      if ((guidance_controller_config.control_mode != GUIDANCE_CONTROL_MODE_HORIZONTAL_PWM_PID) ||
-          target_lost) {
-        PixelDeltaPwmPidAction_Reset(&pixel_delta_pid_action);
-        ControlMixer_ClearContribution(&control_mixer);
-        ControlMixer_Solve(&control_mixer);
-        ControlMixer_ApplyOutputs(&control_mixer);
+      if ((task_result != TASK_ACTION_RUNNING) || target_lost) {
+        esp32_telemetry.measurement = green_light_task_profile.output.measurement;
+        esp32_telemetry.setpoint = green_light_task_profile.input.setpoint;
+        esp32_telemetry.delta = green_light_task_profile.output.delta;
+        esp32_telemetry.image_width = green_light_task_profile.input.measurement_width;
+        esp32_telemetry.image_height = green_light_task_profile.input.measurement_height;
+        esp32_telemetry.measurement_radius_px =
+            GuidanceTelemetry_EstimateRadiusPx(&green_light_task_profile.output.measurement);
+        esp32_telemetry.relative_attitude_error = guidance_controller.relative_attitude_error;
+        esp32_telemetry.target_detected = green_light_task_profile.output.target_detected;
+        esp32_telemetry.task_finished = true;
+        esp32_telemetry.task_success = ((task_result == TASK_ACTION_SUCCESS) && !target_lost);
+        (void)Esp32Link_PublishGuidanceTelemetry(&esp32_link, &esp32_telemetry);
       }
-    }
-
-    if ((task_result != TASK_ACTION_RUNNING) || target_lost) {
-      esp32_telemetry.measurement = green_light_task_profile.output.measurement;
-      esp32_telemetry.setpoint = green_light_task_profile.input.setpoint;
-      esp32_telemetry.delta = green_light_task_profile.output.delta;
-      esp32_telemetry.image_width = green_light_task_profile.input.measurement_width;
-      esp32_telemetry.image_height = green_light_task_profile.input.measurement_height;
-      esp32_telemetry.measurement_radius_px =
-          GuidanceTelemetry_EstimateRadiusPx(&green_light_task_profile.output.measurement);
-      esp32_telemetry.relative_attitude_error = guidance_controller.relative_attitude_error;
-      esp32_telemetry.target_detected = green_light_task_profile.output.target_detected;
-      esp32_telemetry.task_finished = true;
-      esp32_telemetry.task_success = ((task_result == TASK_ACTION_SUCCESS) && !target_lost);
-      (void)Esp32Link_PublishGuidanceTelemetry(&esp32_link, &esp32_telemetry);
-    }
     }
   }
   /* USER CODE END 3 */

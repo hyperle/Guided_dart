@@ -11,8 +11,8 @@
 | `GUIDANCE_DEFAULT_CONTROL_MODE` | `guidance_controller.h:24` | `GUIDANCE_CONTROL_MODE_HORIZONTAL_PWM_PID` | 上电默认控制模式。可选: `FIXED_PWM`=1 固定零点, `HORIZONTAL_PWM_PID`=2 水平闭环 |
 | `GUIDANCE_HORIZONTAL_PID_INVERT_OUTPUT` | `guidance_controller.h:48` | `false` | PID 输出方向翻转。`true` 反转 delta_x→PWM 正负号 |
 | `GREEN_LIGHT_TASK_SETPOINT_USE_IMAGE_CENTER` | `green_light_task.hpp:25` | `0U` | setpoint 使用策略：`0`=固定坐标, `1`=画面中心自动 |
-| `IMU_VELOCITY_RECOVERY_ACTION_ENABLE_IN_MAIN` | `imu_velocity_recovery_action.hpp:27` | `0` | IMU 速度恢复 action 是否接入主循环。默认关闭 |
-| `TIMED_TURN_PULSE_ACTION_ENABLE_IN_MAIN` | `timed_turn_pulse_action.hpp:25` | `0` | 定时脉冲 action 是否接入主循环。默认关闭 |
+| `GUIDANCE_PLANNER_LAUNCH_SAMPLE_WAIT_TICKS` | `guidance_planner.h` | `5U` | IMU 全阈值触发后，planner 输出 base PWM 并锁存三轴角速度前等待的 tick 数 |
+| `GUIDANCE_PLANNER_FLIGHT_END_ACCEL_THRESHOLD_RATIO` | `guidance_planner.h` | `0.5f` | 飞行结束边沿阈值比例，乘以 IMU 发射阈值使用 |
 | `GUIDANCE_TARGET_SMOOTHER_DEFAULT_ENABLE` | `target_smoother.h:16` | `1U` | 测量值 alpha-beta 平滑器开关。`0`=直通原始测量值 |
 
 ---
@@ -106,35 +106,40 @@
 
 ---
 
-## 7. IMU 速度恢复 Action (当前未接入主循环)
+## 7. IMU 速度恢复 Action / 水平 yaw recovery
 
 | 宏 | 文件 | 默认值 | 说明 |
 |---|---|---|---|
-| `IMU_VELOCITY_RECOVERY_DELTA_TO_TICK_SCALE` | `imu_velocity_recovery_action.hpp:30` | `0.10f` | \|delta_x\| → kick tick 周期缩放 |
-| `IMU_VELOCITY_RECOVERY_MIN_TICK_PERIOD` | `imu_velocity_recovery_action.hpp:32` | `1U` | 最小 kick tick 周期 |
-| `IMU_VELOCITY_RECOVERY_MAX_TICK_PERIOD` | `imu_velocity_recovery_action.hpp:33` | `60U` | 最大 kick tick 周期 |
-| `IMU_VELOCITY_RECOVERY_KICK_PWM_US` | `imu_velocity_recovery_action.hpp:36` | `200.0f` | Kick 脉冲幅值 (us)，带 delta_x 符号方向 |
-| `IMU_VELOCITY_RECOVERY_PID_KP` | `imu_velocity_recovery_action.hpp:39` | `2.0f` | 速度恢复 PID 比例增益 |
-| `IMU_VELOCITY_RECOVERY_PID_KI` | `imu_velocity_recovery_action.hpp:40` | `0.0f` | 速度恢复 PID 积分增益 |
-| `IMU_VELOCITY_RECOVERY_PID_KD` | `imu_velocity_recovery_action.hpp:41` | `0.0f` | 速度恢复 PID 微分增益 |
-| `IMU_VELOCITY_RECOVERY_PID_INTEGRAL_LIMIT` | `imu_velocity_recovery_action.hpp:43` | `100.0f` | 速度恢复 PID 积分限幅 |
-| `IMU_VELOCITY_RECOVERY_PID_OUTPUT_LIMIT_US` | `imu_velocity_recovery_action.hpp:45` | `300.0f` | 速度恢复 PID 输出限幅 (us) |
-| `IMU_VELOCITY_RECOVERY_SUCCESS_BAND_DPS` | `imu_velocity_recovery_action.hpp:47` | `5.0f` | 角速度误差进入此范围视为恢复成功 (deg/s) |
-| `IMU_VELOCITY_RECOVERY_SUCCESS_HOLD_TICKS` | `imu_velocity_recovery_action.hpp:49` | `3U` | 连续满足 recovery band 的 tick 数后才返回 SUCCESS |
-| `IMU_VELOCITY_RECOVERY_VELOCITY_SAMPLE_WAIT_TICKS` | `imu_velocity_recovery_action.hpp:52` | `20U` | Kick 后等待 tick 数再采样 IMU 速度闭环 |
+| `IMU_VELOCITY_RECOVERY_DELTA_TO_TICK_SCALE` | `imu_velocity_recovery_action.hpp` | `0.10f` | `abs(delta_x)` 到 sweep tick 周期的缩放 |
+| `IMU_VELOCITY_RECOVERY_MIN_TICK_PERIOD` | `imu_velocity_recovery_action.hpp` | `2U` | 非零 delta 时 sweep 最小 tick 周期 |
+| `IMU_VELOCITY_RECOVERY_MAX_TICK_PERIOD` | `imu_velocity_recovery_action.hpp` | `60U` | sweep 最大 tick 周期 |
+| `IMU_VELOCITY_RECOVERY_SWEEP_START_PWM_US` | `imu_velocity_recovery_action.hpp` | `120.0f` | 正向语义下 sweep 起始水平增量 |
+| `IMU_VELOCITY_RECOVERY_SWEEP_END_PWM_US` | `imu_velocity_recovery_action.hpp` | `-120.0f` | 正向语义下 sweep 结束水平增量 |
+| `IMU_VELOCITY_RECOVERY_PID_KP` | `imu_velocity_recovery_action.hpp` | `2.0f` | yaw 速度恢复 PID 比例增益 |
+| `IMU_VELOCITY_RECOVERY_PID_KI` | `imu_velocity_recovery_action.hpp` | `0.0f` | yaw 速度恢复 PID 积分增益 |
+| `IMU_VELOCITY_RECOVERY_PID_KD` | `imu_velocity_recovery_action.hpp` | `0.0f` | yaw 速度恢复 PID 微分增益 |
+| `IMU_VELOCITY_RECOVERY_PID_INTEGRAL_LIMIT` | `imu_velocity_recovery_action.hpp` | `100.0f` | yaw 速度恢复 PID 积分限幅 |
+| `IMU_VELOCITY_RECOVERY_PID_OUTPUT_LIMIT_US` | `imu_velocity_recovery_action.hpp` | `300.0f` | yaw 速度恢复 PID 输出限幅 (us) |
+| `IMU_VELOCITY_RECOVERY_SUCCESS_BAND_DPS` | `imu_velocity_recovery_action.hpp` | `5.0f` | yaw 角速度误差进入此范围视为恢复成功 (deg/s) |
+| `IMU_VELOCITY_RECOVERY_SUCCESS_HOLD_TICKS` | `imu_velocity_recovery_action.hpp` | `3U` | 连续满足 recovery band 的 tick 数后返回 SUCCESS |
+| `IMU_VELOCITY_RECOVERY_VELOCITY_SAMPLE_WAIT_TICKS` | `imu_velocity_recovery_action.hpp` | `20U` | planner 未提供锁存速度时的保护等待上限 |
 
 ---
 
-## 8. 定时脉冲 Turn Action (当前未接入主循环)
+## 8. 定时脉冲 Turn Action / Planner 触发
 
 | 宏 | 文件 | 默认值 | 说明 |
 |---|---|---|---|
-| `TIMED_TURN_PULSE_ACTION_MAX_SEGMENTS` | `timed_turn_pulse_action.hpp:28` | `3U` | 脉冲段表最大段数 |
-| `TIMED_TURN_PULSE_ACTION_DEFAULT_START_TICK` | `timed_turn_pulse_action.hpp:31` | `10U` | 段表起始 tick |
-| `TIMED_TURN_PULSE_ACTION_STAGE0_PERIOD_TICKS` | `timed_turn_pulse_action.hpp:33` | `50U` | 第 0 段持续 tick 数 |
-| `TIMED_TURN_PULSE_ACTION_STAGE1_PERIOD_TICKS` | `timed_turn_pulse_action.hpp:34` | `50U` | 第 1 段持续 tick 数 |
-| `TIMED_TURN_PULSE_ACTION_STAGE2_PERIOD_TICKS` | `timed_turn_pulse_action.hpp:35` | `50U` | 第 2 段持续 tick 数 |
-| `TIMED_TURN_PULSE_ACTION_DEFAULT_PWM_US` | `timed_turn_pulse_action.hpp:37` | `200.0f` | 每段默认 PWM 幅值 (us) |
+| `GUIDANCE_PLANNER_LAUNCH_SAMPLE_WAIT_TICKS` | `guidance_planner.h` | `5U` | IMU 全阈值触发后，planner 输出 base PWM 并等待锁存三轴角速度的 tick 数 |
+| `GUIDANCE_PLANNER_FLIGHT_END_ACCEL_THRESHOLD_RATIO` | `guidance_planner.h` | `0.5f` | 飞行结束边沿使用的阈值比例，实际阈值为配置发射阈值乘该比例 |
+| `TIMED_TURN_PULSE_ACTION_MAX_SEGMENTS` | `timed_turn_pulse_action.hpp` | `3U` | 竖直 turn 脉冲段表最大段数 |
+| `TIMED_TURN_PULSE_ACTION_DEFAULT_START_TICK` | `timed_turn_pulse_action.hpp` | `0U` | 竖直 turn action 内部第一段起始 tick；初始等待由 planner 执行 |
+| `TIMED_TURN_PULSE_ACTION_STAGE0_PERIOD_TICKS` | `timed_turn_pulse_action.hpp` | `70U` | 第 0 段下降斜坡 tick 间隔数 |
+| `TIMED_TURN_PULSE_ACTION_STAGE1_PERIOD_TICKS` | `timed_turn_pulse_action.hpp` | `15U` | 第 1 段 0 输出等待 tick 数 |
+| `TIMED_TURN_PULSE_ACTION_STAGE2_PERIOD_TICKS` | `timed_turn_pulse_action.hpp` | `30U` | 第 2 段上升斜坡 tick 间隔数 |
+| `TIMED_TURN_PULSE_ACTION_STAGE0_START_PWM_US` | `timed_turn_pulse_action.hpp` | `120.0f` | 第 0 段起始竖直增量 |
+| `TIMED_TURN_PULSE_ACTION_STAGE0_STEP_PWM_US` | `timed_turn_pulse_action.hpp` | `-4.0f` | 第 0 段每 tick 增量变化 |
+| `TIMED_TURN_PULSE_ACTION_STAGE2_STEP_PWM_US` | `timed_turn_pulse_action.hpp` | `4.0f` | 第 2 段每 tick 增量变化 |
 
 ---
 
@@ -219,5 +224,5 @@
 | 改加速度可信窗口 | `IMU_DEFAULT_ACCEL_TRUST_DELTA_G` | `imu.h:23` |
 | 改主循环频率 | `GREEN_LIGHT_TASK_LOOP_PERIOD_MS` | `green_light_task.hpp:33` |
 | 改遥测发布频率 | `ESP32_LINK_IMU_MOTION_PUBLISH_DIVIDER` | `esp32_link.h:24` |
-| 速度恢复 action 接入主循环 | `IMU_VELOCITY_RECOVERY_ACTION_ENABLE_IN_MAIN` | `imu_velocity_recovery_action.hpp:27` |
-| 定时脉冲 action 接入主循环 | `TIMED_TURN_PULSE_ACTION_ENABLE_IN_MAIN` | `timed_turn_pulse_action.hpp:25` |
+| 改 planner 启动后的速度锁存等待 | `GUIDANCE_PLANNER_LAUNCH_SAMPLE_WAIT_TICKS` | `guidance_planner.h` |
+| 改飞行结束加速度比例 | `GUIDANCE_PLANNER_FLIGHT_END_ACCEL_THRESHOLD_RATIO` | `guidance_planner.h` |

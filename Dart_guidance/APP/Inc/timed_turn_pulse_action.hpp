@@ -16,11 +16,17 @@ extern "C" {
 #endif
 
 #define TIMED_TURN_PULSE_ACTION_MAX_SEGMENTS 3U
-#define TIMED_TURN_PULSE_ACTION_DEFAULT_START_TICK 10U
-#define TIMED_TURN_PULSE_ACTION_STAGE0_PERIOD_TICKS 50U
-#define TIMED_TURN_PULSE_ACTION_STAGE1_PERIOD_TICKS 50U
-#define TIMED_TURN_PULSE_ACTION_STAGE2_PERIOD_TICKS 50U
-#define TIMED_TURN_PULSE_ACTION_DEFAULT_PWM_US 200.0f
+#define TIMED_TURN_PULSE_ACTION_DEFAULT_START_TICK 0U
+#define TIMED_TURN_PULSE_ACTION_STAGE0_PERIOD_TICKS 70U
+#define TIMED_TURN_PULSE_ACTION_STAGE1_PERIOD_TICKS 15U
+#define TIMED_TURN_PULSE_ACTION_STAGE2_PERIOD_TICKS 30U
+#define TIMED_TURN_PULSE_ACTION_STAGE0_START_PWM_US 120.0f
+#define TIMED_TURN_PULSE_ACTION_STAGE0_STEP_PWM_US -4.0f
+#define TIMED_TURN_PULSE_ACTION_STAGE1_PWM_US 0.0f
+#define TIMED_TURN_PULSE_ACTION_STAGE1_STEP_PWM_US 0.0f
+#define TIMED_TURN_PULSE_ACTION_STAGE2_START_PWM_US 0.0f
+#define TIMED_TURN_PULSE_ACTION_STAGE2_STEP_PWM_US 4.0f
+#define TIMED_TURN_PULSE_ACTION_DEFAULT_PWM_US TIMED_TURN_PULSE_ACTION_STAGE0_START_PWM_US
 
 typedef enum
 {
@@ -34,6 +40,7 @@ typedef struct
     uint16_t start_tick;
     uint16_t duration_ticks;
     float pwm_us;
+    float pwm_step_us;
 } TimedTurnPulseActionSegment_t;
 
 typedef struct
@@ -73,6 +80,10 @@ typedef struct
 } TimedTurnPulseAction_t;
 
 void TimedTurnPulseActionProfile_LoadDefault(TimedTurnPulseActionProfile_t *profile);
+TaskActionResult_t TimedTurnPulseAction_EvaluateLaunchVerticalTurn(
+    const TimedTurnPulseActionInput_t *input,
+    const TimedTurnPulseActionParams_t *params,
+    TimedTurnPulseActionOutput_t *output);
 TaskActionResult_t TimedTurnPulseAction_Evaluate(const TimedTurnPulseActionInput_t *input,
                                                  const TimedTurnPulseActionParams_t *params,
                                                  TimedTurnPulseActionOutput_t *output);

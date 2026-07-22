@@ -17,9 +17,10 @@ extern "C" {
 #endif
 
 #define IMU_VELOCITY_RECOVERY_DELTA_TO_TICK_SCALE 0.10f
-#define IMU_VELOCITY_RECOVERY_MIN_TICK_PERIOD 1U
+#define IMU_VELOCITY_RECOVERY_MIN_TICK_PERIOD 2U
 #define IMU_VELOCITY_RECOVERY_MAX_TICK_PERIOD 60U
-#define IMU_VELOCITY_RECOVERY_KICK_PWM_US 200.0f
+#define IMU_VELOCITY_RECOVERY_SWEEP_START_PWM_US 120.0f
+#define IMU_VELOCITY_RECOVERY_SWEEP_END_PWM_US -120.0f
 #define IMU_VELOCITY_RECOVERY_PID_KP 2.0f
 #define IMU_VELOCITY_RECOVERY_PID_KI 0.0f
 #define IMU_VELOCITY_RECOVERY_PID_KD 0.0f
@@ -32,7 +33,7 @@ extern "C" {
 typedef enum
 {
     IMU_VELOCITY_RECOVERY_STAGE_IDLE = 0,
-    IMU_VELOCITY_RECOVERY_STAGE_KICK = 1,
+    IMU_VELOCITY_RECOVERY_STAGE_SWEEP = 1,
     IMU_VELOCITY_RECOVERY_STAGE_WAIT_VELOCITY_SAMPLE = 2,
     IMU_VELOCITY_RECOVERY_STAGE_PID_RECOVERY = 3,
     IMU_VELOCITY_RECOVERY_STAGE_DONE = 4
@@ -43,8 +44,8 @@ typedef struct
     GuidanceDelta_t target_delta;
     bool target_detected;
     uint32_t now_tick;
-    float imu_velocity_x_dps;
-    float launch_velocity_x_dps;
+    float imu_yaw_velocity_dps;
+    float launch_yaw_velocity_dps;
     bool launch_velocity_ready;
 } ImuVelocityRecoveryActionInput_t;
 
@@ -54,7 +55,8 @@ typedef struct
     float delta_to_tick_scale;
     uint16_t min_tick_period;
     uint16_t max_tick_period;
-    float kick_pwm_us;
+    float sweep_start_pwm_us;
+    float sweep_end_pwm_us;
     GuidanceHorizontalPwmPidConfig_t velocity_pid_config;
     float velocity_pid_output_limit_us;
     float success_band_dps;
@@ -69,8 +71,11 @@ typedef struct
     ImuVelocityRecoveryActionStage_t stage;
     int8_t delta_sign;
     uint16_t tick_period;
-    float target_velocity_x_dps;
-    float velocity_error_x_dps;
+    float sweep_start_pwm_us;
+    float sweep_end_pwm_us;
+    float active_pwm_us;
+    float target_yaw_velocity_dps;
+    float velocity_error_yaw_dps;
     bool target_velocity_latched;
 } ImuVelocityRecoveryActionOutput_t;
 
@@ -88,7 +93,10 @@ typedef struct
     uint16_t success_count;
     int8_t latched_delta_sign;
     uint16_t latched_tick_period;
-    float latched_target_velocity_x_dps;
+    float latched_sweep_start_pwm_us;
+    float latched_sweep_end_pwm_us;
+    float latched_sweep_step_pwm_us;
+    float latched_target_yaw_velocity_dps;
     bool running;
     bool target_velocity_latched;
 } ImuVelocityRecoveryActionState_t;
