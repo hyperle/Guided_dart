@@ -134,6 +134,12 @@ static void Guidance_ApplyMeasurementGeometry(uint16_t width, uint16_t height)
     guidance_controller_config.aim_config.image_height = height;
     guidance_controller.aim_config.image_width = width;
     guidance_controller.aim_config.image_height = height;
+#if GREEN_LIGHT_TASK_SETPOINT_USE_IMAGE_CENTER
+    green_light_task_profile.input.setpoint.x = (uint16_t)(width / 2U);
+    green_light_task_profile.input.setpoint.y = (uint16_t)(height / 2U);
+    guidance_controller.aim_config.setpoint_x = (uint16_t)(width / 2U);
+    guidance_controller.aim_config.setpoint_y = (uint16_t)(height / 2U);
+#endif
 }
 
 static void Guidance_PublishImuMotion(bool imu_data_valid)
@@ -170,11 +176,12 @@ static void Guidance_PublishImuMotion(bool imu_data_valid)
                                      gz,
                                      ax,
                                      ay,
-                                     az,
-                                     dart_launch_counter_ticks,
-                                     dart_launch_velocity_x_dps,
-                                     dart_launch_velocity_y_dps,
-                                     dart_launch_velocity_z_dps);
+                                     az);
+    (void)Esp32Link_PublishDartLaunchSample(&esp32_link,
+                                            dart_launch_counter_ticks,
+                                            dart_launch_velocity_x_dps,
+                                            dart_launch_velocity_y_dps,
+                                            dart_launch_velocity_z_dps);
 }
 
 static bool Guidance_UpdateImuAndPublishMotion(void)
@@ -277,7 +284,7 @@ int main(void)
   ControlMixer_ApplyOutputs(&control_mixer);
   Guidance_ApplyMeasurementGeometry(GREEN_LIGHT_TASK_DEFAULT_IMAGE_WIDTH,
                                     GREEN_LIGHT_TASK_DEFAULT_IMAGE_HEIGHT);
-  (void)imu_init(&guidance_imu, &hspi1, GUIDANCE_IMU_MAHONY_KP, GUIDANCE_IMU_MAHONY_KI);
+  (void)imu_attach(&guidance_imu, &hspi1, GUIDANCE_IMU_MAHONY_KP, GUIDANCE_IMU_MAHONY_KI);
   (void)Guidance_CaptureStartupImageSize(GREEN_LIGHT_TASK_STARTUP_IMAGE_SIZE_TIMEOUT_MS);
   green_light_task_profile.input.upstream_measurement.x = GUIDANCE_NO_TARGET_COORDINATE;
   green_light_task_profile.input.upstream_measurement.y = GUIDANCE_NO_TARGET_COORDINATE;
@@ -326,14 +333,21 @@ int main(void)
       bool imu_data_valid;
       uint16_t planner_setpoint_x;
       uint16_t planner_setpoint_y;
+      UartReceiverMeasurement_t camera_measurement;
 
       imu_data_valid = Guidance_UpdateImuAndPublishMotion();
 
       green_light_task_profile.input.upstream_measurement_ready =
-          uart_receiver_get_data(&green_light_task_profile.input.upstream_measurement.x,
-                                 &green_light_task_profile.input.upstream_measurement.y,
-                                 &green_light_task_profile.input.upstream_measurement.area);
-      if (!green_light_task_profile.input.upstream_measurement_ready) {
+          uart_receiver_get_measurement(&camera_measurement);
+      if (green_light_task_profile.input.upstream_measurement_ready) {
+        green_light_task_profile.input.upstream_measurement.x = camera_measurement.x;
+        green_light_task_profile.input.upstream_measurement.y = camera_measurement.y;
+        green_light_task_profile.input.upstream_measurement.area = camera_measurement.area;
+        if (camera_measurement.has_image_size) {
+          Guidance_ApplyMeasurementGeometry(camera_measurement.image_width,
+                                            camera_measurement.image_height);
+        }
+      } else {
         green_light_task_profile.input.upstream_measurement.x = GUIDANCE_NO_TARGET_COORDINATE;
         green_light_task_profile.input.upstream_measurement.y = GUIDANCE_NO_TARGET_COORDINATE;
         green_light_task_profile.input.upstream_measurement.area = 0U;

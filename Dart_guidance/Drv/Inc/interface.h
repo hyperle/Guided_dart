@@ -33,15 +33,4 @@ void uart_receiver_start(void);
  */
 bool uart_receiver_get_measurement(UartReceiverMeasurement_t *measurement);
 
-/**
- * @brief 获取最新解析到的数据
- * @param x 存储x坐标的指针（可为NULL）
- * @param y 存储y坐标的指针（可为NULL）
- * @param area 存储面积的指针（可为NULL）
- * @return true - 有新数据可用；false - 无新数据
- * @note 兼容旧调用方；不会返回图像宽高。
- */
-bool uart_receiver_get_data(uint16_t *x, uint16_t *y, uint16_t *area);
-
-
 #endif

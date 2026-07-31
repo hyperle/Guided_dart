@@ -137,13 +137,10 @@ static void imu_update_dart_launch_velocity_sample(imu_t *imu)
     }
 }
 
-HAL_StatusTypeDef imu_init(imu_t *imu, SPI_HandleTypeDef *hspi, float Kp, float Ki)
+HAL_StatusTypeDef imu_attach(imu_t *imu, SPI_HandleTypeDef *hspi, float Kp, float Ki)
 {
-    HAL_StatusTypeDef status;
-
     if (imu == NULL) return HAL_ERROR;
 
-    imu->initialized = 0U;
     imu->hspi = hspi;
     if (hspi == NULL) return HAL_ERROR;
 
@@ -185,14 +182,6 @@ HAL_StatusTypeDef imu_init(imu_t *imu, SPI_HandleTypeDef *hspi, float Kp, float 
     imu->gyro_y = 0.0f;
     imu->gyro_z = 0.0f;
     imu_reset_reference_window(imu);
-
-    status = bmi088_start(hspi);
-    if (status != HAL_OK) return status;
-
-    status = bmi088_check_ready(hspi);
-    if (status != HAL_OK) return status;
-
-    imu->initialized = 1U;
     return HAL_OK;
 }
 
@@ -212,7 +201,7 @@ HAL_StatusTypeDef imu_update(imu_t *imu)
     uint8_t accel_trusted;
     uint8_t pulse_detected;
 
-    if ((imu == NULL) || (imu->initialized == 0U)) return HAL_ERROR;
+    if ((imu == NULL) || (imu->hspi == NULL)) return HAL_ERROR;
 
     now_tick = HAL_GetTick();
     dt = MS_TO_SEC(now_tick - imu->last_tick);

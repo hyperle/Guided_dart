@@ -22,6 +22,7 @@ RAW_REPL_EXIT = b"\x02"
 RAW_REPL_PROMPT = b"raw REPL; CTRL-B to exit\r\n>"
 DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "openmv.ini"
 DEFAULT_EXCLUDED_FLASH_MODULES = {"stream_debug.py", "tuner_runtime.py"}
+SKIPSD_REMOTE_PATH = "SKIPSD"
 SD_BOOT_STUB_SOURCE = (
     "import os\n"
     "os.chdir(\"/flash\")\n"
@@ -443,6 +444,7 @@ def build_upload_items(config: ProjectConfig, use_mpy: bool, mpy_cross: str, inc
         UploadItem(remote_relative_path(artifact.remote_path), artifact.local_path.read_bytes())
         for artifact in upload_artifacts
     ]
+    items.append(UploadItem(SKIPSD_REMOTE_PATH, b""))
     manifest_payload = (
         "\n".join(flash_remote_path(PurePosixPath(item.rel_path)).as_posix() for item in items) + "\n"
     ).encode("utf-8")
@@ -571,7 +573,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--yes", action="store_true", help="clear OpenMV /flash before uploading")
     parser.add_argument("--include-debug", action="store_true", help="also upload stream_debug.py and tuner_runtime.py to /flash")
     parser.add_argument("--no-reset", action="store_true", help="leave the board in raw REPL after upload")
-    parser.add_argument("--no-sd-boot-stub", action="store_true", help="skip installing the minimal SD main.py trampoline required by this firmware")
+    parser.add_argument("--install-sd-boot-stub", action="store_true", help="install a minimal SD main.py trampoline for non-SKIPSD firmware")
+    parser.add_argument("--no-sd-boot-stub", action="store_true", help="compatibility no-op; SD boot stub installation is disabled by default")
     return parser
 
 
@@ -606,7 +609,7 @@ def main(argv: list[str] | None = None) -> int:
         chunk_size=max(32, int(args.chunk_size)),
         reset=not bool(args.no_reset),
         clear_first=bool(args.yes),
-        install_boot_stub=not bool(args.no_sd_boot_stub),
+        install_boot_stub=bool(args.install_sd_boot_stub) and not bool(args.no_sd_boot_stub),
     )
     return 0
 

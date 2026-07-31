@@ -4,7 +4,7 @@ except ImportError:
     def const(value):
         return value
 
-# Set to 1 only when SD video capture is needed; MJPEG writes consume frame time.
+# Set to 0 to disable SD video capture; MJPEG writes consume frame time.
 SD_RECORD_FLAG = const(0)
 
 # Set to 1 to enable target-area-triggered fixed exposure switching.

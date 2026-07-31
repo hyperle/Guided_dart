@@ -5,6 +5,7 @@ import time
 
 
 _SD_ROOTS = ("/sdcard", "/sd")
+_SD_MOUNT_ROOTS = ("/sdcard", "/sd")
 _SEGMENT_PREFIX = "rec_"
 _SEGMENT_SUFFIX = ".mjpeg"
 _METADATA_SUFFIX = ".jsonl"
@@ -34,22 +35,60 @@ def _entry_name(item):
     return name
 
 
-def _sdcard_block_device():
+def _machine_sdcard_block_device():
+    try:
+        import machine
+    except Exception:
+        return None
+
+    try:
+        sdcard = machine.SDCard()
+        del machine
+        return sdcard
+    except Exception:
+        pass
+
+    try:
+        sdcard = machine.SDCard(1)
+        del machine
+        return sdcard
+    except Exception:
+        return None
+
+
+def _pyb_sdcard_block_device():
     try:
         import pyb
         sdcard = pyb.SDCard()
         del pyb
         return sdcard
     except Exception:
-        pass
-
-    try:
-        import machine
-        sdcard = machine.SDCard(1)
-        del machine
-        return sdcard
-    except Exception:
         return None
+
+
+def _sdcard_block_device():
+    sdcard = _machine_sdcard_block_device()
+    if sdcard is not None:
+        return sdcard
+    return _pyb_sdcard_block_device()
+
+
+def _mount_with_vfs(sdcard, root):
+    try:
+        import vfs
+        vfs.mount(vfs.VfsFat(sdcard), root)
+        del vfs
+        return True
+    except Exception:
+        return False
+
+
+def _mount_with_os(sdcard, root):
+    try:
+        os.mount(sdcard, root)
+        return True
+    except Exception:
+        return False
 
 
 def _mount_sdcard_if_needed():
@@ -61,14 +100,10 @@ def _mount_sdcard_if_needed():
     if sdcard is None:
         return ""
 
-    try:
-        import vfs
-        vfs.mount(vfs.VfsFat(sdcard), "/sdcard")
-        del vfs
-        if _path_exists("/sdcard"):
-            return "/sdcard"
-    except Exception:
-        pass
+    for candidate in _SD_MOUNT_ROOTS:
+        if _mount_with_vfs(sdcard, candidate) or _mount_with_os(sdcard, candidate):
+            if _path_exists(candidate):
+                return candidate
 
     return ""
 
@@ -153,6 +188,12 @@ class RollingMjpegRecorder:
         if (not self._enabled) or (img is None):
             return
 
+        try:
+            self._add_frame_impl(img, metadata)
+        except Exception:
+            self._disable()
+
+    def _add_frame_impl(self, img, metadata):
         now_ms = time.ticks_ms()
 
         if self._writer is None:
@@ -219,27 +260,28 @@ class RollingMjpegRecorder:
         try:
             os.mkdir(self._recordings_dir)
             return True
-        except OSError:
+        except Exception:
             return False
 
     def _disable(self):
-        self._close_writer()
+        try:
+            self._close_writer()
+        except Exception:
+            pass
         self._enabled = False
 
     def _close_writer(self, quiet=False):
-        if self._writer is None:
-            return
+        if self._writer is not None:
+            try:
+                self._writer.sync()
+            except Exception:
+                pass
 
-        try:
-            self._writer.sync()
-        except Exception:
-            pass
-
-        try:
-            self._writer.close()
-            os.sync()
-        except Exception:
-            pass
+            try:
+                self._writer.close()
+                os.sync()
+            except Exception:
+                pass
 
         self._writer = None
         self._writer_path = ""
@@ -258,14 +300,17 @@ class RollingMjpegRecorder:
         gc.collect()
 
     def _open_new_segment(self, width, height, now_ms):
-        self._prune_segments()
-        if self._try_open_new_segment(width, height, now_ms):
-            return True
-
-        if self._remove_oldest_available_segment():
-            gc.collect()
-            if self._try_open_new_segment(width, height, time.ticks_ms()):
+        try:
+            self._prune_segments()
+            if self._try_open_new_segment(width, height, now_ms):
                 return True
+
+            if self._remove_oldest_available_segment():
+                gc.collect()
+                if self._try_open_new_segment(width, height, time.ticks_ms()):
+                    return True
+        except Exception:
+            pass
 
         self._disable()
         return False
@@ -310,16 +355,14 @@ class RollingMjpegRecorder:
         entries = []
         try:
             iterator = os.ilistdir(self._recordings_dir)
-        except OSError:
-            return entries
-
-        for item in iterator:
-            name = _entry_name(item)
-            if not (name.startswith(_SEGMENT_PREFIX) and name.endswith(_SEGMENT_SUFFIX)):
-                continue
-            entries.append(name)
-
-        entries.sort()
+            for item in iterator:
+                name = _entry_name(item)
+                if not (name.startswith(_SEGMENT_PREFIX) and name.endswith(_SEGMENT_SUFFIX)):
+                    continue
+                entries.append(name)
+            entries.sort()
+        except Exception:
+            return []
         return entries
 
     def _next_segment_index(self):
@@ -329,7 +372,7 @@ class RollingMjpegRecorder:
         for name in entries:
             try:
                 value = int(name[len(_SEGMENT_PREFIX):-len(_SEGMENT_SUFFIX)])
-            except ValueError:
+            except Exception:
                 continue
             if value > highest:
                 highest = value
@@ -339,7 +382,7 @@ class RollingMjpegRecorder:
     def _free_bytes(self):
         try:
             stats = os.statvfs(self._recordings_dir)
-        except OSError:
+        except Exception:
             return 0
 
         block_size = stats[0]
@@ -360,7 +403,7 @@ class RollingMjpegRecorder:
                 os.remove(metadata_path)
             os.sync()
             return True
-        except OSError:
+        except Exception:
             return False
 
     def _remove_oldest_available_segment(self):
@@ -368,13 +411,16 @@ class RollingMjpegRecorder:
         return self._remove_oldest_segment(entries)
 
     def _prune_segments(self):
-        entries = self._list_segment_entries()
+        try:
+            entries = self._list_segment_entries()
 
-        while len(entries) >= self._max_segments:
-            if not self._remove_oldest_segment(entries):
-                break
+            while len(entries) >= self._max_segments:
+                if not self._remove_oldest_segment(entries):
+                    break
 
-        while entries and (self._free_bytes() < self._min_free_bytes):
-            if not self._remove_oldest_segment(entries):
-                break
+            while entries and (self._free_bytes() < self._min_free_bytes):
+                if not self._remove_oldest_segment(entries):
+                    break
+        except Exception:
+            pass
 

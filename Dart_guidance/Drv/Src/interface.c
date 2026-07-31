@@ -162,18 +162,6 @@ bool uart_receiver_get_measurement(UartReceiverMeasurement_t *measurement) {
     return ret;
 }
 
-bool uart_receiver_get_data(uint16_t *x, uint16_t *y, uint16_t *area) {
-    UartReceiverMeasurement_t measurement;
-
-    if (!uart_receiver_get_measurement(&measurement)) {
-        return false;
-    }
-
-    if (x != NULL) *x = measurement.x;
-    if (y != NULL) *y = measurement.y;
-    if (area != NULL) *area = measurement.area;
-    return true;
-}
 
 //------------------------------------------------------------------------------
 // HAL库UART接收完成回调（在中断中执行）

@@ -19,8 +19,9 @@ static int16_t Esp32Link_EncodeCentideg(float angle_deg)
 }
 
 #define ESP32_LINK_GUIDANCE_PAYLOAD_SIZE 28U
-#define ESP32_LINK_IMU_MOTION_VALUE_COUNT 10U
+#define ESP32_LINK_IMU_MOTION_VALUE_COUNT 6U
 #define ESP32_LINK_IMU_MOTION_PAYLOAD_SIZE (ESP32_LINK_IMU_MOTION_VALUE_COUNT * 4U)
+#define ESP32_LINK_DART_LAUNCH_SAMPLE_PAYLOAD_SIZE 14U
 #define ESP32_LINK_GUIDANCE_FRAME_SIZE (4U + ESP32_LINK_GUIDANCE_PAYLOAD_SIZE + 1U)
 #define ESP32_LINK_FLAG_TARGET_DETECTED (1U << 0U)
 #define ESP32_LINK_FLAG_TASK_FINISHED (1U << 1U)
@@ -123,11 +124,7 @@ bool Esp32Link_PublishImuMotion(Esp32Link_t *link,
                                 float gz,
                                 float ax,
                                 float ay,
-                                float az,
-                                uint16_t dart_launch_counter_ticks,
-                                float dart_launch_velocity_x_dps,
-                                float dart_launch_velocity_y_dps,
-                                float dart_launch_velocity_z_dps)
+                                float az)
 {
     uint8_t frame[4U + ESP32_LINK_IMU_MOTION_PAYLOAD_SIZE + 1U];
     uint8_t checksum = 0U;
@@ -151,10 +148,6 @@ bool Esp32Link_PublishImuMotion(Esp32Link_t *link,
     motion_values[3] = ax;
     motion_values[4] = ay;
     motion_values[5] = az;
-    motion_values[6] = (float)dart_launch_counter_ticks;
-    motion_values[7] = dart_launch_velocity_x_dps;
-    motion_values[8] = dart_launch_velocity_y_dps;
-    motion_values[9] = dart_launch_velocity_z_dps;
     payload_ptr = (uint8_t *)motion_values;
     for (index = 0U; index < ESP32_LINK_IMU_MOTION_PAYLOAD_SIZE; ++index) {
         frame[4U + index] = payload_ptr[index];
@@ -168,6 +161,50 @@ bool Esp32Link_PublishImuMotion(Esp32Link_t *link,
     status = HAL_UART_Transmit(link->uart,
                                frame,
                                (uint16_t)(4U + ESP32_LINK_IMU_MOTION_PAYLOAD_SIZE + 1U),
+                               link->tx_timeout_ms);
+    return status == HAL_OK;
+}
+
+bool Esp32Link_PublishDartLaunchSample(Esp32Link_t *link,
+                                        uint16_t dart_launch_counter_ticks,
+                                        float dart_launch_velocity_x_dps,
+                                        float dart_launch_velocity_y_dps,
+                                        float dart_launch_velocity_z_dps)
+{
+    uint8_t frame[4U + ESP32_LINK_DART_LAUNCH_SAMPLE_PAYLOAD_SIZE + 1U];
+    uint8_t checksum = 0U;
+    size_t index;
+    float launch_values[3];
+    uint8_t *payload_ptr;
+    HAL_StatusTypeDef status;
+
+    if ((link == NULL) || (link->uart == NULL)) {
+        return false;
+    }
+
+    frame[0] = GUIDANCE_PROTOCOL_FRAME_HEADER_0;
+    frame[1] = GUIDANCE_PROTOCOL_FRAME_HEADER_1;
+    frame[2] = ESP32_LINK_MESSAGE_TYPE_DART_LAUNCH_SAMPLE;
+    frame[3] = ESP32_LINK_DART_LAUNCH_SAMPLE_PAYLOAD_SIZE;
+    frame[4] = (uint8_t)(dart_launch_counter_ticks & 0xFFU);
+    frame[5] = (uint8_t)((dart_launch_counter_ticks >> 8U) & 0xFFU);
+
+    launch_values[0] = dart_launch_velocity_x_dps;
+    launch_values[1] = dart_launch_velocity_y_dps;
+    launch_values[2] = dart_launch_velocity_z_dps;
+    payload_ptr = (uint8_t *)launch_values;
+    for (index = 0U; index < (ESP32_LINK_DART_LAUNCH_SAMPLE_PAYLOAD_SIZE - 2U); ++index) {
+        frame[6U + index] = payload_ptr[index];
+    }
+
+    for (index = 0U; index < (4U + ESP32_LINK_DART_LAUNCH_SAMPLE_PAYLOAD_SIZE); ++index) {
+        checksum = (uint8_t)(checksum + frame[index]);
+    }
+    frame[4U + ESP32_LINK_DART_LAUNCH_SAMPLE_PAYLOAD_SIZE] = checksum;
+
+    status = HAL_UART_Transmit(link->uart,
+                               frame,
+                               (uint16_t)(4U + ESP32_LINK_DART_LAUNCH_SAMPLE_PAYLOAD_SIZE + 1U),
                                link->tx_timeout_ms);
     return status == HAL_OK;
 }

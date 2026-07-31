@@ -58,16 +58,17 @@ Supported frame types consumed by the bridge:
 
 - `0x01`: guidance telemetry, including target delta; target lost is exported as `<-1, -1>`
 - `0x05`: IMU motion, six `float32` values: `gx, gy, gz` in `deg/s`, then `ax, ay, az` in `g`
+- `0x06`: dart launch sample, `uint16 counter_ticks` plus three `float32` tick10 speeds in `deg/s`
 
 The bridge aggregates these UART frames into a stable BLE snapshot stream instead of forwarding every UART frame immediately.
 
 ## BLE Snapshot Packet
 
-Snapshot characteristic payload (`little-endian`, 50 bytes):
+Snapshot characteristic payload (`little-endian`, 64 bytes):
 
 ```text
 uint16 magic          0xDA7A
-uint8  version        1
+uint8  version        2
 uint8  type           1
 uint16 sequence
 uint16 flags
@@ -81,6 +82,10 @@ float  velocity_z
 float  accel_x
 float  accel_y
 float  accel_z
+uint16 dart_launch_counter_ticks
+float  dart_launch_velocity_x
+float  dart_launch_velocity_y
+float  dart_launch_velocity_z
 uint16 crc16_ccitt
 ```
 
@@ -89,6 +94,7 @@ Flag bits:
 - bit 0: target valid
 - bit 1: guidance frame has been seen
 - bit 2: motion frame has been seen
+- bit 3: acceleration data has been seen
 - bit 4: target lost
 - bit 5: guidance data is stale
 - bit 6: motion data is stale

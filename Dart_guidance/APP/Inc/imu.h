@@ -11,7 +11,7 @@
 /* 可信静止加速度目标值，单位 g；理想静止时加速度模长约为 1g。 */
 #define IMU_ACCEL_NORM_TARGET_G 1.0f
 
-/* BMI088 加速度计满量程，单位 g；与 bmi088.c 中的 ACC_RANGE_24 配置保持一致。 */
+/* 加速度计饱和保护满量程，单位 g；直接读模式下按当前期望硬件量程配置。 */
 #define IMU_ACCEL_FULL_SCALE_G 24.0f
 
 /* 标准重力加速度，用于把 BMI088 的 g 单位采样值换算为 m/s^2。 */
@@ -60,7 +60,6 @@ typedef struct {
 typedef struct {
     mahony_t mahony;                        // Mahony滤波器实例
     SPI_HandleTypeDef *hspi;                // SPI句柄（用于BMI088通信）
-    uint8_t initialized;                    // BMI088启动并通过就绪检验后置1
     uint32_t last_tick;                     // 上一次更新的系统滴答计数（毫秒）
     uint32_t stable_since_tick;             // 最近一次非可信加速度样本时刻（毫秒）
     float dt;                               // 实际时间间隔（秒）
@@ -104,14 +103,15 @@ typedef struct {
 } imu_t;
 
 /**
- * @brief 初始化IMU模块
+ * @brief 绑定IMU运行状态
  * @param imu  IMU对象指针
- * @param hspi SPI句柄（已配置好时钟、极性相位等）
+ * @param hspi SPI句柄（已由CubeMX外设初始化）
  * @param Kp   Mahony滤波器比例系数
  * @param Ki   Mahony滤波器积分系数
+ * @note 仅初始化软件状态，不访问BMI088 ID寄存器，也不配置BMI088寄存器。
  * @retval HAL_OK 成功，否则错误码
  */
-HAL_StatusTypeDef imu_init(imu_t *imu, SPI_HandleTypeDef *hspi, float Kp, float Ki);
+HAL_StatusTypeDef imu_attach(imu_t *imu, SPI_HandleTypeDef *hspi, float Kp, float Ki);
 
 /**
  * @brief 更新IMU姿态（应周期性调用）

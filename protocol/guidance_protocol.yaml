@@ -16,3 +16,6 @@ message_types:
   imu_motion:
     macro: ESP32_LINK_MESSAGE_TYPE_IMU_MOTION
     value: 5
+  dart_launch_sample:
+    macro: ESP32_LINK_MESSAGE_TYPE_DART_LAUNCH_SAMPLE
+    value: 6

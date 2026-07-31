@@ -216,13 +216,24 @@ void GuidanceController_Init(GuidanceController_t *controller,
 
 bool GuidanceController_FetchMeasurement(GuidanceController_t *controller)
 {
+    UartReceiverMeasurement_t measurement;
+
     if (controller == NULL) {
         return false;
     }
 
-    return uart_receiver_get_data(&controller->measurement.x,
-                                  &controller->measurement.y,
-                                  &controller->measurement.area);
+    if (!uart_receiver_get_measurement(&measurement)) {
+        return false;
+    }
+
+    controller->measurement.x = measurement.x;
+    controller->measurement.y = measurement.y;
+    controller->measurement.area = measurement.area;
+    if (measurement.has_image_size) {
+        controller->aim_config.image_width = measurement.image_width;
+        controller->aim_config.image_height = measurement.image_height;
+    }
+    return true;
 }
 
 bool GuidanceController_SetMeasurement(GuidanceController_t *controller,

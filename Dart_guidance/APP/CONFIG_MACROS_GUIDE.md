@@ -196,7 +196,8 @@
 | `GUIDANCE_PROTOCOL_FRAME_HEADER_1` | `0x5AU` | 帧头同步字节 1 |
 | `ESP32_LINK_MESSAGE_TYPE_GUIDANCE_TELEMETRY` | `0x01U` | 遥测帧 |
 | `ESP32_LINK_MESSAGE_TYPE_IMU_ACCEL` | `0x04U` | IMU 加速度帧 |
-| `ESP32_LINK_MESSAGE_TYPE_IMU_MOTION` | `0x05U` | IMU 运动帧 (陀螺+加速度+发射速度) |
+| `ESP32_LINK_MESSAGE_TYPE_IMU_MOTION` | `0x05U` | IMU 运动帧 (陀螺+加速度，兼容 24-byte bridge) |
+| `ESP32_LINK_MESSAGE_TYPE_DART_LAUNCH_SAMPLE` | `0x06U` | 发射 tick 与 tick=10 锁存速度帧 |
 
 ---
 

@@ -1,7 +1,15 @@
 import sensor
 import time
-import ustruct
 from pyb import UART, USB_VCP
+from preview_stream import (
+    COLOR_ERROR,
+    COLOR_TEXT,
+    draw_preview_overlay,
+    draw_stream_status,
+    draw_text,
+    make_frame_metadata,
+    write_usb_preview_frame,
+)
 
 try:
     from pyb import LED
@@ -18,10 +26,6 @@ try:
 except Exception:
     TargetExposureController = None
 
-_MAGIC = b"OMVJ"
-_HEADER_FORMAT = ">IHHI"
-_METADATA_MAGIC = b"OMVM"
-_METADATA_HEADER_FORMAT = ">I"
 _DEFAULT_EXPOSURE_US = 1000
 _CONTROL_UART_PORT = 1
 _CONTROL_UART_BAUDRATE = 115200
@@ -30,15 +34,8 @@ _MEASUREMENT_LEGACY_LENGTH = 0x06
 _MEASUREMENT_EXTENDED_LENGTH = 0x0A
 _MEASUREMENT_LENGTH = _MEASUREMENT_EXTENDED_LENGTH
 _CONTROL_IMAGE_SIZE_STARTUP_FRAMES = 8
-_CONTROL_IMAGE_SIZE_REFRESH_MS = 0
+_CONTROL_IMAGE_SIZE_REFRESH_MS = 1000
 _NO_TARGET_COORDINATE = 0xFFFF
-_OVERLAY_X = 2
-_OVERLAY_STATUS_Y = 2
-_OVERLAY_TARGET_Y = 14
-_OVERLAY_ROI_Y = 26
-_COLOR_OK = (0, 255, 0)
-_COLOR_ERROR = (255, 0, 0)
-_COLOR_TEXT = (255, 255, 255)
 
 
 def _set_status_led(error=False, target_detected=False):
@@ -117,12 +114,6 @@ def configure_sensor(frame_size="QVGA", width=640, height=480, pixformat="RGB565
     return exposure_controller
 
 
-def _payload_length(payload):
-    try:
-        return len(payload)
-    except TypeError:
-        return payload.size()
-
 
 def _u16(value):
     value = int(value)
@@ -183,136 +174,6 @@ def _should_send_control_image_size(now_ms, last_image_size_ms, frame_index):
         return False
     return time.ticks_diff(now_ms, last_image_size_ms) >= _CONTROL_IMAGE_SIZE_REFRESH_MS
 
-
-def _json_escape(value):
-    text = str(value)
-    text = text.replace(chr(92), chr(92) + chr(92))
-    return text.replace(chr(34), chr(92) + chr(34))
-
-
-def _json_value(value):
-    if value is None:
-        return "null"
-    if value is True:
-        return "true"
-    if value is False:
-        return "false"
-    if isinstance(value, int):
-        return str(value)
-    if isinstance(value, float):
-        return str(value)
-    if isinstance(value, tuple) or isinstance(value, list):
-        parts = []
-        for item in value:
-            parts.append(_json_value(item))
-        return "[" + ",".join(parts) + "]"
-    if isinstance(value, dict):
-        parts = []
-        for key, item in value.items():
-            parts.append("\"%s\":%s" % (_json_escape(key), _json_value(item)))
-        return "{" + ",".join(parts) + "}"
-    return "\"%s\"" % _json_escape(value)
-
-
-def _target_search_status(result, debug, debug_detector, detector_available):
-    if not debug_detector:
-        return "detector_disabled"
-    if not detector_available:
-        return "detector_unavailable"
-    debug = debug or {}
-    status = debug.get("target_search", "")
-    if status:
-        return status
-    if result is None:
-        return "target_not_found"
-    selected_scan = debug.get("selected_scan", "")
-    if selected_scan == "full":
-        return "full_frame_search"
-    if debug.get("target_in_search_roi", False):
-        return "search_roi"
-    if debug.get("roi_active", False):
-        return "full_frame_search"
-    return "full_frame_search"
-
-
-def _frame_metadata(frame_index, img, result, debug, fps, debug_detector, detector_available):
-    return {
-        "frame_index": int(frame_index),
-        "target_search": _target_search_status(result, debug, debug_detector, detector_available),
-    }
-
-
-def _draw_cross(img, x, y, color):
-    _try_call(img.draw_line, x - 6, y, x + 6, y, color=color)
-    _try_call(img.draw_line, x, y - 6, x, y + 6, color=color)
-
-
-def _draw_text(img, y, text, color):
-    _try_call(img.draw_string, _OVERLAY_X, y, text, color=color)
-
-
-def _draw_stream_status(img, fps, color):
-    _draw_text(img, _OVERLAY_STATUS_Y, "pix=%dx%d fps=%0.1f" % (img.width(), img.height(), fps), color)
-
-
-def _runtime_roi_text(debug):
-    if not debug or not debug.get("roi_active", False):
-        return "roi inactive"
-    roi = debug.get("search_roi", None)
-    if debug.get("fallback_used", False):
-        reason = debug.get("fallback_reason", "unknown")
-        if debug.get("full_target_selected", False):
-            return "fallback full: %s roi=%s" % (reason, roi)
-        return "fallback kept roi: %s roi=%s" % (reason, roi)
-    if debug.get("target_in_search_roi", False):
-        return "roi ok %s" % (roi,)
-    return "target outside roi %s" % (roi,)
-
-
-def _draw_detector_overlay(img, result, fps, debug=None):
-    if result is None:
-        _draw_stream_status(img, fps, _COLOR_ERROR)
-        _draw_text(img, _OVERLAY_TARGET_Y, "target x=-1 y=-1", _COLOR_ERROR)
-        _draw_text(img, _OVERLAY_ROI_Y, _runtime_roi_text(debug), _COLOR_ERROR)
-        return
-
-    x = int(result["center_x"])
-    y = int(result["center_y"])
-    radius = int(result["radius"])
-    area = int(result["area"])
-    _try_call(img.draw_circle, x, y, radius, color=_COLOR_OK)
-    _draw_cross(img, x, y, _COLOR_TEXT)
-    _draw_stream_status(img, fps, _COLOR_OK)
-    _draw_text(img, _OVERLAY_TARGET_Y, "target x=%d y=%d a=%d" % (x, y, area), _COLOR_OK)
-    _draw_text(img, _OVERLAY_ROI_Y, _runtime_roi_text(debug), _COLOR_OK)
-
-
-def _write_frame(vcp, img, quality, metadata=None):
-    width = img.width()
-    height = img.height()
-    jpeg = img.compress(quality=quality)
-    if jpeg is None:
-        return False
-    ticks_ms = time.ticks_ms() & 0xFFFFFFFF
-    header = ustruct.pack(
-        _HEADER_FORMAT,
-        _payload_length(jpeg),
-        width,
-        height,
-        ticks_ms,
-    )
-    try:
-        vcp.write(_MAGIC)
-        vcp.write(header)
-        vcp.write(jpeg)
-        if metadata is not None:
-            payload = _json_value(metadata).encode("utf-8")
-            vcp.write(_METADATA_MAGIC)
-            vcp.write(ustruct.pack(_METADATA_HEADER_FORMAT, _payload_length(payload)))
-            vcp.write(payload)
-    except Exception:
-        return False
-    return True
 
 
 def run_usb_stream(frame_size="QVGA", width=320, height=240, pixformat="RGB565",
@@ -383,17 +244,17 @@ def run_usb_stream(frame_size="QVGA", width=320, height=240, pixformat="RGB565",
                 if exposure_controller is not None:
                     exposure_controller.update(img, result)
                 _set_status_led(target_detected=(result is not None))
-                _draw_detector_overlay(img, result, fps, debug)
+                draw_preview_overlay(img, result, fps, debug)
             elif debug_detector:
                 if exposure_controller is not None:
                     exposure_controller.update(img, None)
                 _set_status_led(error=True)
-                _draw_stream_status(img, fps, _COLOR_ERROR)
-                _draw_text(img, _OVERLAY_TARGET_Y, "detector import failed", _COLOR_ERROR)
+                draw_stream_status(img, fps, COLOR_ERROR)
+                draw_text(img, 14, "detector import failed", COLOR_ERROR)
             elif annotate:
                 if exposure_controller is not None:
                     exposure_controller.update(img, None)
-                _draw_stream_status(img, fps, _COLOR_TEXT)
+                draw_stream_status(img, fps, COLOR_TEXT)
             elif exposure_controller is not None:
                 exposure_controller.update(img, None)
             if control_uart_device is not None:
@@ -414,8 +275,18 @@ def run_usb_stream(frame_size="QVGA", width=320, height=240, pixformat="RGB565",
                     control_uart_device = None
             metadata = None
             if emit_metadata:
-                metadata = _frame_metadata(frame_index, img, result, debug, fps, debug_detector, detector is not None)
-            if not _write_frame(vcp, img, quality, metadata):
+                metadata = make_frame_metadata(
+                    result,
+                    debug,
+                    img.width(),
+                    img.height(),
+                    now_ms,
+                    frame_index,
+                    fps,
+                    debug_detector,
+                    detector is not None,
+                )
+            if not write_usb_preview_frame(vcp, img, quality, metadata):
                 break
             frame_index += 1
     except KeyboardInterrupt:

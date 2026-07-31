@@ -143,6 +143,13 @@ def pixel_channels(pixel):
     return value, value, value
 
 
+def image_get_pixel(img, x, y):
+    try:
+        return img.get_pixel(x, y)
+    except Exception:
+        return img.get_pixel((x, y))
+
+
 def point_in_roi(point, roi):
     if point is None or roi is None:
         return False
@@ -171,6 +178,39 @@ def target_touches_roi_edge(target, roi):
     return (overlaps_roi and
             (target_left <= rx or target_top <= ry or
              target_right >= roi_right or target_bottom >= roi_bottom))
+
+
+def blob_member(blob, name, index=None, default=None):
+    try:
+        value = getattr(blob, name)
+    except Exception:
+        value = None
+
+    if value is not None:
+        try:
+            return value()
+        except TypeError:
+            return value
+        except Exception:
+            pass
+
+    if index is not None:
+        try:
+            return blob[index]
+        except Exception:
+            pass
+
+    return default
+
+
+def blob_rect(blob):
+    rect = blob_member(blob, "rect")
+    if rect is not None:
+        return rect
+    try:
+        return (blob[0], blob[1], blob[2], blob[3])
+    except Exception:
+        return (0, 0, 0, 0)
 
 
 class GreenLightDetector:
@@ -261,20 +301,20 @@ class GreenLightDetector:
             return False
         return True
 
-    def _blob_passes_area(self, blob):
-        return self._area_passes(blob.area())
+    def _blob_area(self, blob, fallback=0):
+        return int(blob_member(blob, "area", None, fallback))
 
-    def _blob_pixels(self, blob):
-        try:
-            return blob.pixels()
-        except AttributeError:
-            return blob.area()
+    def _blob_passes_area(self, blob):
+        return self._area_passes(self._blob_area(blob))
+
+    def _blob_pixels(self, blob, fallback=0):
+        return int(blob_member(blob, "pixels", 4, fallback))
 
     def _blob_metrics(self, blob):
-        rect = blob.rect()
+        rect = blob_rect(blob)
         x, y, width, height = rect
-        area = blob.area()
-        pixels = self._blob_pixels(blob)
+        area = self._blob_area(blob, width * height)
+        pixels = self._blob_pixels(blob, area)
         outer_diameter = min(width, height)
         max_side = max(width, height)
         aspect_x100 = 0
@@ -314,7 +354,7 @@ class GreenLightDetector:
     def _roundness_x1000(self, blob, metrics=None):
         if metrics is not None and metrics["roundness_x1000"] >= 0:
             return metrics["roundness_x1000"]
-        roundness_x1000 = int(blob.roundness() * 1000)
+        roundness_x1000 = int(blob_member(blob, "roundness", None, 1.0) * 1000)
         if metrics is not None:
             metrics["roundness_x1000"] = roundness_x1000
         return roundness_x1000
@@ -396,7 +436,7 @@ class GreenLightDetector:
                 y = clamp(y, 0, image_height - 1)
             elif x < 0 or x >= image_width or y < 0 or y >= image_height:
                 continue
-            self._add_pixel_to_stats(stats, img.get_pixel(x, y))
+            self._add_pixel_to_stats(stats, image_get_pixel(img, x, y))
 
     def _sample_center_patch_stats(self, img, center_x, center_y, patch_radius):
         image_width = img.width()
@@ -411,7 +451,7 @@ class GreenLightDetector:
                 while dx <= patch_radius:
                     x = center_x + dx
                     if x >= 0 and x < image_width:
-                        self._add_pixel_to_stats(stats, img.get_pixel(x, y))
+                        self._add_pixel_to_stats(stats, image_get_pixel(img, x, y))
                     dx += 1
             dy += 1
         return self._finish_sample_stats(stats)
@@ -554,8 +594,8 @@ class GreenLightDetector:
         if roundness_x1000 < self.params["roundness_min_x1000"]:
             return None
 
-        center_x = blob.cx()
-        center_y = blob.cy()
+        center_x = int(blob_member(blob, "cx", 5, metrics["bbox_center_x"]))
+        center_y = int(blob_member(blob, "cy", 6, metrics["bbox_center_y"]))
         emission = self._emission_profile(img,
                                           center_x,
                                           center_y,
@@ -611,7 +651,7 @@ class GreenLightDetector:
                 y = center_y + self._scaled_offset(dy100, radius)
                 if x < 0 or x >= image_width or y < 0 or y >= image_height:
                     break
-                is_green, _, _, _, _, _ = self._green_sample_values(img.get_pixel(x, y))
+                is_green, _, _, _, _, _ = self._green_sample_values(image_get_pixel(img, x, y))
                 if is_green:
                     found_radius = radius
                     break

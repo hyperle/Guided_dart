@@ -67,6 +67,7 @@ private:
   static constexpr uint8_t kFrameTypeGuidanceTelemetry = 0x01U;
   static constexpr uint8_t kFrameTypeImuAccel = 0x04U;
   static constexpr uint8_t kFrameTypeImuMotion = 0x05U;
+  static constexpr uint8_t kFrameTypeDartLaunchSample = 0x06U;
   static constexpr uint8_t kGuidanceFlagTargetDetected = 1U << 0U;
   static constexpr uint16_t kNoTargetCoordinate = 0xFFFFU;
 
@@ -75,6 +76,7 @@ private:
   static constexpr uint8_t kTelemetryTypeSnapshot = 1U;
   static constexpr uint8_t kImuMotionPayloadLegacySize = 24U;
   static constexpr uint8_t kImuMotionPayloadExtendedSize = 40U;
+  static constexpr uint8_t kDartLaunchSamplePayloadSize = 14U;
   static constexpr uint16_t kTelemetryFlagTargetValid = 1U << 0U;
   static constexpr uint16_t kTelemetryFlagGuidanceSeen = 1U << 1U;
   static constexpr uint16_t kTelemetryFlagMotionSeen = 1U << 2U;
@@ -133,6 +135,7 @@ private:
     uint32_t guidance_frames = 0U;
     uint32_t motion_frames = 0U;
     uint32_t accel_frames = 0U;
+    uint32_t launch_sample_frames = 0U;
     uint32_t checksum_errors = 0U;
     uint32_t bad_payload_frames = 0U;
     uint32_t unknown_uart_frames = 0U;
@@ -328,11 +331,18 @@ private:
       }
       ApplyImuAccel(payload, payload_size, now_ms);
     } else if (frame_type == kFrameTypeImuMotion) {
-      if (payload_size != 24U) {
+      if ((payload_size != kImuMotionPayloadLegacySize) &&
+          (payload_size != kImuMotionPayloadExtendedSize)) {
         stats_.bad_payload_frames += 1U;
         return;
       }
       ApplyImuMotion(payload, payload_size, now_ms);
+    } else if (frame_type == kFrameTypeDartLaunchSample) {
+      if (payload_size != kDartLaunchSamplePayloadSize) {
+        stats_.bad_payload_frames += 1U;
+        return;
+      }
+      ApplyDartLaunchSample(payload, payload_size, now_ms);
     } else {
       stats_.unknown_uart_frames += 1U;
     }
@@ -394,11 +404,6 @@ private:
       telemetry_.dart_launch_velocity_x = ReadFloatLe(payload + 28U);
       telemetry_.dart_launch_velocity_y = ReadFloatLe(payload + 32U);
       telemetry_.dart_launch_velocity_z = ReadFloatLe(payload + 36U);
-    } else {
-      telemetry_.dart_launch_counter_ticks = 0U;
-      telemetry_.dart_launch_velocity_x = 0.0f;
-      telemetry_.dart_launch_velocity_y = 0.0f;
-      telemetry_.dart_launch_velocity_z = 0.0f;
     }
 
     telemetry_.motion_seen = true;
@@ -406,6 +411,19 @@ private:
     telemetry_.last_motion_ms = now_ms;
     telemetry_.last_accel_ms = now_ms;
     stats_.motion_frames += 1U;
+  }
+
+  void ApplyDartLaunchSample(const uint8_t* payload, uint8_t payload_size, uint32_t now_ms) {
+    if ((payload == nullptr) || (payload_size != kDartLaunchSamplePayloadSize)) {
+      return;
+    }
+
+    telemetry_.dart_launch_counter_ticks = ReadU16Le(payload + 0U);
+    telemetry_.dart_launch_velocity_x = ReadFloatLe(payload + 2U);
+    telemetry_.dart_launch_velocity_y = ReadFloatLe(payload + 6U);
+    telemetry_.dart_launch_velocity_z = ReadFloatLe(payload + 10U);
+    telemetry_.last_motion_ms = now_ms;
+    stats_.launch_sample_frames += 1U;
   }
 
   void PublishTelemetrySnapshot() {
@@ -614,6 +632,8 @@ private:
     status += String(stats_.motion_frames);
     status += ",accel=";
     status += String(stats_.accel_frames);
+    status += ",launch=";
+    status += String(stats_.launch_sample_frames);
     status += ",snap=";
     status += String(stats_.telemetry_notifications);
     status += ",crc=";

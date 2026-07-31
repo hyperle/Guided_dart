@@ -18,6 +18,7 @@ RAW_REPL_ENTER = b"\x01"
 RAW_REPL_EXIT = b"\x02"
 RAW_REPL_PROMPT = b"raw REPL; CTRL-B to exit\r\n>"
 FLASH_REMOTE_ROOT = PurePosixPath("/flash")
+SKIPSD_REMOTE_PATH = PurePosixPath("SKIPSD")
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -584,6 +585,12 @@ def flash_project(config: ProjectConfig, artifacts: list[Artifact], chunk_size: 
             verify_uploaded_bytes(session, remote_path, payload)
             uploaded_paths.append(remote_path.as_posix())
             print(f"uploaded and verified {remote_path.as_posix()}")
+
+        skipsd_remote_path = flash_remote_path(SKIPSD_REMOTE_PATH)
+        upload_bytes(session, skipsd_remote_path, b"", chunk_size)
+        verify_uploaded_bytes(session, skipsd_remote_path, b"")
+        uploaded_paths.append(skipsd_remote_path.as_posix())
+        print(f"uploaded and verified {skipsd_remote_path.as_posix()}")
 
         manifest_payload = ("\n".join(uploaded_paths) + "\n").encode("utf-8")
         upload_bytes(session, remote_manifest, manifest_payload, chunk_size)

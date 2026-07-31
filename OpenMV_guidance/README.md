@@ -115,6 +115,7 @@ OPENMV_PORT=/dev/ttyACM0 ./.script/camera-control
 - 再通过 OpenMV 的 USB serial raw REPL 上传构建产物到相机内部 `/flash`
 - 每个上传文件都会从 `/flash` 回读校验大小和校验和，复位前执行 `os.sync()`
 - 默认上传后触发一次硬复位，让板子重新执行 `/flash/main.py`
+- `SKIPSD` 工况默认不写 SD 根目录启动跳板；部署器会在 `/flash` 保留空文件 `SKIPSD`，保证插着 SD 上电时仍从内部 `/flash/main.py` 启动；非 `SKIPSD` 固件需要跳板时显式加 `--install-sd-boot-stub`
 
 示例：
 
@@ -174,8 +175,8 @@ firmware_address =
 
 - 这个子工程是纯 Python/OpenMV 工程，不再依赖 PlatformIO 或占位 `.c` 文件。
 - 本地“构建”定义为源码校验与部署包生成；可选地用 `mpy-cross` 产出 `.mpy` 模块。
-- 上传器会维护一个内部 `/flash` manifest，并在每次部署前清理旧的 `.py/.mpy` 同名文件，避免残留文件影响导入；同时自动刷新 SD 根目录的最小启动跳板。
+- 上传器会维护一个内部 `/flash` manifest，并在每次部署前清理旧的 `.py/.mpy` 同名文件，避免残留文件影响导入。
 - 对 OpenMV 来说，`ST-Link` 只用于烧固件镜像；Python 应用通过 USB Raw REPL 部署到内部 `/flash`。
-- 这版固件复位后当前目录仍是 `/sdcard`，因此 SD 根目录保留一个最小 `main.py` 跳板：只切换到 `/flash` 并执行 `/flash/main.py`；业务代码仍只部署到内部 `/flash`。
-- `SD_RECORD_FLAG` 在 `src/camera_config.py` 中静态配置，默认关闭以避免 SD 写入影响识别和 UART1 控制输出；设为 `1` 后录像只保存到 `/sdcard/recordings` 或 `/sd/recordings`，未检测到 SD 卡时禁用录像，不回写板载 flash；UART1 只负责向 STM32 发送目标测量，不参与图像存储。
+- 工况启动使用 `/flash/SKIPSD`，业务代码从内部 `/flash/main.py` 执行；SD 卡只作为数据盘使用。
+- `SD_RECORD_FLAG` 在 `src/camera_config.py` 中静态配置，当前开启；录像器不会在上电阶段初始化 SD；进入主循环后会在准备写视频前优先通过新固件的 `machine.SDCard()` 手动激活并挂载 SD 卡，再只保存到 `/sdcard/recordings` 或 `/sd/recordings`，未检测到 SD 卡时禁用录像，不回写板载 flash；UART1 只负责向 STM32 发送目标测量，不参与图像存储。
 - 主机侧可通过仓库脚本 `./.script/record-list` 与 `./.script/record-pull` 在“只连接控制板串口”的前提下列出并下载录像。

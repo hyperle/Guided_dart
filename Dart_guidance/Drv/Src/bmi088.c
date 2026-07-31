@@ -1,9 +1,9 @@
 #include "bmi088.h"
-#include "spi.h"
 #include "stm32g4xx_hal.h"
 #include "stm32g4xx_hal_def.h"
 #include "stm32g4xx_hal_spi.h"
-#include <math.h>
+
+#define BMI088_SPI_TIMEOUT_MS 2U
 
 /* 私有函数：SPI读写（带片选控制） */
 static void BMI088_CS_Select(uint16_t pin)
@@ -22,19 +22,6 @@ static void BMI088_CS_Release(uint16_t pin)
         HAL_GPIO_WritePin(GYRO_CS_PORT, pin, GPIO_PIN_SET);
 }
 
-/* 写单个寄存器（加速度计或陀螺仪） */
-static HAL_StatusTypeDef BMI088_WriteReg(SPI_HandleTypeDef *hspi, uint16_t cs_pin, uint8_t reg, uint8_t data)
-{
-    HAL_StatusTypeDef status;
-    uint8_t tx_data[2] = {reg & 0x7F, data}; // 写操作：最高位为0
-
-    BMI088_CS_Select(cs_pin);
-    status = HAL_SPI_Transmit(hspi, tx_data, 2, HAL_MAX_DELAY);
-    BMI088_CS_Release(cs_pin);
-
-    return status;
-}
-
 /* 读单个寄存器（加速度计） */
 static HAL_StatusTypeDef BMI088_Accel_ReadReg(SPI_HandleTypeDef *hspi, uint8_t reg, uint8_t *data)
 {
@@ -43,18 +30,18 @@ static HAL_StatusTypeDef BMI088_Accel_ReadReg(SPI_HandleTypeDef *hspi, uint8_t r
     uint8_t dummy;
 
     BMI088_CS_Select(ACC_CS_PIN);
-    status = HAL_SPI_Transmit(hspi, &tx_data, 1, HAL_MAX_DELAY);
+    status = HAL_SPI_Transmit(hspi, &tx_data, 1, BMI088_SPI_TIMEOUT_MS);
     if (status != HAL_OK) {
         BMI088_CS_Release(ACC_CS_PIN);
         return status;
     }
     // 加速度计SPI读需要先接收一个dummy字节，再接收真实数据
-    status = HAL_SPI_Receive(hspi, &dummy, 1, HAL_MAX_DELAY);
+    status = HAL_SPI_Receive(hspi, &dummy, 1, BMI088_SPI_TIMEOUT_MS);
     if (status != HAL_OK) {
         BMI088_CS_Release(ACC_CS_PIN);
         return status;
     }
-    status = HAL_SPI_Receive(hspi, data, 1, HAL_MAX_DELAY);
+    status = HAL_SPI_Receive(hspi, data, 1, BMI088_SPI_TIMEOUT_MS);
     BMI088_CS_Release(ACC_CS_PIN);
 
     return status;
@@ -68,18 +55,18 @@ static HAL_StatusTypeDef BMI088_Accel_ReadRegs(SPI_HandleTypeDef *hspi, uint8_t 
     uint8_t dummy;
 
     BMI088_CS_Select(ACC_CS_PIN);
-    status = HAL_SPI_Transmit(hspi, &tx_data, 1, HAL_MAX_DELAY);
+    status = HAL_SPI_Transmit(hspi, &tx_data, 1, BMI088_SPI_TIMEOUT_MS);
     if (status != HAL_OK) {
         BMI088_CS_Release(ACC_CS_PIN);
         return status;
     }
     // 丢弃第一个dummy字节
-    status = HAL_SPI_Receive(hspi, &dummy, 1, HAL_MAX_DELAY);
+    status = HAL_SPI_Receive(hspi, &dummy, 1, BMI088_SPI_TIMEOUT_MS);
     if (status != HAL_OK) {
         BMI088_CS_Release(ACC_CS_PIN);
         return status;
     }
-    status = HAL_SPI_Receive(hspi, data, len, HAL_MAX_DELAY);
+    status = HAL_SPI_Receive(hspi, data, len, BMI088_SPI_TIMEOUT_MS);
     BMI088_CS_Release(ACC_CS_PIN);
 
     return status;
@@ -92,9 +79,9 @@ static HAL_StatusTypeDef BMI088_Gyro_ReadReg(SPI_HandleTypeDef *hspi, uint8_t re
     uint8_t tx_data = reg | 0x80;  // Set MSB for read operation
 
     BMI088_CS_Select(GYRO_CS_PIN);
-    status = HAL_SPI_Transmit(hspi, &tx_data, 1, HAL_MAX_DELAY);
+    status = HAL_SPI_Transmit(hspi, &tx_data, 1, BMI088_SPI_TIMEOUT_MS);
     if (status == HAL_OK) {
-        status = HAL_SPI_Receive(hspi, data, 1, HAL_MAX_DELAY);
+        status = HAL_SPI_Receive(hspi, data, 1, BMI088_SPI_TIMEOUT_MS);
     }
     BMI088_CS_Release(GYRO_CS_PIN);
     return status;
@@ -107,126 +94,15 @@ static HAL_StatusTypeDef BMI088_Gyro_ReadRegs(SPI_HandleTypeDef *hspi, uint8_t r
     uint8_t tx_data = reg | 0x80;
 
     BMI088_CS_Select(GYRO_CS_PIN);
-    status = HAL_SPI_Transmit(hspi, &tx_data, 1, HAL_MAX_DELAY);
+    status = HAL_SPI_Transmit(hspi, &tx_data, 1, BMI088_SPI_TIMEOUT_MS);
     if (status != HAL_OK) {
         BMI088_CS_Release(GYRO_CS_PIN);
         return status;
     }
-    status = HAL_SPI_Receive(hspi, data, len, HAL_MAX_DELAY);
+    status = HAL_SPI_Receive(hspi, data, len, BMI088_SPI_TIMEOUT_MS);
     BMI088_CS_Release(GYRO_CS_PIN);
 
     return status;
-}
-
-/* 启动BMI088 */
-HAL_StatusTypeDef bmi088_start(SPI_HandleTypeDef *hspi)
-{
-    HAL_StatusTypeDef status;
-
-    if (hspi == NULL) {
-        return HAL_ERROR;
-    }
-
-    /* 初始化SPI接口 */
-    MX_SPI1_Init();
-
-    /* 确保片选引脚初始为高电平（释放） */
-    HAL_GPIO_WritePin(ACC_CS_PORT, ACC_CS_PIN, GPIO_PIN_SET);
-    HAL_GPIO_WritePin(GYRO_CS_PORT, GYRO_CS_PIN, GPIO_PIN_SET);
-
-    /* 加速度计从I2C切换到SPI模式：进行一次片选唤醒 */
-    BMI088_CS_Select(ACC_CS_PIN);
-    BMI088_CS_Release(ACC_CS_PIN);
-
-    /* 加速度计软复位（可选，确保默认状态） */
-    status = BMI088_WriteReg(hspi, ACC_CS_PIN, ACC_SOFTRESET, ACC_RST_VAL);
-    if (status != HAL_OK) {
-        return status;
-    }
-    HAL_Delay(10);
-
-    status = BMI088_WriteReg(hspi, GYRO_CS_PIN, GYRO_SOFTRESET, GYRO_RST_VAL);
-    if (status != HAL_OK) {
-        return status;
-    }
-    HAL_Delay(10);
-
-    /* 加速度计配置 */
-    status = BMI088_WriteReg(hspi, ACC_CS_PIN, ACC_PWR_CONF, 0x00);
-    if (status != HAL_OK) {
-        return status;
-    }
-
-    status = BMI088_WriteReg(hspi, ACC_CS_PIN, ACC_PWR_CTRL, 0x04);
-    if (status != HAL_OK) {
-        return status;
-    }
-    HAL_Delay(10);
-
-    status = BMI088_WriteReg(hspi, ACC_CS_PIN, ACC_CONF, (0x01 << 7) | (0x02 << 4) | 0x09);
-    if (status != HAL_OK) {
-        return status;
-    }
-
-    status = BMI088_WriteReg(hspi, ACC_CS_PIN, ACC_RANGE, ACC_RANGE_24);
-    if (status != HAL_OK) {
-        return status;
-    }
-
-    /* 陀螺仪配置 */
-    status = BMI088_WriteReg(hspi, GYRO_CS_PIN, GYRO_LPM1, GYRO_LPM1_VAL);
-    if (status != HAL_OK) {
-        return status;
-    }
-    HAL_Delay(50);
-
-    status = BMI088_WriteReg(hspi, GYRO_CS_PIN, GYRO_RANGE, 0x00);
-    if (status != HAL_OK) {
-        return status;
-    }
-
-    return BMI088_WriteReg(hspi, GYRO_CS_PIN, GYRO_BANDWIDTH, 0x04);
-}
-
-HAL_StatusTypeDef bmi088_check_ready(SPI_HandleTypeDef *hspi)
-{
-    uint8_t id;
-    HAL_StatusTypeDef status;
-
-    if (hspi == NULL) {
-        return HAL_ERROR;
-    }
-
-    status = BMI088_Accel_ReadReg(hspi, ACC_CHIP_ID, &id);
-    if (status != HAL_OK) {
-        return status;
-    }
-    if (id != ACC_CHIP_ID_VALUE) {
-        return HAL_ERROR;
-    }
-
-    status = BMI088_Gyro_ReadReg(hspi, GYRO_CHIP_ID, &id);
-    if (status != HAL_OK) {
-        return status;
-    }
-    if (id != GYRO_CHIP_ID_VALUE) {
-        return HAL_ERROR;
-    }
-
-    return HAL_OK;
-}
-
-/* 初始化BMI088：保留旧接口，内部仍拆分为启动和检验。 */
-HAL_StatusTypeDef bmi088_init(SPI_HandleTypeDef *hspi)
-{
-    HAL_StatusTypeDef status;
-
-    status = bmi088_start(hspi);
-    if (status != HAL_OK) {
-        return status;
-    }
-
-    return bmi088_check_ready(hspi);
 }
 
 /* 读取加速度计数据（单位：mg） */

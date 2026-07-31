@@ -15,25 +15,9 @@ static uint16_t GreenLightTask_ResolveSetpointAxis(uint16_t setpoint, uint16_t m
     return setpoint;
 }
 
-static TaskActionResult_t AcquireMeasurementAction_OnEnter(TaskAction_t *action)
+static TaskActionResult_t AcquireMeasurementAction_ConsumeMeasurement(GreenLightTaskProfile_t *profile,
+                                                                       GreenLightTask_t *task)
 {
-    GreenLightTaskProfile_t *profile = (GreenLightTaskProfile_t *)action->profile;
-    GreenLightTask_t *task = (GreenLightTask_t *)action->context;
-
-    if ((profile == NULL) || (task == NULL)) {
-        return TASK_ACTION_FAILURE;
-    }
-
-    if (profile->output.target_detected) {
-        task->last_valid_measurement = profile->output.measurement;
-        task->has_last_valid_measurement = true;
-    }
-
-    GreenLightTaskProfile_ResetOutput(&profile->output);
-    if (!profile->input.upstream_measurement_ready) {
-        return TASK_ACTION_RUNNING;
-    }
-
     profile->output.measurement = profile->input.upstream_measurement;
     profile->output.target_detected = true;
     if ((profile->output.measurement.x == GUIDANCE_NO_TARGET_COORDINATE) ||
@@ -58,6 +42,28 @@ static TaskActionResult_t AcquireMeasurementAction_OnEnter(TaskAction_t *action)
     return TASK_ACTION_SUCCESS;
 }
 
+static TaskActionResult_t AcquireMeasurementAction_OnEnter(TaskAction_t *action)
+{
+    GreenLightTaskProfile_t *profile = (GreenLightTaskProfile_t *)action->profile;
+    GreenLightTask_t *task = (GreenLightTask_t *)action->context;
+
+    if ((profile == NULL) || (task == NULL)) {
+        return TASK_ACTION_FAILURE;
+    }
+
+    if (profile->output.target_detected) {
+        task->last_valid_measurement = profile->output.measurement;
+        task->has_last_valid_measurement = true;
+    }
+
+    GreenLightTaskProfile_ResetOutput(&profile->output);
+    if (!profile->input.upstream_measurement_ready) {
+        return TASK_ACTION_RUNNING;
+    }
+
+    return AcquireMeasurementAction_ConsumeMeasurement(profile, task);
+}
+
 static TaskActionResult_t AcquireMeasurementAction_OnRunning(TaskAction_t *action)
 {
     GreenLightTaskProfile_t *profile = (GreenLightTaskProfile_t *)action->profile;
@@ -71,28 +77,7 @@ static TaskActionResult_t AcquireMeasurementAction_OnRunning(TaskAction_t *actio
         return TASK_ACTION_RUNNING;
     }
 
-    profile->output.measurement = profile->input.upstream_measurement;
-    profile->output.target_detected = true;
-    if ((profile->output.measurement.x == GUIDANCE_NO_TARGET_COORDINATE) ||
-        (profile->output.measurement.y == GUIDANCE_NO_TARGET_COORDINATE)) {
-        profile->output.target_detected = false;
-        GuidanceTargetSmoother_Reset(&task->measurement_smoother);
-        return TASK_ACTION_FAILURE;
-    }
-
-    task->measurement_smoother.config = profile->params.measurement_smoother_config;
-    if (!GuidanceTargetSmoother_Update(&task->measurement_smoother,
-                                       &profile->input.upstream_measurement,
-                                       profile->input.measurement_width,
-                                       profile->input.measurement_height,
-                                       &profile->output.measurement)) {
-        profile->output.target_detected = false;
-        return TASK_ACTION_FAILURE;
-    }
-
-    task->last_valid_measurement = profile->output.measurement;
-    task->has_last_valid_measurement = true;
-    return TASK_ACTION_SUCCESS;
+    return AcquireMeasurementAction_ConsumeMeasurement(profile, task);
 }
 
 static void AcquireMeasurementAction_OnExit(TaskAction_t *action, TaskActionResult_t result)

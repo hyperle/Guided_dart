@@ -74,10 +74,6 @@
 #define GYRO_BW_32			0X07	        //陀螺仪输出频率100Hz,滤波器带宽32Hz
 
 
-/* 芯片ID期望值 */
-#define ACC_CHIP_ID_VALUE   0x1E
-#define GYRO_CHIP_ID_VALUE  0x0F
-
 /* SPI片选引脚定义 */
 #define ACC_CS_PIN          GPIO_PIN_2
 #define ACC_CS_PORT         GPIOB
@@ -92,9 +88,6 @@ typedef struct {
 } bmi088_data_t;
 
 /* 函数声明 */
-HAL_StatusTypeDef bmi088_start(SPI_HandleTypeDef *hspi);
-HAL_StatusTypeDef bmi088_check_ready(SPI_HandleTypeDef *hspi);
-HAL_StatusTypeDef bmi088_init(SPI_HandleTypeDef *hspi);
 HAL_StatusTypeDef bmi088_read_accel(SPI_HandleTypeDef *hspi, float accel[3]);
 HAL_StatusTypeDef bmi088_read_gyro(SPI_HandleTypeDef *hspi, float gyro[3]);
 HAL_StatusTypeDef bmi088_read_temperature(SPI_HandleTypeDef *hspi, float *temp);
