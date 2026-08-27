@@ -1,0 +1,16 @@
+# clangd 配置（IDE 分析用；实际编译以 build/compile_commands.json 为准）
+#
+# 说明：编译用的 -march=rv64imafdcv / -mabi=lp64d / -mcmodel=medany 来自
+#       GCC 工具链，clangd 解析时统一用 --target=riscv64-unknown-linux-musl
+#       代替，避免架构参数差异导致的误报（只影响索引，不影响真实编译）。
+
+CompileFlags:
+  Add:
+    - "--target=riscv64-unknown-linux-musl"
+    - "-D__K230_RTOS__"
+  Remove:
+    - "-march=*"
+    - "-mabi=*"
+    - "-mcmodel=*"
+    - "-fopenmp*"
+    - "-Werror*"

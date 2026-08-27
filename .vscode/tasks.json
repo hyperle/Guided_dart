@@ -1,0 +1,45 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Build all apps",
+      "type": "shell",
+      "command": "bash ${workspaceFolder}/scripts/build.sh",
+      "group": { "kind": "build", "isDefault": true },
+      "problemMatcher": ["$gcc"]
+    },
+    {
+      "label": "Build one app",
+      "type": "shell",
+      "command": "bash ${workspaceFolder}/scripts/build.sh ${input:appName}",
+      "group": "build",
+      "problemMatcher": ["$gcc"]
+    },
+    {
+      "label": "Deploy app to board",
+      "type": "shell",
+      "command": "bash ${workspaceFolder}/scripts/deploy.sh ${input:appName} ${input:boardIp}",
+      "problemMatcher": []
+    },
+    {
+      "label": "Setup toolchain",
+      "type": "shell",
+      "command": "bash ${workspaceFolder}/scripts/setup-toolchain.sh",
+      "problemMatcher": []
+    }
+  ],
+  "inputs": [
+    {
+      "id": "appName",
+      "type": "promptString",
+      "description": "应用名（apps/ 下的目录名）",
+      "default": "app_template"
+    },
+    {
+      "id": "boardIp",
+      "type": "promptString",
+      "description": "板子 IP 地址",
+      "default": "192.168.1.100"
+    }
+  ]
+}

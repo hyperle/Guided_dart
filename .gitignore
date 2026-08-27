@@ -1,0 +1,15 @@
+# 构建产物
+build/
+
+# 仓库内自带的交叉工具链（scripts/setup-toolchain.sh 生成）
+third_party/
+
+# 生成的编译数据库（位于 build/ 下）
+compile_commands.json
+
+# 编辑器/系统临时文件
+.cache/
+*.o
+*.elf
+*.log
+.vscode/*.log

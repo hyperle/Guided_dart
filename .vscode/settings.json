@@ -1,0 +1,32 @@
+{
+  // ===== clangd（代码补全/跳转/诊断，读取 build/compile_commands.json）=====
+  "clangd.arguments": [
+    "--compile-commands-dir=${workspaceFolder}/build",
+    "--background-index",
+    "--header-insertion=never",
+    "--clang-tidy"
+  ],
+  "clangd.path": "clangd",
+
+  // ===== CMake（VS Code CMake Tools 扩展）=====
+  "cmake.buildDirectory": "${workspaceFolder}/build",
+  "cmake.configureArgs": [
+    "-DCMAKE_TOOLCHAIN_FILE=${workspaceFolder}/cmake/toolchain-riscv64-musl.cmake",
+    "-DK230_SDK_ROOT=/mnt/mydata/kRTOSSDK",
+    "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON"
+  ],
+  "cmake.generator": "Ninja",
+
+  // ===== 关闭 MS C/C++ 的 IntelliSense，避免与 clangd 冲突 =====
+  "C_Cpp.intelliSenseEngine": "disabled",
+
+  // ===== 目录视图精简 =====
+  "files.exclude": {
+    "build/": true,
+    "third_party/": true
+  },
+  "search.exclude": {
+    "build/": true,
+    "third_party/": true
+  }
+}
