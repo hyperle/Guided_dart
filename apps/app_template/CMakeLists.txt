@@ -29,7 +29,7 @@ target_compile_options(${APP_NAME} PRIVATE
     -ffunction-sections -fdata-sections)
 
 # 链接公共配置（SDK 头文件 + link.lds 静态链接）
-target_link_libraries(${APP_NAME} PRIVATE k230_rtos_app)
+target_link_libraries(${APP_NAME} PRIVATE k230_peripherals)
 
 # 输出 ELF 文件名即 APP_NAME（与 SDK 生成的板端可执行文件同名）
 # 产物路径固定为 build/<APP_NAME>/<APP_NAME>，便于脚本定位

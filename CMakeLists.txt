@@ -16,7 +16,7 @@ cmake_minimum_required(VERSION 3.20)
 #   cmake --build build
 # ============================================================================
 
-project(k230d_rtos_apps LANGUAGES C)
+project(k230d_rtos_apps LANGUAGES C CXX)
 
 # ---------------------------------------------------------------------------
 # K230 RTOS SDK 根目录（本机默认；若 SDK 在其他路径，用 -DK230_SDK_ROOT=... 覆盖）
@@ -58,6 +58,14 @@ foreach(_inc IN LISTS _hal_incs)
   target_include_directories(k230_rtos_app INTERFACE "${_inc}")
 endforeach()
 
+file(GLOB _hal_lib_dirs "${K230_SDK_ROOT}/output/*/rtsmart/libs/rtsmart_hal/lib")
+foreach(_lib_dir IN LISTS _hal_lib_dirs)
+  target_link_directories(k230_rtos_app INTERFACE "${_lib_dir}")
+endforeach()
+if(_hal_lib_dirs)
+  target_link_libraries(k230_rtos_app INTERFACE -Wl,--start-group pwm i2c gpio fpioa -Wl,--end-group)
+endif()
+
 # 4) 链接参数：与 SDK 一致 —— 使用 RT-Smart 链接脚本 + 静态链接
 target_link_options(k230_rtos_app INTERFACE
     "-T${CMAKE_CURRENT_SOURCE_DIR}/cmake/link.lds"
@@ -67,6 +75,7 @@ target_link_options(k230_rtos_app INTERFACE
 # ---------------------------------------------------------------------------
 # 收集 apps/ 下所有业务应用（每个子目录 = 一个板端可执行程序）
 # ---------------------------------------------------------------------------
+add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/components/peripherals")
 file(GLOB _app_dirs CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/apps/*")
 foreach(_dir IN LISTS _app_dirs)
   if(IS_DIRECTORY "${_dir}" AND EXISTS "${_dir}/CMakeLists.txt")

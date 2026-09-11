@@ -22,11 +22,17 @@
 
   // ===== 目录视图精简 =====
   "files.exclude": {
-    "build/": true,
     "third_party/": true
   },
   "search.exclude": {
     "build/": true,
     "third_party/": true
+  },
+  "python.analysis.extraPaths": [
+    "/home/hyperlee/.kendryte/k230_canmv_stubs/8f620e570e90363678bd2fb9fdb22f4e16ba8fbf"
+  ],
+  "python.analysis.stubPath": "/home/hyperlee/.kendryte/k230_canmv_pylance/439b7958a1f3a53a/typings",
+  "python.analysis.diagnosticSeverityOverrides": {
+    "reportMissingModuleSource": "none"
   }
 }

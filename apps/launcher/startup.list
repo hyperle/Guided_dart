@@ -1,0 +1,45 @@
+# ============================================================================
+# launcher 开机自启动清单 —— 本文件是**源码母版**（apps/launcher/startup.list）
+#
+# 板端运行时默认读的是 /sdcard/app/startup_final.list（launcher 源码里
+# DEFAULT_LIST 的定义；也可用 argv[1] 指定其它清单文件）。
+# 部署时请把本文件拷到板端并命名为：
+#     /sdcard/app/startup_final.list          （与 launcher 同目录）
+# 之后直接编辑 SD 卡上的这份即可，无需重编译 launcher。
+#
+# 语法（每行一条）:
+#     绝对路径 [参数...] [&]
+#     - 行尾带 "&"  -> 后台启动，不等待，适合摄像头/AI/网络等常驻服务；
+#                      由 launcher 统一监督（waitpid 回收）。
+#     - 不带 "&"    -> 前台启动，等它退出后才执行下一行，适合初始化类程序。
+#     - 以 '#' 开头或空行 -> 注释，被忽略。
+#     - 每行总长不超过 511 字符，token 数不超过 15 个。
+#
+# 更新方式：直接替换 /sdcard/app/ 下对应 ELF，重启即生效。
+#   前提：开机自启命令指向文件系统路径（RT-Smart Configuration ->
+#         Rtsmart auto execute command string = /sdcard/app/launcher），
+#         而不是 @preload/fastboot 快起（快起跑的是镜像里的备份，
+#         替换 SD 卡文件无效，需重烧固件）。
+# ============================================================================
+
+# ---- 本机实际启用的启动项（后台常驻）----
+# green_led_rtos 是 VICAP 唯一持有者，内含解耦的 H.264 录像模块（recorder.c）：
+# 默认常录（开机即录、每段 256MB 自动滚动、recording/ 总量上限 8GB、删最旧）。
+# 暂停常录：kill -USR2 <pid>（pid 见 /sdcard/app/green_led_rtos.pid）或 socket
+# /sdcard/app/green_led_rtos.ctl 发 stop；恢复常录：USR1 / start；status 看状态。
+
+/sdcard/app/green_led_rtos &
+
+# ---- 示例 1：先做初始化（前台，跑完再继续） ----
+# /sdcard/app/init_peripherals
+# /sdcard/app/init_network
+
+# ---- 示例 2：常驻服务（后台，带参数） ----
+# /sdcard/app/green_led_rtos &
+# /sdcard/app/lushan_stream &
+# /sdcard/app/rtsp_server 8554 &
+
+# ---- 示例 3：只启动一个调试程序 ----
+# /sdcard/app/hello_world
+
+# 空清单（只有注释）时 launcher 直接退出；冒烟测试可先部署一个应用并取消
