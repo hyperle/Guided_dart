@@ -42,6 +42,22 @@ fi
 echo "拷贝 ${ELF} -> ${BOARD_USER}@${BOARD_IP}:${DEST_DIR}/ ..."
 scp "${ELF}" "${BOARD_USER}@${BOARD_IP}:${DEST_DIR}/"
 
+# launcher 默认读取板端 startup_final.list，随启动器一起部署清单；
+# 清单里启用的 usb_cam_stream 也一起拷过去，避免板端找不到文件。
+if [[ "${APP}" == "launcher" ]]; then
+    STARTUP_LIST="${REPO_ROOT}/apps/launcher/startup.list"
+    echo "拷贝 ${STARTUP_LIST} -> ${BOARD_USER}@${BOARD_IP}:${DEST_DIR}/startup_final.list ..."
+    scp "${STARTUP_LIST}" "${BOARD_USER}@${BOARD_IP}:${DEST_DIR}/startup_final.list"
+
+    CAM_ELF="${REPO_ROOT}/${BUILD_DIR}/usb_cam_stream/usb_cam_stream"
+    if [[ -f "${CAM_ELF}" ]]; then
+        echo "拷贝 ${CAM_ELF} -> ${BOARD_USER}@${BOARD_IP}:${DEST_DIR}/ ..."
+        scp "${CAM_ELF}" "${BOARD_USER}@${BOARD_IP}:${DEST_DIR}/"
+    else
+        echo "提示: 未找到 ${CAM_ELF}，先运行 bash scripts/build.sh usb_cam_stream" >&2
+    fi
+fi
+
 echo
 echo "部署完成。板端（msh 终端）运行:"
 echo "  msh> ${DEST_DIR}/${APP}"

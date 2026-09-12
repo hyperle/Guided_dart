@@ -35,7 +35,8 @@ bash scripts/build.sh launcher
 
 # 2. 部署启动器 + 清单到板子 /sdcard/app
 bash scripts/deploy.sh launcher <板子IP> /sdcard/app
-scp apps/launcher/startup.list root@<板子IP>:/sdcard/app/startup_final.list
+# deploy.sh 会自动把 startup.list 复制为 startup_final.list，
+# 并把清单里用到的 usb_cam_stream 一起拷过去（若已编译）
 
 # 3. 先在板端 msh 手动验证（默认读 /sdcard/app/startup_final.list）
 msh> /sdcard/app/launcher

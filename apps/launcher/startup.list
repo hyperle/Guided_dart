@@ -23,12 +23,12 @@
 # ============================================================================
 
 # ---- 本机实际启用的启动项（后台常驻）----
-# green_led_rtos 是 VICAP 唯一持有者，内含解耦的 H.264 录像模块（recorder.c）：
-# 默认常录（开机即录、每段 256MB 自动滚动、recording/ 总量上限 8GB、删最旧）。
-# 暂停常录：kill -USR2 <pid>（pid 见 /sdcard/app/green_led_rtos.pid）或 socket
-# /sdcard/app/green_led_rtos.ctl 发 stop；恢复常录：USR1 / start；status 看状态。
-
-/sdcard/app/green_led_rtos &
+# 回退版：只保留「相机画面经 USB 回传主机」这一条链路，绿灯识别
+# （green_led_rtos）先不启动 —— 它与 usb_cam_stream 都要独占 VICAP，
+# 同一时刻只能有一个。
+# 主机端另开终端看画面: python3 scripts/usb_cam_viewer.py
+# 板端日志: /sdcard/app/logs/usb_cam_stream.log
+/sdcard/app/usb_cam_stream -w 640 -h 480 &
 
 # ---- 示例 1：先做初始化（前台，跑完再继续） ----
 # /sdcard/app/init_peripherals

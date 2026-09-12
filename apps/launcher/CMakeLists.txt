@@ -21,6 +21,7 @@
 # 构建：bash scripts/build.sh launcher
 # 产物：build/launcher/launcher
 # 部署：bash scripts/deploy.sh launcher <板子IP> /sdcard/app
+#       （会同时复制 startup_final.list，以及清单里用到的 usb_cam_stream）
 # ============================================================================
 
 set(APP_NAME launcher)
