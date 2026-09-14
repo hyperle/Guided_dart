@@ -19,9 +19,16 @@ apps/
 ├── app_template/        ← 骨架示例（可整体复制改名）
 │   ├── CMakeLists.txt   ← 定义 APP_NAME 与源文件
 │   └── main.c           ← 入口骨架（占位，非业务代码）
-├── <你的应用A>/          ← ★ 你的业务代码写在这里 ★
-└── <你的应用B>/          ← 可以有多个应用
+├── launcher/            ← 开机自启动器（读 startup_final.list）
+├── green_led_ai/        ← ★ 当前主线：绿灯识别 + H.264 录像（单进程双子系统）
+├── board_probe/         ← 板端环境探针（MMZ/堆、CPU 频率、RVV、KPU/AI2D 设备、PM 档位）
+├── green_led_rtos/      ← 旧版（有帧双重所有权崩溃问题，已从启动清单移除，仅作对照）
+└── usb_cam_stream/      ← USB 回传原始画面（与 green_led_ai 互斥，都要独占 VICAP）
 ```
+
+> 当前主线应用是 **`apps/green_led_ai/`**，用 `--vision on/off`、`--record on/off`
+> 分别开关识别与录像；设计说明、板端自查步骤、参数表见
+> [`apps/green_led_ai/README.md`](apps/green_led_ai/README.md)。
 
 - **一个 `apps/<应用名>/` 目录 = 一个板端可执行程序**。
 - 目录结构与官方 SDK 的 `src/applications/<应用名>/` 一一对应：

@@ -36,6 +36,7 @@
 #include "mpi_venc_api.h"
 
 #include "recorder.h"
+#include "mpp_mem.h"
 
 #define VENC_CHN       0
 #define IN_RING_N      6    /* NV12 输入环形缓冲数（约 2.8MB VB） */
@@ -95,8 +96,7 @@ static uint32_t g_in_blk = 0;
 static int g_chn_ready = 0;
 
 static rec_slot_t g_slots[IN_RING_N];
-static uint32_t g_inflight_idx[INFLIGHT_MAX];
-static uint32_t g_inflight_n = 0;
+static uint32_t g_pending_out = 0;   /* 已送编码器、尚未从码流里取回的帧数 */
 
 /* 会话文件 */
 static FILE *g_fh264 = NULL;
@@ -270,45 +270,18 @@ static int rec_ensure_pools(void)
 {
     if (g_pools_ok)
         return 0;
+    /* 只需要编码器输出缓冲池：输入帧直接用 VICAP 的 dump buffer 送编码器，
+     * 不再申请输入池、不再在 app 里拷帧（拷帧那条路会把 RT-Smart 打挂）。 */
     uint32_t ysize = g_cfg.width * g_cfg.height;
-    g_in_blk = VB_ALIGN_UP((uint64_t)ysize * 3u / 2u, 4096);
-    g_in_pool = kd_mpi_vb_create_pool_ex(g_in_blk, IN_RING_N,
-                                         VB_REMAP_MODE_NOCACHE);
-    if (g_in_pool == VB_INVALID_POOLID) {
-        rec_log("recorder: input vb pool create failed\n");
-        return -1;
-    }
     k_u32 oblk = VB_ALIGN_UP((uint64_t)ysize, 4096);
     g_out_pool = kd_mpi_vb_create_pool_ex(oblk, OUT_BUF_N,
                                           VB_REMAP_MODE_NOCACHE);
     if (g_out_pool == VB_INVALID_POOLID) {
-        kd_mpi_vb_destory_pool(g_in_pool);
-        g_in_pool = VB_INVALID_POOLID;
         rec_log("recorder: output vb pool create failed\n");
         return -1;
     }
-    for (int i = 0; i < IN_RING_N; i++) {
-        rec_slot_t *s = &g_slots[i];
-        s->handle = kd_mpi_vb_get_block(g_in_pool, g_in_blk, NULL);
-        if (s->handle == 0) {
-            rec_log("recorder: get input block %d failed\n", i);
-            s->handle = 0;
-            s->state = SLOT_FREE;
-            continue;
-        }
-        s->phys = kd_mpi_vb_handle_to_phyaddr(s->handle);
-        s->va = (uint8_t *)kd_mpi_sys_mmap(s->phys, g_in_blk);
-        if (!s->va || s->phys == 0) {
-            rec_log("recorder: map input block %d failed\n", i);
-            s->va = NULL;
-            s->handle = 0;
-            continue;
-        }
-        s->state = SLOT_FREE;
-    }
     g_pools_ok = 1;
-    rec_log("recorder: vb pools ok (in=%u blk=%u, out=%u)\n",
-            g_in_pool, g_in_blk, g_out_pool);
+    rec_log("recorder: vb pool ok (out=%u blk=%u)\n", g_out_pool, oblk);
     return 0;
 }
 
@@ -316,7 +289,9 @@ static int rec_venc_start(void)
 {
     if (g_chn_ready)
         return 0;
+    mpp_mem_begin();
     if (kd_mpi_venc_attach_vb_pool(VENC_CHN, g_out_pool) != K_SUCCESS) {
+        mpp_mem_end();
         rec_log("recorder: venc attach vb pool failed\n");
         return -1;
     }
@@ -334,14 +309,17 @@ static int rec_venc_start(void)
     if (kd_mpi_venc_create_chn(VENC_CHN, &attr) != K_SUCCESS) {
         rec_log("recorder: venc create chn failed\n");
         kd_mpi_venc_detach_vb_pool(VENC_CHN);
+        mpp_mem_end();
         return -1;
     }
     if (kd_mpi_venc_start_chn(VENC_CHN) != K_SUCCESS) {
         rec_log("recorder: venc start chn failed\n");
         kd_mpi_venc_destroy_chn(VENC_CHN);
         kd_mpi_venc_detach_vb_pool(VENC_CHN);
+        mpp_mem_end();
         return -1;
     }
+    mpp_mem_end();
     g_chn_ready = 1;
     return 0;
 }
@@ -351,85 +329,11 @@ static void rec_venc_stop(void)
     if (!g_chn_ready)
         return;
     /* stop_chn 由会话停止流程在 drain 收尾前显式调用，这里只销毁通道 */
+    mpp_mem_begin();
     kd_mpi_venc_destroy_chn(VENC_CHN);
     kd_mpi_venc_detach_vb_pool(VENC_CHN);
+    mpp_mem_end();
     g_chn_ready = 0;
-}
-
-/* ---------------- feed 线程 ---------------- */
-
-static void *rec_feed_thread(void *arg)
-{
-    (void)arg;
-    pthread_mutex_lock(&g_lock);
-    for (;;) {
-        /* 无排队帧时休息；会话结束(active=0)后若队列也空则置 feed_idle */
-        while (!g_exit) {
-            int any = 0;
-            for (int i = 0; i < IN_RING_N; i++)
-                if (g_slots[i].state == SLOT_QUEUED) { any = 1; break; }
-            if (any)
-                break;
-            g_feed_idle = g_active ? 0 : 1;
-            pthread_cond_broadcast(&g_cond);
-            pthread_cond_wait(&g_cond, &g_lock);
-        }
-        if (g_exit) {
-            int any = 0;
-            for (int i = 0; i < IN_RING_N; i++)
-                if (g_slots[i].state == SLOT_QUEUED) { any = 1; break; }
-            if (!any) {
-                g_feed_idle = 1;
-                pthread_cond_broadcast(&g_cond);
-                break; /* deinit：队列已空，退出 */
-            }
-        }
-        /* 取一个 QUEUED 槽送出 */
-        rec_slot_t *s = NULL;
-        for (int i = 0; i < IN_RING_N; i++)
-            if (g_slots[i].state == SLOT_QUEUED) { s = &g_slots[i]; break; }
-        if (!s)
-            continue;
-        g_feed_idle = 0;
-
-        k_video_frame_info fi;
-        memset(&fi, 0, sizeof(fi));
-        fi.v_frame.width = g_cfg.width;
-        fi.v_frame.height = g_cfg.height;
-        fi.v_frame.pixel_format = PIXEL_FORMAT_YUV_SEMIPLANAR_420;
-        fi.v_frame.stride[0] = s->stride;
-        fi.v_frame.stride[1] = s->stride;
-        fi.v_frame.phys_addr[0] = s->phys;
-        fi.v_frame.phys_addr[1] = s->phys + (uint64_t)s->stride * g_cfg.height;
-        pthread_mutex_unlock(&g_lock);
-
-        k_s32 ret = kd_mpi_venc_send_frame(VENC_CHN, &fi, 80);
-
-        pthread_mutex_lock(&g_lock);
-        if (ret == K_SUCCESS) {
-            s->state = SLOT_SENT;
-            if (g_inflight_n < INFLIGHT_MAX) {
-                g_inflight_idx[g_inflight_n++] = (uint32_t)(s - g_slots);
-            } else {
-                /* in-flight 队列异常满：释放缓冲并计数 */
-                s->state = SLOT_FREE;
-                g_stats.frames_dropped++;
-                rec_log("recorder: in-flight overflow\n");
-            }
-            g_stats.frames_sent++;
-            if (g_fcsv)
-                fprintf(g_fcsv, "%" PRIu64 ",%" PRIu64 ",%" PRIu64
-                                ",%d,%d,%u\n",
-                        s->frame_seq, s->result_seq, s->mono_us,
-                        s->center_x, s->center_y, s->detect_fps);
-        } else {
-            s->state = SLOT_FREE;
-            g_stats.frames_dropped++;
-        }
-        pthread_cond_broadcast(&g_cond);
-    }
-    pthread_mutex_unlock(&g_lock);
-    return NULL;
 }
 
 /* ---------------- drain 线程 ---------------- */
@@ -437,21 +341,26 @@ static void *rec_feed_thread(void *arg)
 static void *rec_drain_thread(void *arg)
 {
     (void)arg;
-    pthread_mutex_lock(&g_lock);
     for (;;) {
-        while (!g_exit && g_inflight_n == 0) {
+        pthread_mutex_lock(&g_lock);
+        while (!g_exit && g_pending_out == 0) {
             g_drain_idle = g_active ? 0 : 1;
             pthread_cond_broadcast(&g_cond);
             pthread_cond_wait(&g_cond, &g_lock);
         }
-        if (g_exit && g_inflight_n == 0) {
+        if (g_exit && g_pending_out == 0) {
             g_drain_idle = 1;
             pthread_cond_broadcast(&g_cond);
+            pthread_mutex_unlock(&g_lock);
             break;
         }
+        g_drain_idle = 0;
         pthread_mutex_unlock(&g_lock);
 
-        /* 取编码流（在锁外做，get_stream 会等待） */
+        /* 取编码流：与采集线程的 send_frame、会话起停共用同一把 MPP 锁。
+         * 实测 send 与 get/release 并发会把 RT-Smart 打挂，所以全部串行；
+         * 超时取短，避免持锁太久把采集线程堵到 VICAP buffer 耗尽。 */
+        mpp_mem_begin();
         k_venc_chn_status status;
         memset(&status, 0, sizeof(status));
         if (kd_mpi_venc_query_status(VENC_CHN, &status) != K_SUCCESS)
@@ -461,14 +370,15 @@ static void *rec_drain_thread(void *arg)
         st.pack_cnt = status.cur_packs ? status.cur_packs : 1;
         st.pack = (k_venc_pack *)malloc(sizeof(k_venc_pack) * st.pack_cnt);
         if (!st.pack) {
+            mpp_mem_end();
             usleep(10000);
-            pthread_mutex_lock(&g_lock);
             continue;
         }
-        k_s32 ret = kd_mpi_venc_get_stream(VENC_CHN, &st, 200);
+        k_s32 ret = kd_mpi_venc_get_stream(VENC_CHN, &st, 10);
         if (ret != K_SUCCESS) {
             free(st.pack);
-            pthread_mutex_lock(&g_lock);
+            mpp_mem_end();
+            usleep(5000);      /* 编码器还在攒，稍后再取 */
             continue;
         }
 
@@ -477,44 +387,50 @@ static void *rec_drain_thread(void *arg)
         for (k_u32 i = 0; i < st.pack_cnt; i++) {
             if (st.pack[i].len == 0)
                 continue;
-            k_u8 *p = (k_u8 *)kd_mpi_sys_mmap(st.pack[i].phys_addr,
-                                              st.pack[i].len);
+            k_u8 *p = (k_u8 *)mpp_mem_map(st.pack[i].phys_addr, st.pack[i].len);
             if (p) {
                 if (g_fh264 && fwrite(p, 1, st.pack[i].len, g_fh264) == st.pack[i].len)
                     added += st.pack[i].len;
-                kd_mpi_sys_munmap(p, st.pack[i].len);
+                mpp_mem_unmap(p, st.pack[i].len);
             }
             if (st.pack[i].type != K_VENC_HEADER)
                 video++;
         }
         kd_mpi_venc_release_stream(VENC_CHN, &st);
         free(st.pack);
+        mpp_mem_end();
+
+        if (g_stats.frames_written < 5)
+            rec_log("recorder: trace drain packs=%u video=%u added=%" PRIu64 "\n",
+                    (unsigned)st.pack_cnt, video, added);
 
         pthread_mutex_lock(&g_lock);
-        uint32_t pops = video < g_inflight_n ? video : g_inflight_n;
-        for (uint32_t k = 0; k < pops; k++) {
-            rec_slot_t *s = &g_slots[g_inflight_idx[0]];
-            /* 队列前移 */
-            for (uint32_t j = 0; j + 1 < g_inflight_n; j++)
-                g_inflight_idx[j] = g_inflight_idx[j + 1];
-            g_inflight_n--;
-            s->state = SLOT_FREE;
-        }
-        g_stats.frames_written += pops;
-        g_stats.bytes += added;
-        if (video > pops)
-            rec_log("recorder: pack/frame mismatch video=%u pops=%u\n", video, pops);
-        if (REC_ROLL_BYTES && g_stats.bytes >= REC_ROLL_BYTES && !g_auto_roll) {
-            g_auto_roll = 1;   /* 常录滚动点：交给控制线程滚动到下一段 */
-            rec_log("recorder: session roll point reached\n");
-        }
-        if (g_cap_bytes && g_stats.bytes > g_cap_bytes && !g_auto_stop) {
-            g_auto_stop = 1;   /* 单会话超总容量上限：交给控制线程停止 */
-            rec_log("recorder: session exceeds cap, auto stop\n");
+        if (video) {
+            uint32_t done = video < g_pending_out ? video : g_pending_out;
+            g_pending_out -= done;
+            g_stats.frames_written += done;
+            g_stats.bytes += added;
         }
         pthread_cond_broadcast(&g_cond);
+        pthread_mutex_unlock(&g_lock);
+
+        /* 每秒把码流刷一次盘：异常重启也能留下已录内容 */
+        if (g_fh264 && added) {
+            static uint64_t last_sync_ms;
+            uint64_t now_ms = mono_us() / 1000ull;
+            if (now_ms - last_sync_ms >= 1000ull) {
+                last_sync_ms = now_ms;
+                int fd = fileno(g_fh264);
+                if (fd >= 0)
+                    fsync(fd);
+                if (g_fcsv) {
+                    int cfd = fileno(g_fcsv);
+                    if (cfd >= 0)
+                        fsync(cfd);
+                }
+            }
+        }
     }
-    pthread_mutex_unlock(&g_lock);
     return NULL;
 }
 
@@ -676,6 +592,9 @@ static int rec_session_start(void)
         rec_log("recorder: open %s failed\n", g_h264_path);
         return -1;
     }
+    /* 不缓冲：帧一写就落盘。SD/FAT 上 stdio 缓冲会让文件长时间显示 0 字节，
+     * 而且一旦板子异常重启，缓冲区里的录像就全丢了。 */
+    setvbuf(g_fh264, NULL, _IONBF, 0);
     g_fcsv = fopen(g_csv_path, "w");
     if (!g_fcsv) {
         fclose(g_fh264);
@@ -683,6 +602,7 @@ static int rec_session_start(void)
         rec_log("recorder: open %s failed\n", g_csv_path);
         return -1;
     }
+    setvbuf(g_fcsv, NULL, _IONBF, 0);
     if (rec_venc_start() != 0) {
         fclose(g_fh264); g_fh264 = NULL;
         fclose(g_fcsv);  g_fcsv = NULL;
@@ -695,13 +615,9 @@ static int rec_session_start(void)
     g_sess_idx = idx;
     g_sess_start_us = mono_us();
     memset(&g_stats, 0, sizeof(g_stats));
-    /* 兜底：上一会话异常残留的槽位/在途帧一律作废（本会话编码器是新建的） */
-    for (int i = 0; i < IN_RING_N; i++)
-        g_slots[i].state = SLOT_FREE;
-    g_inflight_n = 0;
+    g_pending_out = 0;
     g_auto_roll = 0;
     g_auto_stop = 0;
-    g_feed_idle = 0;
     g_drain_idle = 0;
     g_active = 1;
     pthread_cond_broadcast(&g_cond);
@@ -710,6 +626,11 @@ static int rec_session_start(void)
     fprintf(g_fcsv, "# session rec_%04u start_mono_us=%" PRIu64 "\n",
             idx, g_sess_start_us);
     fprintf(g_fcsv, "frame_seq,result_seq,mono_us,center_x,center_y,detect_fps\n");
+    {
+        int cfd = fileno(g_fcsv);            /* 表头立刻落盘，拔电也能看到 */
+        if (cfd >= 0)
+            fsync(cfd);
+    }
     rec_log("recorder: session rec_%04u start (dir=%s cap=%" PRIu64 ")\n",
             idx, g_dir, g_cap_bytes);
     return 0;
@@ -723,29 +644,23 @@ static void rec_session_stop(void)
         return;
     }
     g_active = 0;
-    g_feed_idle = 0;
     pthread_cond_broadcast(&g_cond);
     pthread_mutex_unlock(&g_lock);
 
     rec_log("recorder: session rec_%04u stopping\n", g_sess_idx);
-    if (!rec_wait_idle(&g_feed_idle, 2000))
-        rec_log("recorder: warning feed not idle\n");
     if (g_fcsv) {
         fflush(g_fcsv);
         fclose(g_fcsv);
         g_fcsv = NULL;
     }
     /* 停编码器让尾部帧输出，drain 取完 in-flight 后自然空闲 */
+    mpp_mem_begin();
     kd_mpi_venc_stop_chn(VENC_CHN);
+    mpp_mem_end();
     if (!rec_wait_idle(&g_drain_idle, 3000)) {
         rec_log("recorder: warning drain not idle\n");
         pthread_mutex_lock(&g_lock);
-        for (int i = 0; i < IN_RING_N; i++)
-            if (g_slots[i].state == SLOT_SENT) {
-                g_slots[i].state = SLOT_FREE;
-                g_stats.frames_dropped++;
-            }
-        g_inflight_n = 0;
+        g_pending_out = 0;
         pthread_cond_broadcast(&g_cond);
         pthread_mutex_unlock(&g_lock);
         /* drain 看到 in-flight 清空后应立即空闲；等它停下再关文件 */
@@ -796,7 +711,7 @@ int rec_init(const recorder_config_t *cfg)
         g_cap_bytes = g_cfg.cap_bytes;
     if (!g_cfg.width)  g_cfg.width = 640;
     if (!g_cfg.height) g_cfg.height = 480;
-    if (!g_cfg.nominal_fps) g_cfg.nominal_fps = 120;
+    if (!g_cfg.nominal_fps) g_cfg.nominal_fps = 30;
     if (!g_cfg.bitrate_kbps) g_cfg.bitrate_kbps = 12000;
 
     /* 控制 socket（/sdcard/app 支持 unix socket，与旧版一致） */
@@ -818,8 +733,7 @@ int rec_init(const recorder_config_t *cfg)
     if (g_listen_fd < 0)
         rec_log("recorder: control socket unavailable\n");
 
-    if (pthread_create(&g_feed_tid, NULL, rec_feed_thread, NULL) != 0 ||
-        pthread_create(&g_drain_tid, NULL, rec_drain_thread, NULL) != 0 ||
+    if (pthread_create(&g_drain_tid, NULL, rec_drain_thread, NULL) != 0 ||
         pthread_create(&g_ctrl_tid, NULL, rec_ctrl_thread, NULL) != 0) {
         rec_log("recorder: thread create failed\n");
         return -1;
@@ -839,22 +753,9 @@ void rec_deinit(void)
     rec_session_stop();
     pthread_mutex_unlock(&g_op);
     pthread_cond_broadcast(&g_cond);
-    pthread_join(g_feed_tid, NULL);
     pthread_join(g_drain_tid, NULL);
     pthread_join(g_ctrl_tid, NULL);
     if (g_pools_ok) {
-        for (int i = 0; i < IN_RING_N; i++) {
-            if (g_slots[i].va) {
-                kd_mpi_sys_munmap(g_slots[i].va, g_in_blk);
-                g_slots[i].va = NULL;
-            }
-            if (g_slots[i].handle) {
-                kd_mpi_vb_release_block(g_slots[i].handle);
-                g_slots[i].handle = 0;
-            }
-        }
-        if (g_in_pool != VB_INVALID_POOLID)
-            kd_mpi_vb_destory_pool(g_in_pool);
         if (g_out_pool != VB_INVALID_POOLID)
             kd_mpi_vb_destory_pool(g_out_pool);
         g_in_pool = g_out_pool = VB_INVALID_POOLID;
@@ -898,63 +799,56 @@ void rec_note_result(uint64_t frame_seq, int32_t center_x, int32_t center_y,
     pthread_mutex_unlock(&g_lock);
 }
 
-int rec_feed_frame(uint64_t phys_y, uint32_t stride, uint32_t width,
-                   uint32_t height, uint64_t frame_seq, uint64_t t_us)
+int rec_feed_frame(k_video_frame_info *frame, uint64_t frame_seq,
+                   uint64_t mono_us)
 {
-    (void)width;
-    if (!g_active || !g_pools_ok)
+    if (!g_active || !g_chn_ready || !frame)
         return 0;
-    uint64_t total = (uint64_t)stride * height * 3u / 2u;
-    if (total > g_in_blk) {
-        static int warned;
-        if (!warned++)
-            rec_log("recorder: frame bigger than block, dropped\n");
-        return 0;
-    }
-    uint64_t ysize = (uint64_t)stride * height;
 
     pthread_mutex_lock(&g_lock);
     if (!g_active) {
         pthread_mutex_unlock(&g_lock);
         return 0;
     }
-    rec_slot_t *s = NULL;
-    for (int i = 0; i < IN_RING_N; i++)
-        if (g_slots[i].state == SLOT_FREE) { s = &g_slots[i]; break; }
-    if (!s) {
-        g_stats.frames_dropped++; /* 环形满：丢帧，不影响采集 */
-        pthread_mutex_unlock(&g_lock);
-        return 0;
-    }
-    s->state = SLOT_RESERVED; /* feed 只取 QUEUED，避免拷到一半被送编码 */
-    s->stride = stride;
-    s->frame_seq = frame_seq;
-    s->mono_us = t_us;
-    s->result_seq = g_last_result.seq;
-    s->center_x = g_last_result.center_x;
-    s->center_y = g_last_result.center_y;
-    s->detect_fps = g_last_result.fps;
     g_stats.frames_in++;
+    uint32_t n_in = g_stats.frames_in;
     pthread_mutex_unlock(&g_lock);
 
-    /* 拷帧（源是采集线程当前持有的 VICAP dump buffer，本调用期间有效） */
-    uint8_t *src = (uint8_t *)kd_mpi_sys_mmap(phys_y, total);
-    if (!src) {
-        pthread_mutex_lock(&g_lock);
-        if (s->state == SLOT_RESERVED)
-            s->state = SLOT_FREE;
-        pthread_mutex_unlock(&g_lock);
-        return 0;
-    }
-    memcpy(s->va, src, ysize);
-    memcpy(s->va + ysize, src + ysize, total - ysize);
-    kd_mpi_sys_munmap(src, total);
+    if (n_in <= 3)
+        rec_log("recorder: trace send seq=%" PRIu64 " w=%u h=%u fmt=%d "
+                "stride=%u/%u phys0=0x%llx phys1=0x%llx pool=%u\n",
+                frame_seq, frame->v_frame.width, frame->v_frame.height,
+                (int)frame->v_frame.pixel_format,
+                frame->v_frame.stride[0], frame->v_frame.stride[1],
+                (unsigned long long)frame->v_frame.phys_addr[0],
+                (unsigned long long)frame->v_frame.phys_addr[1],
+                frame->pool_id);
+
+    /* 映射串行锁：VENC 内部会动这块物理内存，和识别线程的映射互斥 */
+    mpp_mem_begin();
+    k_s32 ret = kd_mpi_venc_send_frame(VENC_CHN, frame, 20);
+    mpp_mem_end();
+
+    if (n_in <= 3)
+        rec_log("recorder: trace send seq=%" PRIu64 " ret=%d\n",
+                frame_seq, (int)ret);
+
     pthread_mutex_lock(&g_lock);
-    if (s->state == SLOT_RESERVED)
-        s->state = SLOT_QUEUED; /* 拷贝完成，feed 才可见 */
-    pthread_cond_broadcast(&g_cond); /* 唤醒 feed */
+    if (ret == K_SUCCESS) {
+        g_pending_out++;          /* 等 drain 从码流里取回 */
+        pthread_cond_broadcast(&g_cond);
+        g_stats.frames_sent++;
+        if (g_fcsv)
+            fprintf(g_fcsv, "%" PRIu64 ",%" PRIu64 ",%" PRIu64
+                            ",%d,%d,%u\n",
+                    frame_seq, g_last_result.seq, mono_us,
+                    g_last_result.center_x, g_last_result.center_y,
+                    g_last_result.fps);
+    } else {
+        g_stats.frames_dropped++;
+    }
     pthread_mutex_unlock(&g_lock);
-    return 1;
+    return ret == K_SUCCESS ? 1 : 0;
 }
 
 void rec_signal_start(void)

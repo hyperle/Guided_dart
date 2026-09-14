@@ -29,6 +29,8 @@
 
 #include <stdint.h>
 
+#include "mpi_vicap_api.h"   /* k_video_frame_info */
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -74,11 +76,12 @@ int  rec_is_active(void);
 void rec_note_result(uint64_t frame_seq, int32_t center_x, int32_t center_y,
                      uint32_t detect_fps);
 
-/* 采集线程每帧调用一次：录像开启时拷贝该帧入队；返回 1=已入队，0=未录/丢弃。
- * phys_y: NV12 Y 平面物理地址（UV 紧跟其后，stride*height 起）；调用方须保证
- * 该 buffer 在调用期间有效。 */
-int  rec_feed_frame(uint64_t phys_y, uint32_t stride, uint32_t width,
-                    uint32_t height, uint64_t frame_seq, uint64_t mono_us);
+/* 采集线程每帧调用一次：录像开启时把**真实的那一帧**交给硬件编码器（不拷贝）。
+ * frame 必须是 kd_mpi_vicap_dump_frame 拿到的原始结构体（不要自己拼，
+ * VENC 会读里面的 pool/stride 等字段）。
+ * 返回 1=已送编码器，0=未录/送失败；调用方须保证 buffer 在返回前有效。 */
+int  rec_feed_frame(k_video_frame_info *frame, uint64_t frame_seq,
+                    uint64_t mono_us);
 
 /* 信号处理上下文安全：仅置位标志，由内部控制线程执行（异步） */
 void rec_signal_start(void);

@@ -23,19 +23,41 @@
 # ============================================================================
 
 # ---- 本机实际启用的启动项（后台常驻）----
-# 回退版：只保留「相机画面经 USB 回传主机」这一条链路，绿灯识别
-# （green_led_rtos）先不启动 —— 它与 usb_cam_stream 都要独占 VICAP，
-# 同一时刻只能有一个。
-# 主机端另开终端看画面: python3 scripts/usb_cam_viewer.py
-# 板端日志: /sdcard/app/logs/usb_cam_stream.log
-/sdcard/app/usb_cam_stream -w 640 -h 480 &
+# green_led_ai = VICAP 唯一持有者，内部两条互不影响的流水：
+#   CHN0 -> 绿灯识别（RVV CIELAB 查表阈值；后续可切 KPU/NanoDet-Plus）
+#   CHN1 -> H.264 录像（25fps 抽样，VENC 直接吃 VICAP 物理地址，零拷贝）
+# 日志:  /sdcard/app/logs/green_led_ai.log
+# 录像:  /sdcard/app/recording/rec_XXXX.h264 + rec_XXXX.csv
+# 控制:  socket /sdcard/app/green_led_ai.ctl（vision on|off / record on|off / status）
+#        pid 在 /sdcard/app/green_led_ai.pid；kill -USR1 开始常录、-USR2 停止常录
+/sdcard/app/green_led_ai &
+
+# 只跑识别、不录像（录像子系统连 CHN1 都不配置，省一份 VB）:
+# /sdcard/app/green_led_ai --record off &
+# 只录像、不识别:
+# /sdcard/app/green_led_ai --vision off --rec-fps 25 &
+# 调参示例（参数含义见 apps/green_led_ai/README.md）:
+# /sdcard/app/green_led_ai --roi 160,120,320,240 --step 2,2 --lab 12,-20,8 --pix-min 50 &
+# /sdcard/app/green_led_ai --roi 0,0,0,0 --step 1,1 --expo-us 0 &
+#
+# 板端环境探针（MMZ/堆、CPU 频率、RVV、KPU/AI2D 设备、PM 档位）——手动跑，别自启:
+# /sdcard/app/board_probe
+#
+# 含 KPU 后端的版本（链接 nncase，约 5MB；--detector kpu 需要 kmodel）:
+#   /sdcard/app/green_led_ai_kpu --detector kpu --kmodel /sdcard/app/best.kmodel --kpu-class 1 &
+#   （best.kmodel 是 SDK 自带的 YOLOv8 三分类示例模型，class 0/1/2 = apple/banana/orange，
+#    只是用来验证 KPU 链路与耗时；换绿灯模型后改成对应类别/类别数即可）
+#
+# AI2D+KPU 乒乓流水计时器（模型无关；与 green_led_ai 互斥，都要独占 VICAP）:
+# /sdcard/app/kpu_bench --kmodel /sdcard/app/best.kmodel --mode both --frames 200
 
 # ---- 示例 1：先做初始化（前台，跑完再继续） ----
 # /sdcard/app/init_peripherals
 # /sdcard/app/init_network
 
 # ---- 示例 2：常驻服务（后台，带参数） ----
-# /sdcard/app/green_led_rtos &
+# 与 green_led_rtos 互斥（都要独占 VICAP），同一时刻只能启用一个：
+# /sdcard/app/usb_cam_stream -w 640 -h 480 &
 # /sdcard/app/lushan_stream &
 # /sdcard/app/rtsp_server 8554 &
 
