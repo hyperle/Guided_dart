@@ -43,9 +43,18 @@ static uint32_t g_diag_phys_n;
 static uint64_t g_fail_dump_us_sum;   /* 失败 dump 的耗时累计（区分「等到超时」与「立刻报错」） */
 static uint64_t g_fail_dump_cnt;
 static uint64_t g_last_dump_us;
-static uint32_t g_dump_interval_us;   /* 采集帧间隔（按实测 fps 估算），用于节流 */
+/*
+ * 采集节流（自适应）：
+ * 板端实测：dump 的**超时路径**会让 VICAP 通道逐渐劣化（超时攒到约千次后彻底
+ * 不出帧，表现为 dumped 每 2 秒增量 58→37→29→6→0 的衰减）。旧工程用
+ * 「连续 dump + 200ms 超时」几乎从不超时，单通道稳定跑了 40079 帧。
+ * 这里改成：节流起点取 105% 帧间隔（比一帧稍长，醒来时帧一定已就绪），
+ * 万一还是超时就**自动加大节流**，把超时次数压到 0 附近。
+ */
+static uint32_t g_dump_interval_us;   /* 当前节流间隔（动态调整） */
+static uint32_t g_dump_interval_base; /* 起始间隔 = 105% 帧间隔 */
+static uint32_t g_dump_timeouts;      /* 本进程内 dump 超时累计（要盯住 = 0） */
 static int      g_stall_reported;
-static int      g_stall_fallback_done;
 
 static int      g_found_prev;
 static detect_out_t g_last;          /* 最近一帧的检测明细（探针/亮度） */
@@ -142,25 +151,28 @@ static void *vis_cap_thread(void *arg)
          * 长时间大量超时后通道会彻底不出帧。这里先睡到「下一帧该到了」再取，
          * 取的时候帧基本已经就绪，超时次数从每帧 2~3 次降到接近 0。
          */
-        if (g_dump_interval_us) {
-            uint64_t since = mono_us() - g_last_dump_us;
-            if (g_last_dump_us && since < g_dump_interval_us)
-                usleep((useconds_t)(g_dump_interval_us - since));
-        }
 
         k_video_frame_info f;
         memset(&f, 0, sizeof(f));
         int raw = 0;
         uint64_t t_dump0 = mono_us();
         /* 短超时（5ms）快速失败：不让「等新帧」长时间占着 MPP 锁 */
-        int rc = vicap_dump_soft(VICAP_CHN_VISION, &f, 5, &raw);
+        int rc = vicap_dump_soft(VICAP_CHN_VISION, &f, g_cfg.dump_timeout_ms, &raw);
         if (rc != 0) {
             g_fail_dump_us_sum += mono_us() - t_dump0;
             g_fail_dump_cnt++;
             if (rc > 0) {
-                /* 「暂时没有帧」：视觉比采集快时是常态（传感器 30fps，处理只要几百 us）；
-                 * 但连续 3 秒都没有帧就是真的停流了 -> 打诊断（并可选自动降级） */
-                g_stats.noframe++;
+                /* rc==1: BUF_EMPTY（此刻没帧，常态）
+                 * rc==2: NOTREADY（流水未就绪/被反压卡住，必须单独计数并报警） */
+                if (rc == 2) {
+                    g_stats.notready++;
+                    if (g_stats.notready % 100u == 1u)
+                        app_log(APP_NAME_STR ": vision dump 返回 NOTREADY（流水未就绪，"
+                                "累计 %llu 次）—— 通常是录像/编码侧反压把 ISP 卡住了\n",
+                                (unsigned long long)g_stats.notready);
+                } else {
+                    g_stats.noframe++;
+                }
                 /*
                  * 只有「曾经成功出过帧」并且「连续 3 秒没有新帧」才算停流。
                  * （上一版写成 dumped==0 也算，结果启动瞬间第一次空转就误触发，
@@ -180,10 +192,16 @@ static void *vis_cap_thread(void *arg)
                             (unsigned)raw, (unsigned long long)g_stats.dump_fail);
             }
             /* 锁外退避；连续空转时退得更久一点，减少对录像侧的锁竞争 */
-            if (++empty_runs >= 3)
-                usleep(3000);
-            else
-                usleep(1000);
+            /*
+             * 连续取帧（不节流）：dump 的语义就是"阻塞等下一帧"，正常情况几乎不会
+             * 走到这里。真走到这里说明帧率低于预期或流水异常，给个短退避避免空转。
+             */
+            g_dump_timeouts++;
+            g_stats.dump_timeouts = g_dump_timeouts;
+            if (g_dump_timeouts % 100u == 1u)
+                app_log(APP_NAME_STR ": vision dump no-frame (total %u)\n", g_dump_timeouts);
+            (void)empty_runs;
+            usleep(1000);
             continue;
         }
         empty_runs = 0;
@@ -258,44 +276,38 @@ static void vision_diag_stall(int raw, uint64_t stall_us)
     int got_attr = (kd_mpi_vicap_get_chn_attr(VICAP_DEV_ID_0, VICAP_CHN_VISION, &ca)
                     == K_SUCCESS);
     mpp_leave();
+    if (got_attr) {
+        static char attr_buf[160];
+        snprintf(attr_buf, sizeof(attr_buf),
+                 "en=%d out=%ux%u fmt=%d buf=%u sz=%u align=%u",
+                 (int)ca.chn_enable, ca.out_win.width, ca.out_win.height,
+                 (int)ca.pix_format, ca.buffer_num, ca.buffer_size, ca.alignment);
+        app_log(APP_NAME_STR ": 视觉停流诊断 CHN0 属性: %s\n", attr_buf);
+    }
 
     record_stats_t rs;
     record_get_stats(&rs);
 
-    app_log(APP_NAME_STR ": 视觉停流诊断: raw=0x%08x 已停 %.1fs dumped=%llu noframe=%llu | "
+    app_log(APP_NAME_STR ": 视觉停流诊断: raw=0x%08x 已停 %.1fs dumped=%llu noframe=%llu "
+            "notready=%llu rel_fail=%llu dump_timeout=%u pace=%uus | "
             "失败 dump 平均耗时 %llu us（≈超时上限说明是在等帧，≈0 说明通道立刻报错）| "
             "CHN0 attr: %s | CHN0 缓冲引用:%s | rec bound=%d streams=%llu\n",
             (unsigned)raw, (double)stall_us / 1e6,
             (unsigned long long)g_stats.dumped, (unsigned long long)g_stats.noframe,
+            (unsigned long long)g_stats.notready,
+            (unsigned long long)vicap_release_fail_count(),
+            g_dump_timeouts, g_dump_interval_us,
             (unsigned long long)(g_fail_dump_cnt ? g_fail_dump_us_sum / g_fail_dump_cnt : 0),
             got_attr ? "ok" : "get_chn_attr 失败",
             blk[0] ? blk : "(还没有成功 dump 过)",
             rs.bound, (unsigned long long)rs.streams);
 
-    if (g_cfg.stall_fallback && !g_stall_fallback_done) {
-        g_stall_fallback_done = 1;
-        app_log(APP_NAME_STR ": 停流自检：解绑录像，观察视觉是否恢复（视觉优先，先保识别）\n");
-        if (record_force_unbind()) {
-            int got = 0;
-            uint64_t t0 = mono_us();
-            while (mono_us() - t0 < 3000000ull) {
-                k_video_frame_info f2;
-                memset(&f2, 0, sizeof(f2));
-                int r2 = 0;
-                if (vicap_dump_soft(VICAP_CHN_VISION, &f2, 20, &r2) == 0) {
-                    vicap_release(VICAP_CHN_VISION, &f2);
-                    got = 1;
-                    break;
-                }
-                usleep(2000);
-            }
-            app_log(APP_NAME_STR ": 停流自检结果：解绑后视觉%s\n",
-                    got ? "立刻恢复 -> 问题在 CHN1/绑定 与 CHN0 的相互影响"
-                        : "仍未恢复 -> 问题在 CHN0 自身（与录像无关）");
-        } else {
-            app_log(APP_NAME_STR ": 停流自检：录像未处于绑定状态，跳过\n");
-        }
-    }
+    /*
+     * 这里刻意**不做任何自动处置**。上一版会"自动解绑录像再看视觉是否恢复"，
+     * 但解绑后 CHN1 仍处于使能且无人消费的状态，ISP 照样停 —— 于是它给出了
+     * "问题在 CHN0 自身"的假结论。诊断只负责把事实打进日志，处置由人决定。
+     */
+
 }
 
 /* ============================ 处理线程 ============================ */
@@ -495,7 +507,12 @@ static void *vis_proc_thread(void *arg)
                         memset(&d, 0, sizeof(d));
                         g_det->run(&view, full_scan, &d);
                         d.seq = seq;
-                        vicap_release(VICAP_CHN_VISION, &frame);
+                        /*
+                         * 交棒给录像（shared 模式）：收下则不归还 —— 由录像取流线程
+                         * 在取到对应码流后归还（唯一归还者）。拒收/录像关闭则自己归还。
+                         */
+                        if (!g_cfg.record_on || record_offer_frame(&frame, seq) != 0)
+                            vicap_release(VICAP_CHN_VISION, &frame);
                         trace_log(seq, "proc detect-done cx=%d px=%u", d.cx, d.px);
 
                         if (d.cx >= 0)
@@ -547,9 +564,11 @@ int vision_start(void)
 
     {
         uint32_t afps = vicap_acq_fps();
-        g_dump_interval_us = afps ? (1000000u / afps) : 33000u;
-        /* 留 20% 余量：醒来时帧基本已就绪，又不至于等到下一帧 */
-        g_dump_interval_us = (uint32_t)(g_dump_interval_us * 8u / 10u);
+        uint32_t frame_us = afps ? (1000000u / afps) : 33000u;
+        g_dump_interval_base = frame_us;
+        g_dump_interval_us = frame_us;
+        app_log(APP_NAME_STR ": vision dump 策略=continuous timeout=%dms（帧间隔 %u us）\n",
+                g_cfg.dump_timeout_ms, frame_us);
     }
 
     g_det = detector_get(g_cfg.detector);

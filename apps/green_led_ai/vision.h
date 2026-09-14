@@ -31,11 +31,12 @@ extern "C" {
 typedef struct {
     uint64_t frames;          /* 处理完成的视觉帧数 */
     uint64_t dumped;          /* CHN0 dump 成功总帧数（判断采集是否在出帧） */
-    uint64_t noframe;         /* dump 返回「暂时没有帧」的次数（ISP 是否停流的直接证据） */
+    uint64_t noframe;         /* dump 返回 BUF_EMPTY（此刻没帧，识别比采集快时常见） */
+    uint64_t notready;        /* dump 返回 NOTREADY（流水被反压卡住，>0 要查录像侧） */
     uint64_t misses;          /* 未命中的帧数（cx<0） */
     uint64_t dropped;         /* 信箱满被丢弃的帧数（新帧优先） */
     uint64_t dump_fail;       /* dump 真错误次数 */
-    uint64_t dump_timeouts;   /* 其中因超时的次数 */
+    uint64_t dump_timeouts;   /* dump 超时次数（超时会让 VICAP 通道劣化，必须保持 0） */
     uint64_t found, lost;     /* 命中/丢失累计 */
     uint64_t found_total, lost_total;
     uint32_t fps;             /* 统计周期内的处理帧率 */

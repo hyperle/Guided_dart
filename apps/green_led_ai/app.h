@@ -91,7 +91,9 @@ typedef struct {
 
     /* 运维 */
     int pm_perf;
-    int stall_fallback;          /* 视觉停流时自动解绑录像做自检（视觉优先） */                 /* 1=把 CPU/KPU 的 PM governor 设为 performance */
+    int      rec_mode;          /* 0=shared（默认：与识别共享通道，应用交棒）
+                                 * 1=bind（双通道硬件直连，实验特性） */
+    int      dump_timeout_ms;   /* dump 等待上限(ms)；dump 是"阻塞等下一帧"，给足即可 */
     int status_period_s;
     int trace_frames;            /* 前 N 帧逐帧 trace（定位板子卡在哪一步） */
 } cfg_t;

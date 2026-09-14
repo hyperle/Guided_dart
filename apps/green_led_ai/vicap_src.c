@@ -192,7 +192,7 @@ static int vicap_hw_setup(void)
      *   kpu   后端走 ISP 硬件出的 RGB_888_PLANAR —— AI2D 的 NCHW uint8 输入
      *         正好就是一个 RGB 平面张量，CPU 侧完全不碰色彩空间。
      */
-    if (g_cfg.vision_on) {
+    if (g_cfg.vision_on || (g_cfg.record_on && g_cfg.rec_mode == 0)) {
         if (g_cfg.vis_rgb_planar) {
             if (chn_config(VICAP_CHN_VISION, g_cfg.vis_w, g_cfg.vis_h,
                            PIXEL_FORMAT_RGB_888_PLANAR, 6, 3, 1) != 0)
@@ -214,7 +214,12 @@ static int vicap_hw_setup(void)
         app_log(APP_NAME_STR ": vision off -> CHN0 配为 160x120 占位通道（规避只配 CHN1）\n");
     }
 
-    if (g_cfg.record_on &&
+    /*
+     * 录像通道只在 bind 模式（rec_mode=1）下单独配置；shared 模式（默认）
+     * 与识别共用 CHN0 —— 板端实测"双通道"形态会在 200~400 帧后整体衰减到停，
+     * 而单通道形态在旧工程里稳定跑过 40079 帧。
+     */
+    if (g_cfg.record_on && g_cfg.rec_mode == 1 &&
         chn_config(VICAP_CHN_RECORD, g_cfg.rec_w, g_cfg.rec_h,
                    PIXEL_FORMAT_YUV_SEMIPLANAR_420, 6, 3, 2) != 0)
         return -1;
@@ -353,6 +358,14 @@ int vicap_dump(int chn, k_video_frame_info *frame, int timeout_ms)
     return (ret == K_SUCCESS) ? 0 : (int)ret;
 }
 
+/*
+ * 返回值：0=拿到帧，1=暂时没帧（BUF_EMPTY，常态），2=流水未就绪（NOTREADY，
+ * 说明 ISP/VICAP 被反压卡住了，不是"没帧"这么简单），-1=其它错误。
+ *
+ * 这两个错误码必须分开：板端实测 "视觉停流" 时报的是 NOTREADY(errid=16)，
+ * 含义是"模块未就绪/流水停了"；而 BUF_EMPTY(14) 才是"此刻没有帧"。
+ * 之前混成一个分支，导致日志一直显示"在等帧"，把真正的原因盖住了。
+ */
 int vicap_dump_soft(int chn, k_video_frame_info *frame, int timeout_ms, int *ret)
 {
     mpp_enter();
@@ -363,16 +376,33 @@ int vicap_dump_soft(int chn, k_video_frame_info *frame, int timeout_ms, int *ret
         *ret = (int)r;
     if (r == K_SUCCESS)
         return 0;
-    /* 通道暂时没帧：不算错误（视觉/录像都比采集快，这是常态） */
-    if ((int)r == (int)K_ERR_VICAP_NOTREADY || (int)r == (int)K_ERR_VICAP_BUF_EMPTY)
+    if ((int)r == (int)K_ERR_VICAP_BUF_EMPTY)
         return 1;
+    if ((int)r == (int)K_ERR_VICAP_NOTREADY)
+        return 2;
     return -1;
 }
+
+static uint64_t g_release_fail;
 
 int vicap_release(int chn, const k_video_frame_info *frame)
 {
     mpp_enter();
     k_s32 ret = kd_mpi_vicap_dump_release(DEV, (k_vicap_chn)chn, frame);
     mpp_leave();
-    return (ret == K_SUCCESS) ? 0 : (int)ret;
+    if (ret != K_SUCCESS) {
+        /* 归还失败 = VB 块回不到环形缓冲，攒够 6 个整条通道就死了：
+         * 这个计数必须盯着（板端 2025-09 的"停流"就是这类症状） */
+        g_release_fail++;
+        if (g_release_fail % 20u == 1u)
+            app_log(APP_NAME_STR ": vicap release CHN%d 失败 ret=0x%08x (累计 %llu)\n",
+                    chn, (unsigned)ret, (unsigned long long)g_release_fail);
+        return (int)ret;
+    }
+    return 0;
+}
+
+uint64_t vicap_release_fail_count(void)
+{
+    return g_release_fail;
 }

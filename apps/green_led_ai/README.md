@@ -10,21 +10,42 @@ K230/K230D RT-Smart 业务应用：**VICAP 唯一持有者**，内部两条**完
 
 ```text
 sensor(gc2093) 1920x1080@30
-  └─ VICAP(dev0, OFFLINE)
-       ├─ CHN0 视觉通道 640x480 NV12（独立 VB 环形缓冲）
-       │     └─ vis_cap 线程: dump -> 单槽信箱(新帧优先，满则归还旧帧)
-       │            └─ vis_proc 线程: 映射缓存取 VA -> RVV CIELAB 查表阈值
-       │                   -> 连通域筛选 -> 绿灯重心 -> 结果/CSV
-       └─ CHN1 录像通道 640x480 NV12（独立 VB 环形缓冲）
-             └─ rec_cap 线程: 25fps 抽样 -> kd_mpi_venc_send_frame(物理地址, 零拷贝)
-                    └─ rec_drain 线程: get_stream -> 持久映射读码流 -> 写 SD
-                           -> 会话滚动(REC_ROLL_BYTES) / 目录容量上限(cap) / 淘汰最旧
+  └─ VICAP(dev0, OFFLINE, 唯一一条通道 CHN0 640x480 NV12)
+       ├─ vis_cap 线程: 连续 dump（长超时，不节流）-> 单槽信箱(新帧优先)
+       │     └─ vis_proc 线程: cached 映射+失效 -> RVV CIELAB 查表阈值 -> 连通域
+       │            └─ record_offer_frame(): 交棒给录像（收下则本线程不再归还）
+       └─ 录像子系统（共享该帧）
+             ├─ 送帧线程: 确定性抽样(30->25) -> kd_mpi_venc_send_frame -> 在途 FIFO
+             │            （抽样丢/送失败 -> 自己归还；这是"不反压"的关键）
+             ├─ 取流线程: get_stream -> 码流拷进 2MB RAM 环 -> 归还对应在途帧
+             │            -> release_stream（唯一归还者，1:1 对应）
+             └─ 写盘线程: 会话开关/滚动/容量淘汰 + fwrite + fsync(1 秒 1 次)
 ```
+
 
 两条通道**各自持有自己的 VB 帧，不共享任何一帧**；这是本工程与旧工程
 `green_led_rtos` 最本质的区别，也是旧工程「跑几帧就把内核/VICAP 打死」的根因修法。
 
 ---
+
+## 0. 设计依据：哪些是本板实测事实，哪些是未验证假设
+
+**实测事实（本板，2025-09 连续多轮上板）**
+
+| 事实 | 证据 |
+|---|---|
+| 单通道 + OFFLINE + **连续长超时 dump** + 应用交棒 = 稳定 | 旧工程 `green_led_rtos` 同形态跑 40079 帧、28fps |
+| **双通道 + CHN1 硬件绑定 VENC** 会在 200~400 帧后衰减到停 | 四次运行 `dumped` 每 2 秒增量 58→37→29→6→0，随后 CHN1 的 `streams` 也冻结 |
+| 该 VICAP 在"此刻没帧"时返回 `0xa0158010`（module=0x15 VICAP、errid=16 NOTREADY） | 错误码解码 + `noframe=0 / notready=~100/s` |
+| 帧归还没有失败过（所有权纪律是对的） | `rel_fail=0` 全程 |
+| SD 写入不是停流原因 | RAM 环修好后 SD 基本没写盘，仍然衰减到停 |
+| RVV 颜色检测正确且在跟踪目标 | `selftest rvv-vs-scalar PASS`；`detect FOUND center=(317,304) px=2204`；`det=883us`（ROI）|
+| 端到端延迟稳态 ≈1.1ms | `lat=1114/1136us` |
+| 单帧算力上限：全画面 2.6ms / ROI ≈0.87ms | `bench` 行 + 实测 `det`（对应 385fps / 1150fps）|
+| **不支持** AF_UNIX 控制 socket（`Out of memory`） | `control socket failed` —— 运行期启停只能用启动参数/信号 |
+| `dump 超时`路径要尽量避开 | 我上一版"节流 26.6ms + 超时 5ms < 帧间隔 33.3ms"→ 每帧必超时一次，与本板的衰减时间线吻合 |
+
+**因此本轮重构的取舍**：默认走**单通道共享**（不用第二条通道），dump 用**连续 + 150ms 长超时**（不节流），并**删掉**了"停流时自动解绑"这类会给出假结论的自动处置。
 
 ## 1. 为什么旧工程会死（根因，有日志证据）
 
@@ -250,7 +271,11 @@ green_led_ai: probe det_avg=180us det_max=900us lat_max=4200us thr L>=12 A<=-20 
 | `dump_fail` 持续增长（尤其录像侧） | 该通道缓冲被占满：检查 SD/编码速度，或降低 `--rec-fps`/`--bitrate` |
 | `mpp contended` 不为 0 | 有并发 MPP 调用，需要复盘调用点（不允许出现） |
 | `maps` 持续增长 | 出现逐帧 mmap，必须修（不允许出现） |
-| `rec drop` 很大而 `written` 正常 | 正常：25fps 抽样本来就会丢掉多出来的帧 |
+| `rec sent/streams/written` | 三者应同步增长（sent≈streams≈written） |
+| `sample_out` | 按 25fps 抽样主动丢掉的帧数（正常，≈sent/5） |
+| `send_fail` / `ring=` | 应为 0；`ring=` 增长说明 SD 撑不住（只影响录像） |
+| `fifo_ovf` / `fifo_udf` | **必须恒为 0**：非 0 说明"送进去的帧"和"取出来的包"失去 1:1，帧归还会错位 |
+| `dto=`（dump 空转累计） | 稳态应几乎不增长；猛涨说明帧率低于预期或流水异常 |
 
 CSV 列（与旧工程一致，便于沿用离线脚本）：
 
@@ -283,7 +308,9 @@ ffmpeg -f h264 -framerate 25 -i rec_0001.h264 -c copy rec_0001.mp4
 | `--miss <n>` | 3 | 连续丢失 n 帧后整幅重扫；0=关 |
 | `--expo-us <us>` | 200 | 固定曝光；0=不设；`--ae` 开自动曝光 |
 | `--keep-gain` | 关 | 默认把增益压到最低 |
-| `--rec-fps <n>` | 25 | 录像抽样帧率（视觉可以远高于它） |
+| `--rec-mode <shared\|bind>` | shared | shared=单通道、识别交棒（**默认，本板验证过**）；bind=双通道硬件直连（实验特性） |
+| `--dump-timeout <ms>` | 150 | dump 等待上限。dump 是"阻塞等下一帧"，给足即可（短超时会让通道劣化） |
+| `--rec-fps <n>` | 25 | 录像抽样帧率（shared 模式下由应用确定性抽样，30→25 即每 6 帧丢 1 帧） |
 | `--bitrate <kbps>` | 12000 | H.264 码率 |
 | `--rec-dir <path>` | /sdcard/app/recording | 录像目录 |
 | `--cap <bytes>` | 8GB | 目录总容量上限，超限删最旧会话 |

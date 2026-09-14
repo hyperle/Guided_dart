@@ -39,6 +39,9 @@ void vicap_stop(void);
 int  vicap_dump(int chn, k_video_frame_info *frame, int timeout_ms);
 int  vicap_release(int chn, const k_video_frame_info *frame);
 
+/* 归还失败的累计次数（>0 说明 VB 块在泄漏，攒够通道缓冲数就会停流） */
+uint64_t vicap_release_fail_count(void);
+
 /*
  * 「软」dump：把「暂时还没有帧」和「真错误」分开，返回值：
  *   0 = 拿到帧；1 = 暂时没帧（NOTREADY/BUF_EMPTY，别当错误、别刷日志）；

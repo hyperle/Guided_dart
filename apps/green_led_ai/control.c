@@ -43,18 +43,24 @@ void control_status_line(char *buf, size_t n)
     /* 健康检查行：mpp 的三个数（contended/maxhold/maps）是「三条铁律」的自证 */
     snprintf(buf, n,
              APP_NAME_STR ": status vis=%s fps=%u dumped=%llu noframe=%llu fail=%llu "
-             "drop=%llu center=(%d,%d) miss=%llu det=%u/%uus lat=%u/%uus(all %uus) | "
-             "rec=%s auto=%d sess=%u fps=%u streams=%llu written=%llu disc=%llu "
-             "bytes=%llu | mpp calls=%llu contended=%llu maxhold=%lluus maps=%u\n",
+             "drop=%llu dto=%llu center=(%d,%d) miss=%llu det=%u/%uus lat=%u/%uus(all %uus) | "
+             "rec=%s%s auto=%d sess=%u fps=%u sent=%llu streams=%llu written=%llu "
+             "drop(sample=%llu skip=%llu fail=%llu ring=%llu) bytes=%llu | "
+             "mpp calls=%llu contended=%llu maxhold=%lluus maps=%u\n",
              vision_enabled() ? "on" : "off", vs.fps,
              (unsigned long long)vs.dumped, (unsigned long long)vs.noframe,
              (unsigned long long)vs.dump_fail, (unsigned long long)vs.dropped,
+             (unsigned long long)vs.dump_timeouts,
              r.center_x, r.center_y, (unsigned long long)vs.misses,
              vs.t_detect_avg_us, vs.t_detect_max_us,
              vs.t_lat_avg_us, vs.t_lat_max_us, vs.t_lat_max_all_us,
-             rs.active ? "on" : "off", rs.enabled, rs.session_index, rs.real_fps,
-             (unsigned long long)rs.streams, (unsigned long long)rs.written,
-             (unsigned long long)rs.discarded, (unsigned long long)rs.bytes,
+             rs.active ? "on" : "off", rs.shared ? "(shared)" : "(bind)", rs.enabled,
+             rs.session_index, rs.real_fps,
+             (unsigned long long)rs.sent, (unsigned long long)rs.streams,
+             (unsigned long long)rs.written,
+             (unsigned long long)rs.sampled_out, (unsigned long long)rs.sent_skipped,
+             (unsigned long long)rs.send_fail,
+             (unsigned long long)rs.ring_dropped_frames, (unsigned long long)rs.bytes,
              (unsigned long long)ms.calls, (unsigned long long)ms.contended,
              (unsigned long long)ms.max_hold_us, ms.maps);
 
@@ -175,11 +181,19 @@ static void handle_command(const char *line, char *reply, size_t n)
             record_stats_t rs;
             record_get_stats(&rs);
             snprintf(reply, n,
-                     "record=%s auto=%d bound=%d sess=%u fps=%u streams=%llu written=%llu "
-                     "disc=%llu bytes=%llu dir=%s cap=%llu\n",
-                     rs.active ? "on" : "off", rs.enabled, rs.bound, rs.session_index,
-                     rs.real_fps, (unsigned long long)rs.streams,
-                     (unsigned long long)rs.written, (unsigned long long)rs.discarded,
+                     "record=%s mode=%s auto=%d sessions=%llu sess=%u fps=%u sent=%llu streams=%llu "
+                     "written=%llu sample_out=%llu skip=%llu send_fail=%llu "
+                     "fifo_ovf=%llu fifo_udf=%llu "
+                     "offer_busy=%llu ring_drop=%llu bytes=%llu dir=%s cap=%llu\n",
+                     rs.active ? "on" : "off", rs.shared ? "shared" : "bind", rs.enabled,
+                     (unsigned long long)rs.sessions, rs.session_index, rs.real_fps,
+                     (unsigned long long)rs.sent, (unsigned long long)rs.streams,
+                     (unsigned long long)rs.written, (unsigned long long)rs.sampled_out,
+                     (unsigned long long)rs.sent_skipped, (unsigned long long)rs.send_fail,
+                     (unsigned long long)rs.fifo_overflow,
+                     (unsigned long long)rs.fifo_underflow,
+                     (unsigned long long)rs.offer_busy,
+                     (unsigned long long)rs.ring_dropped_frames,
                      (unsigned long long)rs.bytes, rs.dir ? rs.dir : "-",
                      (unsigned long long)rs.cap_bytes);
         } else if (strcmp(a, "cap") == 0) {

@@ -82,7 +82,8 @@ static cfg_t g_default = {
     .kpu_sync = 0,
 
     .pm_perf = 0,
-    .stall_fallback = 1,
+    .rec_mode = 0,               /* 默认 shared：单通道，板端验证过的形态 */
+    .dump_timeout_ms = 150,      /* 连续 dump + 长超时：旧工程 40079 帧稳定 */
     .status_period_s = 2,
     .trace_frames = 5,
 };
@@ -205,9 +206,11 @@ static void usage(void)
     app_log("  --kpu-nms <own>        kpu NMS 实现（只支持 own；SDK 的 librvv.a\n");
     app_log("                         实际没实现 nms()，见 README 说明）\n");
     app_log("  --kpu-sync <0|1>       kpu 输入 tensor 是否 sync_write_back（默认 0）\n");
+    app_log("  --rec-mode <shared|bind>  录像取帧方式 (默认 shared:\n");
+    app_log("                        单通道、识别交棒给编码器；bind=双通道硬件直连，实验特性)\n");
+    app_log("  --dump-timeout <ms>    dump 等待上限 (默认 %d ms)\n", g_default.dump_timeout_ms);
     app_log("  --vicap-mode <auto|online|offline>  采集工作模式 (默认 auto:\n");
-    app_log("                 双通道用 online（官方 sample 组合），单通道用 offline)\n");
-    app_log("  --stall-fallback <0|1> 视觉停流时自动解绑录像做自检 (默认 1)\n");
+    app_log("                 shared 单通道 -> offline；bind 双通道 -> online)\n");
     app_log("  --pm-perf              把 CPU/KPU 的 PM governor 设为 performance\n");
     app_log("                         (若板端 DVFS 把大核降频，加这个；失败只记日志)\n");
     app_log("  --status <s>           状态日志周期秒 (默认 %d)\n", g_default.status_period_s);
@@ -238,8 +241,8 @@ static int parse_args(int argc, char **argv)
         { "cap",      required_argument, 0, 'C' },
         { "detector", required_argument, 0, 'd' },
         { "pm-perf",  no_argument,       0, 'P' },
-        { "stall-fallback", required_argument, 0, 'X' },
         { "vicap-mode", required_argument, 0, 'M' },
+        { "dump-timeout", required_argument, 0, 'u' },
         { "kmodel",   required_argument, 0, 'k' },
         { "kpu-conf", required_argument, 0, 'q' },
         { "kpu-iou",  required_argument, 0, 'Q' },
@@ -298,7 +301,8 @@ static int parse_args(int argc, char **argv)
         case 'C': g_cfg.cap_bytes = strtoull(optarg, NULL, 0); break;
         case 'd': g_cfg.detector = optarg; break;
         case 'P': g_cfg.pm_perf = 1; break;
-        case 'X': g_cfg.stall_fallback = atoi(optarg); break;
+        case 'j': g_cfg.rec_mode = (strcmp(optarg, "bind") == 0) ? 1 : 0; break;
+        case 'u': g_cfg.dump_timeout_ms = atoi(optarg); break;
         case 'M':
             if (strcmp(optarg, "online") == 0)
                 g_cfg.vicap_online = 1;
@@ -334,14 +338,28 @@ static int parse_args(int argc, char **argv)
     if (g_cfg.status_period_s < 1)
         g_cfg.status_period_s = 1;
     /*
-     * 采集工作模式（auto）：
-     *   双通道（识别+录像）-> ONLINE：官方 yolov8_run_camera 就是 ONLINE + 两条不同
-     *     尺寸的通道（尺寸由 ISP 输出窗口决定）；而旧工程那套 OFFLINE + 两条缩放通道
-     *     官方从没出现过，板端实测 CHN0 十几帧后就再也拿不到帧。
-     *   单通道（只识别或只录像）-> OFFLINE：旧工程在这套组合上实测跑过 4 万帧。
+     * 录像取帧方式：
+     *   shared（默认）：只有 CHN0 一条通道，识别处理完把帧交给编码器，
+     *                   取流线程在拿到对应码流后归还 —— 与旧工程同形态（实测 40079 帧稳定）
+     *   bind（实验）： 额外配 CHN1 并硬件绑定到 VENC。本板实测该形态 200~400 帧后
+     *                   两条通道一起衰减到停，故不作为默认。
+     */
+    if (g_cfg.rec_mode == 0 && g_cfg.record_on &&
+        (g_cfg.rec_w != g_cfg.vis_w || g_cfg.rec_h != g_cfg.vis_h))
+        app_log(APP_NAME_STR ": shared 模式与识别共用 CHN0，--rec-out 被忽略"
+                "（录像尺寸 = 识别尺寸 %ux%u）\n", g_cfg.vis_w, g_cfg.vis_h);
+
+    if (g_cfg.rec_mode == 0 && !g_cfg.vision_on && g_cfg.record_on) {
+        app_log(APP_NAME_STR ": vision off + shared 无法供帧，录像自动改用 bind 模式\n");
+        g_cfg.rec_mode = 1;
+    }
+
+    /*
+     * 采集工作模式（auto）：shared 是单通道 -> OFFLINE（旧工程验证过）；
+     * bind 是双通道 -> ONLINE（官方 yolov8_run_camera 的组合）。
      */
     if (g_cfg.vicap_online < 0)
-        g_cfg.vicap_online = (g_cfg.vision_on && g_cfg.record_on) ? 1 : 0;
+        g_cfg.vicap_online = (g_cfg.rec_mode == 1) ? 1 : 0;
 
     /* 后端决定视觉通道的像素格式：color 需要 NV12，kpu 走 ISP 出的 RGB 平面 */
     g_cfg.vis_rgb_planar = (strcmp(g_cfg.detector, "kpu") == 0) ? 1 : 0;
@@ -418,9 +436,10 @@ int main(int argc, char **argv)
     app_log(APP_NAME_STR ": probe request csi=%d %ux%u@%d (适配表精确命中要求)\n",
             g_cfg.csi, g_cfg.acq_w, g_cfg.acq_h, g_cfg.probe_fps);
     app_log(APP_NAME_STR ": subsystems vision=%s record=%s rec_fps=%d detector=%s "
-            "vicap_mode=%s\n",
+            "vicap_mode=%s rec_mode=%s dump_timeout=%dms\n",
             g_cfg.vision_on ? "on" : "off", g_cfg.record_on ? "on" : "off", g_cfg.rec_fps,
-            g_cfg.detector, g_cfg.vicap_online ? "online" : "offline");
+            g_cfg.detector, g_cfg.vicap_online ? "online" : "offline",
+            g_cfg.rec_mode ? "bind" : "shared", g_cfg.dump_timeout_ms);
 
     if (g_cfg.pm_perf)
         pm_lock_performance();
