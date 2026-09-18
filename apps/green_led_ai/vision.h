@@ -36,7 +36,10 @@ typedef struct {
     uint64_t misses;          /* 未命中的帧数（cx<0） */
     uint64_t dropped;         /* 信箱满被丢弃的帧数（新帧优先） */
     uint64_t dump_fail;       /* dump 真错误次数 */
-    uint64_t dump_timeouts;   /* dump 超时次数（超时会让 VICAP 通道劣化，必须保持 0） */
+    uint64_t dump_timeouts;   /* dump 等不到帧的次数（稳态不增长） */
+    uint64_t recycled;        /* 已交回购还环、由采集线程 release 的帧数（≈dumped） */
+    uint64_t recycle_leak;    /* 归还环满被丢弃的帧（会漏 VB 块，必须恒为 0） */
+    uint32_t dump_call_us;    /* 最近一次 dump 调用耗时（≈帧间隔=在等下一帧） */
     uint64_t found, lost;     /* 命中/丢失累计 */
     uint64_t found_total, lost_total;
     uint32_t fps;             /* 统计周期内的处理帧率 */
@@ -55,6 +58,9 @@ void vision_stop(void);
 void vision_set_enabled(int on);
 int  vision_enabled(void);
 int  vision_is_started(void);    /* 线程是否已创建（--vision off 时为 0） */
+
+/* 帧用完：推进归还环（由采集线程统一 release；任何线程都可调，不阻塞、不碰 MPP） */
+void vision_recycle_frame(const k_video_frame_info *f);
 
 void vision_get_stats(vision_stats_t *st);
 

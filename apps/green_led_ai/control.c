@@ -40,29 +40,43 @@ void control_status_line(char *buf, size_t n)
     mpp_get_stats(&ms);
     result_get(&r);
 
-    /* 健康检查行：mpp 的三个数（contended/maxhold/maps）是「三条铁律」的自证 */
+    /* 健康检查行：mpp 的四个数（contended/maxhold/long/maps）是「锁内不阻塞」的自证 */
     snprintf(buf, n,
              APP_NAME_STR ": status vis=%s fps=%u dumped=%llu noframe=%llu fail=%llu "
-             "drop=%llu dto=%llu center=(%d,%d) miss=%llu det=%u/%uus lat=%u/%uus(all %uus) | "
-             "rec=%s%s auto=%d sess=%u fps=%u sent=%llu streams=%llu written=%llu "
-             "drop(sample=%llu skip=%llu fail=%llu ring=%llu) bytes=%llu | "
-             "mpp calls=%llu contended=%llu maxhold=%lluus maps=%u\n",
+             "drop=%llu dto=%llu recyc=%llu leak=%llu call=%uus center=(%d,%d) miss=%llu "
+             "det=%u/%uus lat=%u/%uus(all %uus) | "
+             "rec=%s auto=%d feed=%s hdr=%uB sess=%u fps=%u copy=%llu(avg=%uus max=%uus) borrow=%llu "
+             "sent=%llu streams=%llu written=%llu "
+             "drop(sample=%llu blk=%llu q=%llu fail=%llu ring=%llu) "
+             "blk(free=%d q=%d infl=%d) bytes=%llu | "
+             "mpp calls=%llu contended=%llu maxhold=%lluus long=%llu maps=%u "
+             "venc=%llu/%lluus vc=%llu\n",
              vision_enabled() ? "on" : "off", vs.fps,
              (unsigned long long)vs.dumped, (unsigned long long)vs.noframe,
              (unsigned long long)vs.dump_fail, (unsigned long long)vs.dropped,
-             (unsigned long long)vs.dump_timeouts,
+             (unsigned long long)vs.dump_timeouts, (unsigned long long)vs.recycled,
+             (unsigned long long)vs.recycle_leak, vs.dump_call_us,
              r.center_x, r.center_y, (unsigned long long)vs.misses,
              vs.t_detect_avg_us, vs.t_detect_max_us,
              vs.t_lat_avg_us, vs.t_lat_max_us, vs.t_lat_max_all_us,
-             rs.active ? "on" : "off", rs.shared ? "(shared)" : "(bind)", rs.enabled,
+             rs.active ? "on" : "off", rs.enabled, rs.feed ? "borrow" : "copy",
+             rs.hdr_bytes,
              rs.session_index, rs.real_fps,
+             (unsigned long long)rs.copied,
+             rs.copied ? (uint32_t)(rs.copy_sum_us / rs.copied) : 0u, rs.copy_max_us,
+             (unsigned long long)rs.borrowed,
              (unsigned long long)rs.sent, (unsigned long long)rs.streams,
              (unsigned long long)rs.written,
-             (unsigned long long)rs.sampled_out, (unsigned long long)rs.sent_skipped,
-             (unsigned long long)rs.send_fail,
-             (unsigned long long)rs.ring_dropped_frames, (unsigned long long)rs.bytes,
+             (unsigned long long)rs.sampled_out, (unsigned long long)rs.blk_empty,
+             (unsigned long long)rs.queue_full, (unsigned long long)rs.send_fail,
+             (unsigned long long)rs.ring_dropped_frames,
+             rs.free_blocks, rs.queue_blocks, rs.inflight_blocks,
+             (unsigned long long)rs.bytes,
              (unsigned long long)ms.calls, (unsigned long long)ms.contended,
-             (unsigned long long)ms.max_hold_us, ms.maps);
+             (unsigned long long)ms.max_hold_us, (unsigned long long)ms.long_holds,
+             ms.maps, (unsigned long long)ms.venc_calls,
+             (unsigned long long)ms.venc_max_hold_us,
+             (unsigned long long)ms.vc_conflicts);
 
     /* 异步后端（kpu）的耗时分解：ai2d / kpu / 后处理 / 端到端延迟 / 流水帧率 */
     size_t used = strlen(buf);
@@ -181,18 +195,25 @@ static void handle_command(const char *line, char *reply, size_t n)
             record_stats_t rs;
             record_get_stats(&rs);
             snprintf(reply, n,
-                     "record=%s mode=%s auto=%d sessions=%llu sess=%u fps=%u sent=%llu streams=%llu "
-                     "written=%llu sample_out=%llu skip=%llu send_fail=%llu "
-                     "fifo_ovf=%llu fifo_udf=%llu "
-                     "offer_busy=%llu ring_drop=%llu bytes=%llu dir=%s cap=%llu\n",
-                     rs.active ? "on" : "off", rs.shared ? "shared" : "bind", rs.enabled,
+                     "record=%s feed=%s hdr=%uB auto=%d sessions=%llu sess=%u fps=%u "
+                     "copy=%llu avg=%uus max=%uus borrow=%llu "
+                     "sent=%llu streams=%llu written=%llu sample_out=%llu "
+                     "blk_empty=%llu queue_full=%llu send_fail=%llu "
+                     "fifo_ovf=%llu fifo_udf=%llu blk(free=%d q=%d infl=%d) "
+                     "ring_drop=%llu bytes=%llu dir=%s cap=%llu\n",
+                     rs.active ? "on" : "off", rs.feed ? "borrow" : "copy", rs.hdr_bytes,
+                     rs.enabled,
                      (unsigned long long)rs.sessions, rs.session_index, rs.real_fps,
+                     (unsigned long long)rs.copied,
+                     rs.copied ? (uint32_t)(rs.copy_sum_us / rs.copied) : 0u,
+                     rs.copy_max_us, (unsigned long long)rs.borrowed,
                      (unsigned long long)rs.sent, (unsigned long long)rs.streams,
                      (unsigned long long)rs.written, (unsigned long long)rs.sampled_out,
-                     (unsigned long long)rs.sent_skipped, (unsigned long long)rs.send_fail,
+                     (unsigned long long)rs.blk_empty, (unsigned long long)rs.queue_full,
+                     (unsigned long long)rs.send_fail,
                      (unsigned long long)rs.fifo_overflow,
                      (unsigned long long)rs.fifo_underflow,
-                     (unsigned long long)rs.offer_busy,
+                     rs.free_blocks, rs.queue_blocks, rs.inflight_blocks,
                      (unsigned long long)rs.ring_dropped_frames,
                      (unsigned long long)rs.bytes, rs.dir ? rs.dir : "-",
                      (unsigned long long)rs.cap_bytes);

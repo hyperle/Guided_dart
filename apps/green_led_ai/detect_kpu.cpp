@@ -46,6 +46,7 @@ extern "C" {
 #include "detect.h"
 #include "postproc.h"
 #include "vicap_src.h"
+#include "vision.h"
 }
 
 using namespace nncase;
@@ -311,7 +312,7 @@ static void *pre_thread(void *arg)
         uint64_t t1 = now_us();
 
         /* AI2D 已读完帧（invoke 返回即硬件完成）-> 归还 VICAP 帧 */
-        vicap_release(VICAP_CHN_VISION, &s->frame);
+        vision_recycle_frame(&s->frame);   /* VICAP 只由采集线程 release */
         s->view.y = NULL;
 
         pthread_mutex_lock(&g_lock);
@@ -673,10 +674,10 @@ static void kpu_deinit(void)
         g_kpu_started = 0;
     }
 
-    /* 收尾：把还在手里的 VICAP 帧还回去（只可能出现在 SCHED/READY 状态） */
+    /* 收尾：把还在手里的 VICAP 帧推进归还环（VICAP 只由采集线程 release） */
     for (int i = 0; i < KPU_SLOTS; ++i) {
         if (g_slot[i].state == ST_SCHED || g_slot[i].state == ST_READY) {
-            vicap_release(VICAP_CHN_VISION, &g_slot[i].frame);
+            vision_recycle_frame(&g_slot[i].frame);
             g_slot[i].state = ST_FREE;
         }
     }

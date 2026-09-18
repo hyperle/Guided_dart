@@ -29,9 +29,9 @@
 #ifndef GREEN_LED_AI_APP_H
 #define GREEN_LED_AI_APP_H
 
+#include "k_type.h"
 #include <stdint.h>
 
-#include "mpi_sys_api.h"     /* k_u32 / k_u64 / kd_mpi_sys_mmap */
 
 #ifdef __cplusplus
 extern "C" {
@@ -91,9 +91,8 @@ typedef struct {
 
     /* 运维 */
     int pm_perf;
-    int      rec_mode;          /* 0=shared（默认：与识别共享通道，应用交棒）
-                                 * 1=bind（双通道硬件直连，实验特性） */
-    int      dump_timeout_ms;   /* dump 等待上限(ms)；dump 是"阻塞等下一帧"，给足即可 */
+    int      rec_feed;          /* REC_FEED_COPY（默认）/ REC_FEED_BORROW，见 record.h */
+    int      dump_timeout_ms;   /* dump 等帧的**兜底**上限(ms)：正常路径就是阻塞等下一帧 */
     int status_period_s;
     int trace_frames;            /* 前 N 帧逐帧 trace（定位板子卡在哪一步） */
 } cfg_t;
@@ -129,11 +128,19 @@ typedef struct {
 void result_publish(int32_t cx, int32_t cy, uint64_t seq, uint32_t fps);
 void result_get(result_t *out);
 
-/* ============================ MPP 串行化 ============================ */
+/* ============================ MPP 分段串行化 ============================ */
 
-/* 进入/离开 MPP 临界区（不可嵌套；锁内不要做业务，尤其不要写文件） */
+/* VB 池/块、sys mmap、cache 操作等**微秒级**调用的临界区：锁内禁止任何阻塞等待 */
 void mpp_enter(void);
 void mpp_leave(void);
+
+/* VENC 专用临界区：全进程只有录像线程用它，允许在锁内阻塞等编码器事件 */
+void venc_enter(void);
+void venc_leave(void);
+
+/* VICAP 段自检：设计上只由采集线程调用；并发时计数（不阻塞），状态行 vc= 必须为 0 */
+void vicap_enter(void);
+void vicap_leave(void);
 
 /*
  * 物理地址 → 用户态虚拟地址（进程内缓存，只映射一次；必须在 mpp_enter/leave
@@ -155,10 +162,14 @@ void  mpp_invalidate(k_u64 phys, void *va, k_u32 size);
 void mpp_shutdown(void);
 
 typedef struct {
-    uint64_t calls;        /* 进入临界区次数 */
+    uint64_t calls;        /* 进入 VB/sys 临界区次数 */
     uint64_t contended;    /* trylock 失败（真的发生过并发）次数 */
-    uint64_t max_hold_us;  /* 单次持锁最长时间 */
+    uint64_t max_hold_us;  /* 单次持锁最长时间（设计上必须 << 1ms） */
+    uint64_t long_holds;   /* 持锁超过 2ms 的次数（必须保持 0） */
     uint32_t maps;         /* 累计 mmap 次数（应远小于帧数） */
+    uint64_t venc_calls;   /* VENC 段调用次数 */
+    uint64_t venc_max_hold_us; /* VENC 段单次最长（允许大：锁内本来就在等编码器） */
+    uint64_t vc_conflicts; /* VICAP 并发次数（必须恒为 0） */
 } mpp_stats_t;
 
 void mpp_get_stats(mpp_stats_t *st);

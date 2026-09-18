@@ -76,6 +76,7 @@ target_link_options(k230_rtos_app INTERFACE
 # 收集 apps/ 下所有业务应用（每个子目录 = 一个板端可执行程序）
 # ---------------------------------------------------------------------------
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/components/peripherals")
+add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/src")
 file(GLOB _app_dirs CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/apps/*")
 foreach(_dir IN LISTS _app_dirs)
   if(IS_DIRECTORY "${_dir}" AND EXISTS "${_dir}/CMakeLists.txt")

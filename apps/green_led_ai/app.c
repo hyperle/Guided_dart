@@ -107,16 +107,34 @@ void result_get(result_t *out)
     pthread_mutex_unlock(&g_res_lock);
 }
 
-/* ============================ MPP 串行化 ============================ */
+/* ============================ MPP 分段串行化 ============================ */
 
 /*
- * 全进程唯一的一把 MPP 锁：kd_mpi_sys_mmap/munmap、kd_mpi_vicap_dump_*、
- * kd_mpi_venc_send_frame/get_stream/release_stream 全部在它内部执行。
- * 实测这些调用并发会把 RT-Smart 打挂。
+ * 分三段的理由（2025-09 板端两轮实测后定稿）：
+ *
+ *   1) 一把全局锁把「阻塞等帧」和「送帧/取流」串在一起，是上一轮 13fps /
+ *      lat=70ms 的病根：dump 一帧要占锁 33ms（≈90% 时间），别的线程只能排队。
+ *   2) 但"锁内绝不做阻塞等待"又会导致采集线程空转轮询 —— 而 SDK 的 dump
+ *      超时路径会 printf 一次再返回 0xA0158010（见 vision.c 注释），轮询不可行。
+ *   3) 所以按**模块**分段，而不是按"全局一把"：
+ *        · g_mpp_lock  (mpp_enter/leave)  —— VB 池/块、sys mmap、cache 操作：
+ *                                           全是微秒级调用，锁内禁止任何等待
+ *        · g_venc_lock (venc_enter/leave) —— VENC 的 send/get/release：**只有
+ *                                           录像线程一个使用者**，可以在锁内
+ *                                           用阻塞超时等编码器事件
+ *        · VICAP（dump/release）—— 本工程里**只由采集线程调用**，因此不加锁；
+ *                                          用 vicap_enter/leave 做并发自检
+ *                                          （真出现了并发就计数报警，绝不静默）
+ *      三条流水之间不再互相阻塞：识别线程只碰 VICAP 和自己私有的拷贝缓冲。
  */
 static pthread_mutex_t g_mpp_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t g_venc_lock = PTHREAD_MUTEX_INITIALIZER;
 static mpp_stats_t     g_mpp;
 static uint64_t        g_mpp_enter_us;
+static uint64_t        g_venc_enter_us;
+static volatile int    g_vicap_busy;
+
+#define MPP_HOLD_WARN_US 2000ull   /* 单次持锁超过 2ms 就计数报警 */
 
 void mpp_enter(void)
 {
@@ -133,7 +151,36 @@ void mpp_leave(void)
     uint64_t held = mono_us() - g_mpp_enter_us;
     if (held > g_mpp.max_hold_us)
         g_mpp.max_hold_us = held;
+    if (held > MPP_HOLD_WARN_US)
+        g_mpp.long_holds++;     /* 状态行的 long= 就是它：>0 说明锁内有阻塞调用了 */
     pthread_mutex_unlock(&g_mpp_lock);
+}
+
+void venc_enter(void)
+{
+    pthread_mutex_lock(&g_venc_lock);
+    g_mpp.venc_calls++;
+    g_venc_enter_us = mono_us();
+}
+
+void venc_leave(void)
+{
+    uint64_t held = mono_us() - g_venc_enter_us;
+    if (held > g_mpp.venc_max_hold_us)
+        g_mpp.venc_max_hold_us = held;   /* 允许大：专用锁，锁内本来就在等编码器 */
+    pthread_mutex_unlock(&g_venc_lock);
+}
+
+/* VICAP 段：设计上只允许采集线程进入；这里只检测，不阻塞 */
+void vicap_enter(void)
+{
+    if (__atomic_test_and_set(&g_vicap_busy, __ATOMIC_ACQ_REL))
+        g_mpp.vc_conflicts++;            /* 必须恒为 0：非 0 说明 VICAP 被并发调用了 */
+}
+
+void vicap_leave(void)
+{
+    __atomic_clear(&g_vicap_busy, __ATOMIC_RELEASE);
 }
 
 /* ---------------- 物理地址映射缓存（一次映射，永不逐帧解映射） ---------------- */
@@ -229,4 +276,5 @@ void mpp_get_stats(mpp_stats_t *st)
     mpp_enter();
     *st = g_mpp;
     mpp_leave();
+    st->vc_conflicts = g_mpp.vc_conflicts;   /* 原子读，锁外取一次即可 */
 }

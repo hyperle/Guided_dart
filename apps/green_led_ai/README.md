@@ -10,21 +10,27 @@ K230/K230D RT-Smart 业务应用：**VICAP 唯一持有者**，内部两条**完
 
 ```text
 sensor(gc2093) 1920x1080@30
-  └─ VICAP(dev0, OFFLINE, 唯一一条通道 CHN0 640x480 NV12)
-       ├─ vis_cap 线程: 连续 dump（长超时，不节流）-> 单槽信箱(新帧优先)
-       │     └─ vis_proc 线程: cached 映射+失效 -> RVV CIELAB 查表阈值 -> 连通域
-       │            └─ record_offer_frame(): 交棒给录像（收下则本线程不再归还）
-       └─ 录像子系统（共享该帧）
-             ├─ 送帧线程: 确定性抽样(30->25) -> kd_mpi_venc_send_frame -> 在途 FIFO
-             │            （抽样丢/送失败 -> 自己归还；这是"不反压"的关键）
-             ├─ 取流线程: get_stream -> 码流拷进 2MB RAM 环 -> 归还对应在途帧
-             │            -> release_stream（唯一归还者，1:1 对应）
+  └─ VICAP(dev0, OFFLINE, 唯一一条通道 CHN0 640x480 NV12)   ← VICAP 只被采集线程调用
+       ├─ vis_cap 线程: 阻塞等帧(dump) -> 单槽信箱(新帧优先)
+       │              -> 每轮先把归还环里的帧统一 release（dump/release 同一线程，无锁）
+       │     └─ vis_proc 线程: cached 映射+失效 -> RVV CIELAB 查表 -> 连通域
+       │            └─ record_take_frame(): 拷一份进录像私有 VB 块（copy 模式）
+       │                      拷贝完成立刻把 VICAP 帧推进归还环（绝不占着不放）
+       └─ 录像子系统（只碰自己的块，与 VICAP 再无关系）
+             ├─ VENC 线程: 块队列 -> send_frame(-1 阻塞等编码器收下)
+             │            -> query+get_stream -> 码流拷进 2MB RAM 环 -> 块回 free
+             │            （没有空闲块就丢这一帧，识别侧一秒都不等）
              └─ 写盘线程: 会话开关/滚动/容量淘汰 + fwrite + fsync(1 秒 1 次)
+
+等待一律是"等事件"：条件变量 / dump 等下一帧 / send_frame 等编码器。
+正常路径上**没有任何 sleep、没有任何轮询**，也不拿超时当节流手段。
 ```
 
-
-两条通道**各自持有自己的 VB 帧，不共享任何一帧**；这是本工程与旧工程
-`green_led_rtos` 最本质的区别，也是旧工程「跑几帧就把内核/VICAP 打死」的根因修法。
+**为什么录像要拷一份**：零拷贝交棒（把 VICAP 帧直接给编码器）会让编码器持有
+VICAP 缓冲，识别侧的缓冲与锁都被拖着走；双通道 bind 更直接把 CHN0 拖死
+（实测 4~147 帧后永久 NOTREADY）。拷一份（640x480 NV12 = 451KB，实测 `copy=`
+有数，25fps 下 CPU 占用可忽略）换来的是三条流水彻底解耦：识别永远优先，
+录像尽力而为。
 
 ---
 
@@ -34,18 +40,26 @@ sensor(gc2093) 1920x1080@30
 
 | 事实 | 证据 |
 |---|---|
-| 单通道 + OFFLINE + **连续长超时 dump** + 应用交棒 = 稳定 | 旧工程 `green_led_rtos` 同形态跑 40079 帧、28fps |
-| **双通道 + CHN1 硬件绑定 VENC** 会在 200~400 帧后衰减到停 | 四次运行 `dumped` 每 2 秒增量 58→37→29→6→0，随后 CHN1 的 `streams` 也冻结 |
-| 该 VICAP 在"此刻没帧"时返回 `0xa0158010`（module=0x15 VICAP、errid=16 NOTREADY） | 错误码解码 + `noframe=0 / notready=~100/s` |
+| **双通道 bind（无论 online 还是 offline）必然拖死 CHN0** | 两轮日志：`rec 模式=bind` + `mode=offline` 时 CHN0 只 dump 了 4 帧就永久 NOTREADY；bind + online 死在 147 帧。同期 CHN1 侧录像 28fps 完全健康 |
+| 锁内长等待 = 吞吐崩（上一版） | `dump(timeout=150ms)` 占全局锁 ~90%：识别 13.6fps、录像 11.3fps、`lat=70ms`、`contended=98%`；把等待挪出锁外/短超时版本是 28.5fps、`lat=1.1ms` |
+| 单通道 + OFFLINE + 应用交棒 = **不衰减、不丢所有权** | 本轮重构后 `dumped` 从 61 单调涨到 990（35s，≈29/s）、`dto=0 fail=0 noframe=0 rel_fail=0`、`sent≈streams≈written` 严格同步、`fifo_ovf=fifo_udf=0` |
+| **长超时 dump（150ms）会把全局 MPP 锁占满，吞吐崩掉** | 同一份代码：`contended=4769/4866`（98%）、`maxhold=39872us`、`lat=69946us`、`drop` 占 `dumped` 的 52%、识别 13.6fps、录像 11.3fps（CSV 实测 88ms/帧）|
+| 锁内短超时（5ms）的同形态版本能跑满 | 旧双通道版 `contended=165/868`（19%）、`lat=1114/1136us`、`drop=1`、28.5fps（CSV 实测 35.0ms/帧）|
+| VICAP 在"此刻没帧"时返回 `0xa0158010`；**SDK 的 dump 超时路径会 printf 一句再返回它** | 错误码解码 + 反汇编 `libvicap.a`：`sem_timedwait(now+milli_sec)` 失败且 `errno==ETIMEDOUT` → `printf("... dump inprogress...")` → `return 0xa0158010` |
+| 所以**不能**用"零超时死轮询"代替长超时等待 | 同上：每次都命中那条 printf，每秒上千次 |
+| 该 VICAP 通道稳态帧率 ≈ 29~30fps（离线 640x480） | 35s 内 `dumped` 990 帧；两个通道配置下都是这个上限 |
 | 帧归还没有失败过（所有权纪律是对的） | `rel_fail=0` 全程 |
-| SD 写入不是停流原因 | RAM 环修好后 SD 基本没写盘，仍然衰减到停 |
+| SD 写入不是瓶颈 | RAM 环 + 独立 writer，`ring=0`，`fsync` 1/s |
 | RVV 颜色检测正确且在跟踪目标 | `selftest rvv-vs-scalar PASS`；`detect FOUND center=(317,304) px=2204`；`det=883us`（ROI）|
-| 端到端延迟稳态 ≈1.1ms | `lat=1114/1136us` |
 | 单帧算力上限：全画面 2.6ms / ROI ≈0.87ms | `bench` 行 + 实测 `det`（对应 385fps / 1150fps）|
 | **不支持** AF_UNIX 控制 socket（`Out of memory`） | `control socket failed` —— 运行期启停只能用启动参数/信号 |
-| `dump 超时`路径要尽量避开 | 我上一版"节流 26.6ms + 超时 5ms < 帧间隔 33.3ms"→ 每帧必超时一次，与本板的衰减时间线吻合 |
 
-**因此本轮重构的取舍**：默认走**单通道共享**（不用第二条通道），dump 用**连续 + 150ms 长超时**（不节流），并**删掉**了"停流时自动解绑"这类会给出假结论的自动处置。
+**因此本轮的取舍（v4）**：只保留 **CHN0 一条通道**；录像改成
+**应用层拷贝**——识别处理完把帧拷进录像私有的 VB 块，VICAP 帧拷完即归还，
+编码器只碰录像自己的块。同时把锁**按模块分段**（VICAP 无锁只由采集线程调、
+VB/sys 一把短锁、VENC 一把专用锁），于是"阻塞等帧"和"送帧/取流"再也不会互相排队。
+等待全部是等事件（dump 等下一帧 / send_frame 等编码器 / 条件变量），
+**正常路径没有 sleep、没有轮询**；录像跟不上就丢录像帧，识别优先。
 
 ## 1. 为什么旧工程会死（根因，有日志证据）
 
@@ -86,18 +100,19 @@ dump 永久 NOTREADY。而且 `kd_mpi_vicap_dump_release` 当时没有和
 与 `get_stream/release_stream` 在多线程并发时会把 RT-Smart 打挂（旧工程注释里
 写得很清楚，也是 29 次重启循环的来源）。
 
-### 本工程对应的三条铁律
+### 本工程对应的四条铁律
 
 | 铁律 | 实现位置 |
 |---|---|
 | **一帧只有一个所有者、只有一条释放路径**：送 VENC 成功即所有权转移，应用绝不再 release；失败/被丢弃才由应用 release 一次 | `record.c: rec_cap_thread()`、`vision.c: vis_cap_thread()/vis_proc_thread()` |
-| **所有 MPP 调用全进程串行**（含 mmap/munmap、vicap dump/release、venc send/get/release） | `app.c: mpp_enter()/mpp_leave()`，所有调用点都包在临界区里 |
+| **MPP 按模块分段串行**：VICAP 段（dump/release 同一线程，不加锁，`vicap_enter` 只做并发自检）· VB/sys 段（`mpp_enter`，锁内禁止任何等待）· VENC 段（`venc_enter`，只有 VENC 线程用） | `app.c: mpp_enter()/venc_enter()/vicap_enter()` |
+| **绝不把"阻塞等帧"放进任何共享锁里**：上一版 dump 拿 150ms 超时占着全局锁 → 识别 13fps / 录像 11fps / lat=70ms。现在 dump 由采集线程独占调用，谁都不等它 | `vision.c: vis_cap_thread()`、`vicap_src.c: vicap_dump_soft()` |
 | **物理地址映射一次、永不逐帧解映射**：按 phys 缓存 VA，只在初始化线程里 mmap，直到所有线程 join 后才统一 munmap；同一物理块长度不一致直接报 FATAL | `app.c: mpp_map_persist()` / `mpp_shutdown()` |
 
-日志里可以直接验证这三条：`status` 行末尾的
-`mpp calls=... contended=... maxhold=...us maps=...`
-稳定运行时应为 `contended=0`、`maxhold` 远小于 1ms、`maps` 很快停止增长
-（稳态不再 mmap）。
+日志里可以直接验证：`status` 行末尾的
+`mpp calls=... contended=... maxhold=...us long=... maps=... venc=.../...us vc=...`
+稳定运行时应为 `maxhold` 远小于 1ms、**`long=0`**、**`vc=0`**（VICAP 没被并发调用）、
+`maps` 很快停止增长；`venc=` 后面的持锁时间**允许大**（那是专用锁，锁内本来就在等编码器）。
 
 ---
 
@@ -176,7 +191,7 @@ DDR 总 128MB，SDK 切成 `RTSMART_SIZE=0x4400000`(68MB) + `HEAP 16MB` +
 | 需求 | 本工程做法 | 怎么在板上确认 |
 |---|---|---|
 | 1. 沿用现有启动/日志模式 | launcher + startup_final.list + 每行 fsync 的日志 + pid + ctl socket，一字未改 | `logs/green_led_ai.log` 首行 `start pid=... argv=[...]` |
-| 2. MMZ/物理内存零拷贝 | 录像侧：采集帧物理地址直接进 VENC，零 CPU 搬运；视觉侧 color 用 `kd_mpi_sys_mmap` **一次性**映射 + VA 缓存；kpu 侧：`hrt::create(..., copy=false, pool_shared, phys)` 把 VICAP 帧**物理地址**直接当 AI2D 输入 tensor | `status` 的 `maps=` 稳态不增长；`kpu` 行里 ai2d 耗时不随图像大小暴涨（说明没 memcpy） |
+| 2. MMZ/物理内存零拷贝 | 视觉侧与 KPU 侧全程零拷贝；**录像侧改成应用层拷贝**（主动取舍：用 451KB/帧的 memcpy 换取与 VICAP 的彻底解耦，见 §0）；视觉侧 color 用 `kd_mpi_sys_mmap` **一次性**映射 + VA 缓存；kpu 侧：`hrt::create(..., copy=false, pool_shared, phys)` 把 VICAP 帧**物理地址**直接当 AI2D 输入 tensor | `status` 的 `maps=` 稳态不增长；`kpu` 行里 ai2d 耗时不随图像大小暴涨（说明没 memcpy） |
 | 3. 大核专用 | 见下方说明：**整个 RT-Smart 就跑在 1.6GHz 的 RVV 大核上**，无需也不能够从用户态按线程绑核；改为**职责隔离 + 线程优先级**（视觉链路不碰 SD/编码器，录像慢只丢自己的帧） | `board_probe` 实测 CPU 频率与 RVV 加速比 |
 | 4. 异步事件驱动 + 乒乓 | 同步后端(color)：单槽信箱 + 新帧优先，采集永不等待处理；异步后端(kpu)：`submit()` 只投递、`collect()` 取结果，pre 线程做 AI2D 与 kpu 线程跑 KPU **双缓冲乒乓重叠**，等 KPU 完成的那次 `poll()` 在 KPU 线程里由**硬件中断**唤醒（不是轮询） | `status` 的 `kpu ai2d=… kpu=… post=… lat=… fps=…` 一行；`drop=`/`err=` |
 | 5. 视觉/录像解耦、可分别启停 | 两条 VICAP 通道 + 两套线程 + 两套 VB + 独立开关；录像 25fps 抽样，视觉按传感器帧率跑 | `--vision off` / `--record off` 可分别启动；socket 可运行期切换 |
@@ -251,31 +266,42 @@ green_led_ai: rec session rec_0001 start (dir=/sdcard/app/recording cap=85899345
 green_led_ai: running (vision=on record=on)
 ```
 
-之后每 `--status` 秒一行汇总：
+之后每 `--status-period` 秒一行汇总（v4 格式）：
 
 ```text
-green_led_ai: status vis=on fps=29 center=(312,241) found=120 lost=3 det=180/900us lat_max=4200us
-              drop=1 dump_fail=0 | rec=on auto=1 sess=1 fps=25 in=600 sent=150 written=149 drop=450
-              pending=0 bytes=12345678 dir=/sdcard/app/recording |
-              mpp calls=4200 contended=0 maxhold=180us maps=9
-green_led_ai: probe det_avg=180us det_max=900us lat_max=4200us thr L>=12 A<=-20 B>=8 step=(2,2) ...
+green_led_ai: status vis=on fps=29 dumped=598 noframe=0 fail=0 drop=0 dto=0 recyc=598 leak=0
+              call=33200us center=(405,282) miss=3 det=880/960us lat=1100/1600us(all 2600us) |
+              rec=on auto=1 feed=copy sess=7 fps=25 copy=521(avg=320us max=410us) borrow=0
+              sent=520 streams=520 written=520 drop(sample=104 blk=0 q=0 fail=0 ring=0)
+              blk(free=6 q=0 infl=0) bytes=24987654 |
+              mpp calls=1204 contended=9 maxhold=180us long=0 maps=14 venc=521/18000us vc=0
+green_led_ai: probe rgb=(49,255,49) lab=(88,-82,77) at (388,242) y=[0,195,11] green_px=1516
+              blobs=1 px=5868 scan=roi | thr L>=12 A<=-20 B>=8 step=(2,2) roi=(160,120,320,240)
+              pix_min=50 | det=880/960us lat=1100/1600us(all 2600us)
 ```
 
 怎么读：
 
 | 现象 | 结论 / 处理 |
 |---|---|
-| `vis fps` ≈ 传感器帧率且 `drop` 很小 | 识别跟得上 |
+| `vis fps` ≈ 传感器帧率且 `drop` 很小 | 识别跟得上（`drop` 涨 = 处理线程被别的东西拖住，先看 `long=`） |
 | `center=(-1,-1)` 且 `probe_rgb/lab` 离阈值很远 | 放宽 `--lab` / 调 `--expo-us`，口径与旧工程一致 |
 | `det=` 远小于 5000us | 满足「单帧处理 <5ms」；后续换高速相机时看这个数 |
-| `dump_fail` 持续增长（尤其录像侧） | 该通道缓冲被占满：检查 SD/编码速度，或降低 `--rec-fps`/`--bitrate` |
-| `mpp contended` 不为 0 | 有并发 MPP 调用，需要复盘调用点（不允许出现） |
+| `call=`（最近一次 dump 调用耗时） | 稳态≈帧间隔（30fps → 约 33000us）：说明它就是在"阻塞等下一帧" |
+| `recyc=` / `leak=` | 归还帧数应≈`dumped`；**`leak` 必须恒为 0**（非 0 说明归还环满了，会漏 VB 块） |
+| `dto=`（dump 等不到帧） | 稳态应不增长；增长说明流水异常（配合下面的"停流诊断"行看） |
+| `mpp long=`（VB/sys 锁持锁 >2ms 的次数） | **必须为 0**：非 0 说明短锁里混进了阻塞调用 |
+| `mpp maxhold` | 应远小于 1ms |
+| `venc=调用次数/最长持锁` | 持锁时间允许大（专用锁，锁内就是在等编码器），128000us 量级正常 |
+| `vc=`（VICAP 并发次数） | **必须恒为 0**：非 0 说明 VICAP 被多个线程调用了 |
 | `maps` 持续增长 | 出现逐帧 mmap，必须修（不允许出现） |
-| `rec sent/streams/written` | 三者应同步增长（sent≈streams≈written） |
-| `sample_out` | 按 25fps 抽样主动丢掉的帧数（正常，≈sent/5） |
+| `rec copy=.../avg/max` | 拷贝次数与单帧耗时；avg 应在几百 us 量级（460KB NV12） |
+| `rec sent/streams/written` | 三者应同步增长（含开头/结尾各 ±1 的正常错位） |
+| `rec fps=` | 会话实测落盘帧率（CSV 里的 `mono_us` 是最终裁判） |
+| `blk(free/q/infl)` | 空闲/待送/在途块数；`free` 长期为 0 + `drop(blk=)` 增长 = 录像跟不上（识别不受影响） |
+| `sample` | 按 25fps 抽样主动丢掉的帧数（正常，≈sent/5） |
 | `send_fail` / `ring=` | 应为 0；`ring=` 增长说明 SD 撑不住（只影响录像） |
-| `fifo_ovf` / `fifo_udf` | **必须恒为 0**：非 0 说明"送进去的帧"和"取出来的包"失去 1:1，帧归还会错位 |
-| `dto=`（dump 空转累计） | 稳态应几乎不增长；猛涨说明帧率低于预期或流水异常 |
+| `fifo_ovf` / `fifo_udf` | **必须恒为 0**：非 0 说明"送进去的帧"和"取出来的包"失去 1:1 |
 
 CSV 列（与旧工程一致，便于沿用离线脚本）：
 
@@ -283,10 +309,17 @@ CSV 列（与旧工程一致，便于沿用离线脚本）：
 frame_seq,result_seq,mono_us,center_x,center_y,detect_fps
 ```
 
-主机侧封装（帧率要和录制时一致）：
+`mono_us` 是**封装用的真帧率来源**，比状态行更可信（本轮就是靠它算出 11.3fps / 88.2ms 的）：
 
 ```bash
-ffmpeg -f h264 -framerate 25 -i rec_0001.h264 -c copy rec_0001.mp4
+# 实测间隔（毫秒）
+awk -F, 'NR>1{n++; if(n>1){d=($3-p)/1000; print d} p=$3}' rec_0006.csv | sort -n | uniq -c | tail
+```
+
+主机侧封装（`-framerate` 必须用实测值）：
+
+```bash
+ffmpeg -f h264 -framerate 25 -i rec_0014.h264 -c copy out.mp4   # copy 模式目标就是 25
 ```
 
 ---
@@ -308,8 +341,8 @@ ffmpeg -f h264 -framerate 25 -i rec_0001.h264 -c copy rec_0001.mp4
 | `--miss <n>` | 3 | 连续丢失 n 帧后整幅重扫；0=关 |
 | `--expo-us <us>` | 200 | 固定曝光；0=不设；`--ae` 开自动曝光 |
 | `--keep-gain` | 关 | 默认把增益压到最低 |
-| `--rec-mode <shared\|bind>` | shared | shared=单通道、识别交棒（**默认，本板验证过**）；bind=双通道硬件直连（实验特性） |
-| `--dump-timeout <ms>` | 150 | dump 等待上限。dump 是"阻塞等下一帧"，给足即可（短超时会让通道劣化） |
+| `--rec-feed <copy\|borrow>` | copy | copy=识别侧把帧拷进录像私有 VB 块（**默认**，解耦且最稳）；borrow=直接把 VICAP 帧借给编码器、送完立刻归还（官方 uvc 样例写法，零拷贝对照用） |
+| `--dump-timeout <ms>` | 200 | dump 等帧的**兜底**上限（关停/异常时能退出来）。正常路径就是阻塞等下一帧，不 sleep 不轮询；调小只是让异常更快暴露 |
 | `--rec-fps <n>` | 25 | 录像抽样帧率（shared 模式下由应用确定性抽样，30→25 即每 6 帧丢 1 帧） |
 | `--bitrate <kbps>` | 12000 | H.264 码率 |
 | `--rec-dir <path>` | /sdcard/app/recording | 录像目录 |

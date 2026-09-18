@@ -12,6 +12,8 @@
 #include "app.h"
 #include "detect.h"
 #include "mpi_vb_api.h"
+#include <time.h>
+
 #include "record.h"
 #include "vicap_src.h"
 
@@ -43,18 +45,21 @@ static uint32_t g_diag_phys_n;
 static uint64_t g_fail_dump_us_sum;   /* 失败 dump 的耗时累计（区分「等到超时」与「立刻报错」） */
 static uint64_t g_fail_dump_cnt;
 static uint64_t g_last_dump_us;
-/*
- * 采集节流（自适应）：
- * 板端实测：dump 的**超时路径**会让 VICAP 通道逐渐劣化（超时攒到约千次后彻底
- * 不出帧，表现为 dumped 每 2 秒增量 58→37→29→6→0 的衰减）。旧工程用
- * 「连续 dump + 200ms 超时」几乎从不超时，单通道稳定跑了 40079 帧。
- * 这里改成：节流起点取 105% 帧间隔（比一帧稍长，醒来时帧一定已就绪），
- * 万一还是超时就**自动加大节流**，把超时次数压到 0 附近。
- */
-static uint32_t g_dump_interval_us;   /* 当前节流间隔（动态调整） */
-static uint32_t g_dump_interval_base; /* 起始间隔 = 105% 帧间隔 */
-static uint32_t g_dump_timeouts;      /* 本进程内 dump 超时累计（要盯住 = 0） */
+static uint32_t g_dump_call_us;       /* 最近一次 dump 调用耗时（阻塞等帧的时长） */
+static uint32_t g_dump_timeouts;      /* dump 等不到帧的次数（流水异常指标，稳态应不增长） */
 static int      g_stall_reported;
+
+/*
+ * 归还环：**VICAP 只由采集线程调用** —— dump 和 release 都在它手里，因此不需要
+ * 任何锁；上一轮"阻塞等帧占着全局 MPP 锁"把整链压到 13fps 的根因就此消失。
+ * 处理线程 / 异步后端 / 录像回调用完一帧后推进这个环，由采集线程统一 release。
+ */
+#define RECYCLE_N 8
+static k_video_frame_info g_recyc[RECYCLE_N];
+static int      g_recyc_n;
+static uint64_t g_recycled;           /* 已归还帧数 */
+static uint64_t g_recycle_leak;       /* 环满被丢弃（会漏一个 VB 块，必须为 0） */
+
 
 static int      g_found_prev;
 static detect_out_t g_last;          /* 最近一帧的检测明细（探针/亮度） */
@@ -134,30 +139,82 @@ static void vision_diag_stall(int raw, uint64_t stall_us);
 
 /* ============================ 采集线程 ============================ */
 
+/* 帧用完：推进归还环（采集线程负责真正 release）。任何线程都可以调，不阻塞。 */
+void vision_recycle_frame(const k_video_frame_info *f)
+{
+    pthread_mutex_lock(&g_lock);
+    if (g_recyc_n < RECYCLE_N) {
+        g_recyc[g_recyc_n++] = *f;
+        g_recycled++;
+        pthread_cond_broadcast(&g_cond);
+    } else {
+        g_recycle_leak++;      /* 设计上不会发生：在途帧最多 2~3 个 */
+    }
+    pthread_mutex_unlock(&g_lock);
+}
+
+/* 录像回调：copy 模式拷完立刻回调；borrow 模式送帧返回后回调 */
+static void vision_rec_done(const k_video_frame_info *f, void *ctx)
+{
+    (void)ctx;
+    vision_recycle_frame(f);
+}
+
+/* 等 ms 毫秒：只在流水异常（dump 立刻报错）时退避，正常路径完全不用 */
+static void vision_wait_ms(int ms)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    ts.tv_sec  += ms / 1000;
+    ts.tv_nsec += (long)(ms % 1000) * 1000000L;
+    if (ts.tv_nsec >= 1000000000L) { ts.tv_nsec -= 1000000000L; ts.tv_sec++; }
+    pthread_mutex_lock(&g_lock);
+    if (g_run)
+        (void)pthread_cond_timedwait(&g_cond, &g_lock, &ts);
+    pthread_mutex_unlock(&g_lock);
+}
+
 static void *vis_cap_thread(void *arg)
 {
     (void)arg;
-    int empty_runs = 0;
 
     while (g_run) {
-        if (!g_enabled) {
-            usleep(20000);
+        /*
+         * 1) 先把处理线程用完的帧统一归还 —— VICAP 的 dump 与 release 都在本线程，
+         *    既不需要锁，也不会出现"别人拿着锁等帧"的互相阻塞。
+         */
+        k_video_frame_info rel[RECYCLE_N];
+        int nrel = 0;
+        pthread_mutex_lock(&g_lock);
+        while (g_recyc_n > 0 && nrel < RECYCLE_N)
+            rel[nrel++] = g_recyc[--g_recyc_n];
+        pthread_mutex_unlock(&g_lock);
+        for (int i = 0; i < nrel; ++i)
+            vicap_release(VICAP_CHN_VISION, &rel[i]);
+
+        /* 2) 识别关掉时不空转：等"开关变了"这个事件（不是 sleep 轮询）。
+         *    但归还环一有新帧就先回顶部把它 release 掉，别压着 VICAP 缓冲。 */
+        pthread_mutex_lock(&g_lock);
+        while (g_run && !g_enabled && g_recyc_n == 0)
+            pthread_cond_wait(&g_cond, &g_lock);
+        int still_off = !g_enabled;
+        pthread_mutex_unlock(&g_lock);
+        if (!g_run)
+            break;
+        if (still_off)
             continue;
-        }
 
         /*
-         * 按采集帧间隔节流：传感器 30fps 时每 33ms 才有一帧，若在两次成功之间
-         * 用 5ms 超时反复重试（每秒上百次超时），一是白占 MPP 锁，二是板端实测
-         * 长时间大量超时后通道会彻底不出帧。这里先睡到「下一帧该到了」再取，
-         * 取的时候帧基本已经就绪，超时次数从每帧 2~3 次降到接近 0。
+         * 3) 取帧：dump 本身就是"阻塞等下一帧"，这就是事件驱动 —— 不 sleep、
+         *    不轮询，也不拿超时当节流用。g_cfg.dump_timeout_ms 只是"进程能停
+         *    下来 / 流水真出事时能报出来"的兜底（默认 200ms）；稳态下一帧一返回。
          */
-
         k_video_frame_info f;
         memset(&f, 0, sizeof(f));
         int raw = 0;
         uint64_t t_dump0 = mono_us();
-        /* 短超时（5ms）快速失败：不让「等新帧」长时间占着 MPP 锁 */
         int rc = vicap_dump_soft(VICAP_CHN_VISION, &f, g_cfg.dump_timeout_ms, &raw);
+        g_dump_call_us = (uint32_t)(mono_us() - t_dump0);
         if (rc != 0) {
             g_fail_dump_us_sum += mono_us() - t_dump0;
             g_fail_dump_cnt++;
@@ -191,20 +248,19 @@ static void *vis_cap_thread(void *arg)
                     app_log(APP_NAME_STR ": vision dump failed ret=0x%08x (fail=%llu)\n",
                             (unsigned)raw, (unsigned long long)g_stats.dump_fail);
             }
-            /* 锁外退避；连续空转时退得更久一点，减少对录像侧的锁竞争 */
-            /*
-             * 连续取帧（不节流）：dump 的语义就是"阻塞等下一帧"，正常情况几乎不会
-             * 走到这里。真走到这里说明帧率低于预期或流水异常，给个短退避避免空转。
-             */
             g_dump_timeouts++;
             g_stats.dump_timeouts = g_dump_timeouts;
             if (g_dump_timeouts % 100u == 1u)
-                app_log(APP_NAME_STR ": vision dump no-frame (total %u)\n", g_dump_timeouts);
-            (void)empty_runs;
-            usleep(1000);
+                app_log(APP_NAME_STR ": vision dump 等不到帧（累计 %u 次，call=%uus）—— "
+                        "只有流水异常才会走到这里\n", g_dump_timeouts, g_dump_call_us);
+            /*
+             * 只有"立刻返回的错误"才需要退避（每秒上千次空转会烧 CPU）；
+             * dump 自己等到超时的情况直接重试 —— 它已经等过了，不需要再睡。
+             */
+            if (g_dump_call_us < 1000u)
+                vision_wait_ms(5);
             continue;
         }
-        empty_runs = 0;
         g_last_dump_us = mono_us();
         g_stall_reported = 0;
         g_stats.dumped++;
@@ -213,6 +269,8 @@ static void *vis_cap_thread(void *arg)
 
         uint64_t seq = ++g_frame_seq;
 
+        k_video_frame_info old;
+        int have_old = 0;
         pthread_mutex_lock(&g_lock);
         if (!g_run || !g_enabled) {
             pthread_mutex_unlock(&g_lock);
@@ -221,12 +279,10 @@ static void *vis_cap_thread(void *arg)
         }
         if (g_slot_have) {
             /* 处理器还没取走上一帧：作废旧帧（新帧优先），绝不阻塞采集 */
-            k_video_frame_info old = g_slot;
+            old = g_slot;
             g_slot_have = 0;
+            have_old = 1;
             g_stats.dropped++;
-            pthread_mutex_unlock(&g_lock);
-            vicap_release(VICAP_CHN_VISION, &old);
-            pthread_mutex_lock(&g_lock);
         }
         g_slot = f;
         g_slot_seq = seq;
@@ -235,6 +291,8 @@ static void *vis_cap_thread(void *arg)
         g_produced++;
         pthread_cond_signal(&g_cond);
         pthread_mutex_unlock(&g_lock);
+        if (have_old)
+            vicap_release(VICAP_CHN_VISION, &old);
 
         trace_log(seq, "cap dump ok w=%u h=%u stride=%u phys0=0x%llx",
                   f.v_frame.width, f.v_frame.height, f.v_frame.stride[0],
@@ -246,11 +304,9 @@ static void *vis_cap_thread(void *arg)
 /* ============================ 停流诊断 ============================ */
 
 /*
- * 视觉通道连续拿不到帧时调用：把判定所需的信息一次性打进日志，
- * 并在开启 --stall-fallback（默认开）时**自动解绑录像**验证假设 ——
- * 视觉是主功能，录像可降级；同时这次结果直接告诉我们问题出在哪：
- *   解绑后立刻恢复  -> CHN1/绑定 与 CHN0 的相互影响（两条通道不能这么配）
- *   解绑后仍不恢复  -> CHN0 自身的问题（映射/释放/配置）
+ * 视觉通道连续拿不到帧时调用：把判定所需的信息一次性打进日志。
+ * 只报告事实、不做任何自动处置（--stall-fallback 那套"自动解绑录像"已经删掉：
+ * 解绑后 CHN1 仍使能且无人消费，ISP 照样停，那次的结论是假的）。
  */
 static void vision_diag_stall(int raw, uint64_t stall_us)
 {
@@ -289,18 +345,20 @@ static void vision_diag_stall(int raw, uint64_t stall_us)
     record_get_stats(&rs);
 
     app_log(APP_NAME_STR ": 视觉停流诊断: raw=0x%08x 已停 %.1fs dumped=%llu noframe=%llu "
-            "notready=%llu rel_fail=%llu dump_timeout=%u pace=%uus | "
+            "notready=%llu rel_fail=%llu recycled=%llu leak=%llu dump_timeout=%u call=%uus | "
             "失败 dump 平均耗时 %llu us（≈超时上限说明是在等帧，≈0 说明通道立刻报错）| "
-            "CHN0 attr: %s | CHN0 缓冲引用:%s | rec bound=%d streams=%llu\n",
+            "CHN0 attr: %s | CHN0 缓冲引用:%s | rec feed=%s sess=%u streams=%llu\n",
             (unsigned)raw, (double)stall_us / 1e6,
             (unsigned long long)g_stats.dumped, (unsigned long long)g_stats.noframe,
             (unsigned long long)g_stats.notready,
             (unsigned long long)vicap_release_fail_count(),
-            g_dump_timeouts, g_dump_interval_us,
+            (unsigned long long)g_recycled, (unsigned long long)g_recycle_leak,
+            g_dump_timeouts, g_dump_call_us,
             (unsigned long long)(g_fail_dump_cnt ? g_fail_dump_us_sum / g_fail_dump_cnt : 0),
             got_attr ? "ok" : "get_chn_attr 失败",
             blk[0] ? blk : "(还没有成功 dump 过)",
-            rs.bound, (unsigned long long)rs.streams);
+            rs.feed ? "borrow" : "copy", rs.session_index,
+            (unsigned long long)rs.streams);
 
     /*
      * 这里刻意**不做任何自动处置**。上一版会"自动解绑录像再看视觉是否恢复"，
@@ -364,7 +422,14 @@ static void vision_note_result(const detect_out_t *d, uint32_t latency_us)
                                    : 0;
         g_stats.t_lat_max_us = g_period_lat_max;
         g_stats.t_lat_max_all_us = g_lat_max_all;
+        uint32_t fps_meas = g_stats.fps;
         pthread_mutex_unlock(&g_lock);
+        /*
+         * 把**实测处理帧率**告诉录像抽样器：本板请求 30fps、实测只有 28.5fps，
+         * 抽样器若还按 30 算，25/30 只能录到 23.8fps。用实测值才能真的落到 25fps。
+         */
+        if (fps_meas)
+            record_set_src_fps(fps_meas);
         g_period_start_us = now;
         g_period_frames = 0;
         g_period_detect_us = 0;
@@ -433,7 +498,9 @@ static void *vis_proc_thread(void *arg)
             dumped_us = g_slot_mono_us;
             g_slot_have = 0;
             have = 1;
-        } else if (!is_async) {
+        } else {
+            /* 同步/异步后端都在这里等"下一帧到了"这个事件（异步后端的结果在下面
+             * 每次提交后统一取回）—— 不 sleep、不轮询 */
             while (g_run && !g_slot_have)
                 pthread_cond_wait(&g_cond, &g_lock);
             if (g_run && g_slot_have) {
@@ -451,7 +518,7 @@ static void *vis_proc_thread(void *arg)
 
         if (have) {
             if (!g_enabled) {
-                vicap_release(VICAP_CHN_VISION, &frame);
+                vision_recycle_frame(&frame);   /* VICAP 只由采集线程 release */
             } else {
                 uint32_t stride = frame.v_frame.stride[0] ? frame.v_frame.stride[0]
                                                           : frame.v_frame.width;
@@ -496,7 +563,7 @@ static void *vis_proc_thread(void *arg)
                         /* 所有权转交后端：成功时本线程绝不能再 release 这帧 */
                         int rc = g_det->submit(&frame, &view, seq);
                         if (rc != 0) {
-                            vicap_release(VICAP_CHN_VISION, &frame);
+                            vision_recycle_frame(&frame);   /* VICAP 只由采集线程 release */
                             if (rc > 0)
                                 g_stats.dropped++;
                             else
@@ -507,12 +574,32 @@ static void *vis_proc_thread(void *arg)
                         memset(&d, 0, sizeof(d));
                         g_det->run(&view, full_scan, &d);
                         d.seq = seq;
+
                         /*
-                         * 交棒给录像（shared 模式）：收下则不归还 —— 由录像取流线程
-                         * 在取到对应码流后归还（唯一归还者）。拒收/录像关闭则自己归还。
+                         * 交给录像：copy 模式会把这一帧拷进录像私有的 VB 块，拷完
+                         * **立刻**回调 vision_rec_done 把帧推进归还环；borrow 模式则
+                         * 在编码器收下之后回调。两种情况本线程都不再碰这帧。
+                         * 录像不要（没开/抽样丢掉/没空闲块）就自己交回归还环。
                          */
-                        if (!g_cfg.record_on || record_offer_frame(&frame, seq) != 0)
-                            vicap_release(VICAP_CHN_VISION, &frame);
+                        rec_frame_t rf;
+                        memset(&rf, 0, sizeof(rf));
+                        rf.f = &frame;
+                        rf.stride = stride;
+                        rf.width = width;
+                        rf.height = height;
+                        if (frame.v_frame.pixel_format == PIXEL_FORMAT_RGB_888_PLANAR) {
+                            rf.np = 3;
+                            rf.p[0] = pm.y;
+                            rf.p[1] = pm.y + (size_t)stride * height;
+                            rf.p[2] = pm.y + (size_t)stride * height * 2;
+                        } else {
+                            rf.np = 2;
+                            rf.p[0] = pm.y;
+                            rf.p[1] = pm.uv;
+                        }
+                        if (!g_cfg.record_on ||
+                            record_take_frame(&rf, seq, vision_rec_done, NULL) != 0)
+                            vision_recycle_frame(&frame);
                         trace_log(seq, "proc detect-done cx=%d px=%u", d.cx, d.px);
 
                         if (d.cx >= 0)
@@ -526,7 +613,7 @@ static void *vis_proc_thread(void *arg)
                 } else {
                     app_log(APP_NAME_STR ": frame map failed seq=%llu\n",
                             (unsigned long long)seq);
-                    vicap_release(VICAP_CHN_VISION, &frame);
+                    vision_recycle_frame(&frame);   /* VICAP 只由采集线程 release */
                 }
 
                 mpp_get_stats(&ms1);
@@ -536,7 +623,11 @@ static void *vis_proc_thread(void *arg)
             }
         }
 
-        /* 异步后端：把已完成的结果全部取回来 */
+        /*
+         * 异步后端：把已完成的结果全部取回来。这里不 sleep 也不轮询 —— 本轮提交
+         * 完成后立刻收一次，然后回到上面等下一帧的阻塞等待里（后端有 2 个乒乓槽，
+         * 上上帧的结果最迟在下一帧到达时被收走）。
+         */
         if (is_async && g_det->collect) {
             detect_out_t d;
             while (g_det->collect(&d)) {
@@ -546,7 +637,6 @@ static void *vis_proc_thread(void *arg)
                     g_misses++;
                 vision_note_result(&d, d.lat_us);
             }
-            usleep(500);
         }
     }
     return NULL;
@@ -565,10 +655,8 @@ int vision_start(void)
     {
         uint32_t afps = vicap_acq_fps();
         uint32_t frame_us = afps ? (1000000u / afps) : 33000u;
-        g_dump_interval_base = frame_us;
-        g_dump_interval_us = frame_us;
-        app_log(APP_NAME_STR ": vision dump 策略=continuous timeout=%dms（帧间隔 %u us）\n",
-                g_cfg.dump_timeout_ms, frame_us);
+        app_log(APP_NAME_STR ": vision 取帧=阻塞等帧（事件驱动，不 sleep、不轮询；帧间隔 %u us）"
+                "兜底超时 %dms；VICAP 只由采集线程调用\n", frame_us, g_cfg.dump_timeout_ms);
     }
 
     g_det = detector_get(g_cfg.detector);
@@ -621,16 +709,19 @@ void vision_stop(void)
         g_proc_started = 0;
     }
 
-    /* 收尾：把信箱里可能残留的帧还回去（必须在 join 之后） */
+    /* 收尾：把信箱槽和归还环里残留的帧还回去（join 之后本线程独用 VICAP） */
+    k_video_frame_info left[RECYCLE_N + 1];
+    int nleft = 0;
     pthread_mutex_lock(&g_lock);
     if (g_slot_have) {
-        k_video_frame_info f = g_slot;
+        left[nleft++] = g_slot;
         g_slot_have = 0;
-        pthread_mutex_unlock(&g_lock);
-        vicap_release(VICAP_CHN_VISION, &f);
-    } else {
-        pthread_mutex_unlock(&g_lock);
     }
+    while (g_recyc_n > 0 && nleft < RECYCLE_N + 1)
+        left[nleft++] = g_recyc[--g_recyc_n];
+    pthread_mutex_unlock(&g_lock);
+    for (int i = 0; i < nleft; ++i)
+        vicap_release(VICAP_CHN_VISION, &left[i]);
 
     if (g_det && g_det->deinit)
         g_det->deinit();
@@ -645,12 +736,10 @@ int vision_is_started(void)
 void vision_set_enabled(int on)
 {
     g_enabled = on ? 1 : 0;
-    if (!on) {
-        /* 关掉时唤醒处理线程，让它把在途帧归还掉 */
-        pthread_mutex_lock(&g_lock);
-        pthread_cond_broadcast(&g_cond);
-        pthread_mutex_unlock(&g_lock);
-    }
+    /* 两个方向都要唤醒：关掉时让处理线程收尾，打开时让采集线程从"等开关"里醒来 */
+    pthread_mutex_lock(&g_lock);
+    pthread_cond_broadcast(&g_cond);
+    pthread_mutex_unlock(&g_lock);
     app_log(APP_NAME_STR ": vision %s\n", on ? "enabled" : "disabled");
 }
 
@@ -665,5 +754,10 @@ void vision_get_stats(vision_stats_t *st)
         return;
     pthread_mutex_lock(&g_lock);
     *st = g_stats;
+    /* 这三个量在采集线程的静态变量里（不在 g_stats）：必须显式搬过来，
+     * 否则状态行会一直显示 0（2025-09 板端就是这样骗过一轮的） */
+    st->recycled     = g_recycled;
+    st->recycle_leak = g_recycle_leak;
+    st->dump_call_us = g_dump_call_us;
     pthread_mutex_unlock(&g_lock);
 }

@@ -101,10 +101,16 @@ static int sensor_probe(void)
     g_acq_h = info.height;
     g_acq_fps = info.fps;
 
-    app_log(APP_NAME_STR ": sensor actual %ux%u@%u type=%d%s\n",
+    int exact = (g_acq_w == g_cfg.acq_w && g_acq_h == g_cfg.acq_h &&
+                 g_acq_fps == (uint32_t)g_cfg.probe_fps);
+    app_log(APP_NAME_STR ": sensor actual %ux%u@%u type=%d"
+            "（请求 %ux%u@%d）%s\n",
             g_acq_w, g_acq_h, g_acq_fps, (int)info.sensor_type,
-            (g_acq_w == g_cfg.acq_w && g_acq_h == g_cfg.acq_h) ? ""
-            : " WARN: 与请求不一致，管线按实际模式配置");
+            g_cfg.acq_w, g_cfg.acq_h, g_cfg.probe_fps,
+            exact ? ""
+                  : " WARN: 请求没精确命中 -> 已退回『同分辨率最高帧率』。"
+                    "gc2093/CSI2 适配表只有 1920x1080@30、1920x1080@60、1280x960@90、"
+                    "1280x720@90 四档，管线按**实际**模式配置");
     return 0;
 }
 
@@ -187,42 +193,22 @@ static int vicap_hw_setup(void)
     }
 
     /*
-     * 视觉通道（CHN0）：
-     *   color 后端需要 NV12（阈值口径就是在 NV12 上标定的）；
-     *   kpu   后端走 ISP 硬件出的 RGB_888_PLANAR —— AI2D 的 NCHW uint8 输入
-     *         正好就是一个 RGB 平面张量，CPU 侧完全不碰色彩空间。
+     * 只配 CHN0（唯一通道）。CHN0 是整条流水唯一的帧源：
+     *   --vision on  -> 识别检测它
+     *   --record on  -> 录像是把它**拷一份**给自己的块再喂 VENC（见 record.c）
+     * 双通道（CHN1 给录像）在板端已被证伪：bind 双通道跑 4~147 帧后 CHN0 永久
+     * NOTREADY；所以这里连 CHN1 都不再配置。--vision off 时 CHN0 照配（否则没有
+     * 帧源，录像也就无从谈起），只是识别侧不跑检测。
      */
-    if (g_cfg.vision_on || (g_cfg.record_on && g_cfg.rec_mode == 0)) {
-        if (g_cfg.vis_rgb_planar) {
-            if (chn_config(VICAP_CHN_VISION, g_cfg.vis_w, g_cfg.vis_h,
-                           PIXEL_FORMAT_RGB_888_PLANAR, 6, 3, 1) != 0)
-                return -1;
-        } else {
-            if (chn_config(VICAP_CHN_VISION, g_cfg.vis_w, g_cfg.vis_h,
-                           PIXEL_FORMAT_YUV_SEMIPLANAR_420, 6, 3, 2) != 0)
-                return -1;
-        }
-    } else if (g_cfg.record_on) {
-        /*
-         * --vision off + --record on：仍然给 CHN0 配一个最小占位通道。
-         * 官方示例从来都是 CHN0+CHN1 一起配，只配 CHN1 是没人验证过的组合；
-         * 占位代价只有 2 个 160x120 缓冲（约 56KB），换掉一个未知风险。
-         */
-        if (chn_config(VICAP_CHN_VISION, 160, 120, PIXEL_FORMAT_YUV_SEMIPLANAR_420,
-                       2, 3, 2) != 0)
+    if (g_cfg.vis_rgb_planar) {
+        if (chn_config(VICAP_CHN_VISION, g_cfg.vis_w, g_cfg.vis_h,
+                       PIXEL_FORMAT_RGB_888_PLANAR, 6, 3, 1) != 0)
             return -1;
-        app_log(APP_NAME_STR ": vision off -> CHN0 配为 160x120 占位通道（规避只配 CHN1）\n");
+    } else {
+        if (chn_config(VICAP_CHN_VISION, g_cfg.vis_w, g_cfg.vis_h,
+                       PIXEL_FORMAT_YUV_SEMIPLANAR_420, 6, 3, 2) != 0)
+            return -1;
     }
-
-    /*
-     * 录像通道只在 bind 模式（rec_mode=1）下单独配置；shared 模式（默认）
-     * 与识别共用 CHN0 —— 板端实测"双通道"形态会在 200~400 帧后整体衰减到停，
-     * 而单通道形态在旧工程里稳定跑过 40079 帧。
-     */
-    if (g_cfg.record_on && g_cfg.rec_mode == 1 &&
-        chn_config(VICAP_CHN_RECORD, g_cfg.rec_w, g_cfg.rec_h,
-                   PIXEL_FORMAT_YUV_SEMIPLANAR_420, 6, 3, 2) != 0)
-        return -1;
 
     ret = kd_mpi_vicap_init(DEV);
     if (ret != K_SUCCESS) {
@@ -324,12 +310,10 @@ int vicap_start(void)
     apply_exposure();
 
     app_log(APP_NAME_STR ": vicap dev=%d mode=%s acq=%ux%u@%u "
-            "vis=%s%ux%u rec=%s%ux%u ae=%d awb=1 dnr3=1\n",
+            "CHN0=%ux%u 单通道（detect=%s record=%s 都吃这一条）ae=%d awb=1 dnr3=1\n",
             (int)DEV, g_cfg.vicap_online ? "online" : "offline", g_acq_w, g_acq_h, g_acq_fps,
-            g_cfg.vision_on ? "" : "(off)", g_cfg.vision_on ? g_chn_w[0] : 0,
-            g_cfg.vision_on ? g_chn_h[0] : 0,
-            g_cfg.record_on ? "" : "(off)", g_cfg.record_on ? g_chn_w[1] : 0,
-            g_cfg.record_on ? g_chn_h[1] : 0,
+            g_chn_w[0], g_chn_h[0],
+            g_cfg.vision_on ? "on" : "off", g_cfg.record_on ? "on" : "off",
             g_cfg.ae_enable);
 
     return 0;
@@ -351,10 +335,15 @@ void vicap_stop(void)
 
 int vicap_dump(int chn, k_video_frame_info *frame, int timeout_ms)
 {
-    mpp_enter();
+    /*
+     * VICAP 段**不占用 MPP 全局锁**：dump 是"阻塞等下一帧"的调用，占着全局锁
+     * 就等于让采集线程独吞所有 MPP 调用（板上实测会把整链压到 13fps）。
+     * 本工程约定 VICAP 只由采集线程调用，vicap_enter 只做并发自检（不阻塞）。
+     */
+    vicap_enter();
     k_s32 ret = kd_mpi_vicap_dump_frame(DEV, (k_vicap_chn)chn, VICAP_DUMP_YUV,
                                         frame, (k_s32)timeout_ms);
-    mpp_leave();
+    vicap_leave();
     return (ret == K_SUCCESS) ? 0 : (int)ret;
 }
 
@@ -368,10 +357,10 @@ int vicap_dump(int chn, k_video_frame_info *frame, int timeout_ms)
  */
 int vicap_dump_soft(int chn, k_video_frame_info *frame, int timeout_ms, int *ret)
 {
-    mpp_enter();
+    vicap_enter();
     k_s32 r = kd_mpi_vicap_dump_frame(DEV, (k_vicap_chn)chn, VICAP_DUMP_YUV,
                                       frame, (k_s32)timeout_ms);
-    mpp_leave();
+    vicap_leave();
     if (ret)
         *ret = (int)r;
     if (r == K_SUCCESS)
@@ -387,9 +376,9 @@ static uint64_t g_release_fail;
 
 int vicap_release(int chn, const k_video_frame_info *frame)
 {
-    mpp_enter();
+    vicap_enter();
     k_s32 ret = kd_mpi_vicap_dump_release(DEV, (k_vicap_chn)chn, frame);
-    mpp_leave();
+    vicap_leave();
     if (ret != K_SUCCESS) {
         /* 归还失败 = VB 块回不到环形缓冲，攒够 6 个整条通道就死了：
          * 这个计数必须盯着（板端 2025-09 的"停流"就是这类症状） */

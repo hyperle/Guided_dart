@@ -1,0 +1,54 @@
+# ============================================================================
+# launcher 启动清单
+#
+# 部署位置：/sdcard/app/startup_final.list
+#
+# 语法：绝对路径 [参数...] [&]     带 & = 后台常驻；不带 = 前台
+#
+# 【重要】不要在这一份清单里放多条 self_guiding_dart：
+#   2025-09-16 实测，7 次开机、28 次前台启动，launcher 把每一条前台项都
+#   在**同一瞬间**记成 "exited, code=0" —— 它的 waitpid 在 RT-Smart 上不等子进程
+#   （源码注释自己写了 "waitpid 行为不可靠(可能返回 0)"）。后果是 5 个实例几乎
+#   同时抢 VB/VICAP：只有 9 次写出了日志，其余静默死掉，活下来的那个把 VB 占住，
+#   后面每个都撞 FATAL: vb_set_config。**一次上电只放一条**，换配置就改这一行。
+#
+# 【本轮为什么带 --seconds 90】
+#   跑 90 秒后由 SIGALRM 让主循环干净退出：录像线程收尾取净码流 → fflush+fsync →
+#   stop_chn / destroy_chn / detach_vb_pool / 销毁池 全部走一遍。日志末尾会有一行
+#   "退出：…" 总结，录像文件也已经落盘。一轮上电就能同时回答四件事：
+#     1) launcher 到底有没有把程序拉起来（先看 app/logs/launcher.log 有没有）
+#     2) 程序自己有没有跑起来、日志落在哪（self_guiding_dart.log 第二行写路径）
+#     3) 录像链路通不通（1Hz 状态行：录像帧数 / 送帧失败 / 无块 / 在途）
+#     4) 收尾干不干净（"录像: 线程收工" + "退出：" 两行）
+# ============================================================================
+
+# 导引主程序：VICAP 独占（单通道 CHN0），录像从第一帧就开
+#   日志: /sdcard/app/logs/self_guiding_dart.log（每行 fsync；打不开会依次退到
+#          /sdcard/app/ → /sdcard/ → /tmp/，实际路径写在日志第二行）
+#   录像: /sdcard/dart/rec_XXXX.h264（黑白 H.264，左上角烧入关键数据）
+# 本轮三件事：
+#   1) --venc-mode m：只试 MJPEG（受固件限制 VENC 只能同时存在一个通道，上一轮 chn0 被
+#      H264 占了，MJPEG 从来没被真正试到）。MJPEG 走的是同一条手工送帧路径，若它出码流
+#      就说明手工路径没问题、只有 H264 那档坏，并且当场就能用 .mjpg 录到带标注的录像。
+#   2) --pbm 9 --csv：完全不依赖编码器的取证通道 —— 每 9 帧存一张二值化 PBM 图（10fps），
+#      每帧的识别结果写 frames.csv。编码器就算继续不工作，这一轮也有可复核的数据。
+#   3) --seconds 90：到点自己干净退出（板端 SIGALRM 不来，已改成主循环单调钟判断）。
+# 【本轮】编码器已判定为固件层面不可用（H264/MJPEG、带/不带 intbuf 全部 0 字节、
+#   PicCnt=0；第二个通道一律 K_ERR_NOBUF），所以这一轮**完全不碰 VENC**，
+#   专心把"取证通道"跑通：每 9 帧一张二值化 PBM（约 10fps）+ 每帧一行 CSV。
+# 本轮产物（卡上 /sdcard/dart/）：
+#   f%06lu.pbm   每 9 帧一张二值化图（≈10fps）——就是识别器看到的图
+#   raw%06lu.pgm 每 90 帧一张原始 Y 平面（≈1fps）——用来标定阈值/曝光
+#   frames.csv   每帧一行：seq,mono_ms,src_pts,d_pts_us,exp_us,cx,cy,roi,cost_us,captured_fps,pbm
+#                （d_pts_us 来自源帧 pts = **真实**帧间隔；exp_us 是固定曝光值，备查）
+# 【本轮优化】VICAP 源帧与池帧都改成 **cached 持久映射**（VICAP 那侧每帧读前 invalidate，
+#   因为 ISP 是 DMA 写入方）。理由：二值化要逐字节读 230KB 源帧、取证打包再读一遍池帧，
+#   non-cache 读是每字节十几次总线周期，把 11ms 帧预算吃掉一大块；老工程板端验证过的做法
+#   正是"VICAP 帧 cached + 读前 invalidate，二值化结果写普通内存，只有喂编码器的拷贝块
+#   用 non-cache"。池帧现在没有任何 DMA 消费者（录像走的是整块 memcpy 进非 cache 输入块），
+#   所以不需要 flush；将来若把池帧直接交给 VENC/KPU，送帧前必须 flush/invalidate。
+#
+# 主机侧回放/校验：
+#   python3 scripts/pbm_review.py /media/hyperlee/SDCARD/dart --check
+#   python3 scripts/pbm_review.py /media/hyperlee/SDCARD/dart --mp4 review.mp4 --dump-overlay first.png
+/sdcard/app/self_guiding_dart --seconds 90 --no-record --pbm 9 --csv --raw 90 &

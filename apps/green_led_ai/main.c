@@ -82,8 +82,8 @@ static cfg_t g_default = {
     .kpu_sync = 0,
 
     .pm_perf = 0,
-    .rec_mode = 0,               /* 默认 shared：单通道，板端验证过的形态 */
-    .dump_timeout_ms = 150,      /* 连续 dump + 长超时：旧工程 40079 帧稳定 */
+    .rec_feed = REC_FEED_COPY,   /* 录像取帧=应用层拷贝到私有 VB 块（最稳） */
+    .dump_timeout_ms = 200,      /* 只为关停/异常兜底：dump 本身是"阻塞等下一帧" */
     .status_period_s = 2,
     .trace_frames = 5,
 };
@@ -173,8 +173,12 @@ static void usage(void)
 {
     app_log("usage: " APP_NAME_STR " [options]\n");
     app_log("  --csi <0-2>            CSI 号 (默认 %d，庐山派在 CSI2)\n", g_default.csi);
-    app_log("  --fps <n>              探测请求帧率 (默认 %d，须与 1920x1080 成对)\n",
+    app_log("  --acq <WxH>            采集尺寸 (默认 %ux%u；必须与 --fps 成对精确命中)\n",
+            g_default.acq_w, g_default.acq_h);
+    app_log("  --fps <n>              探测请求帧率 (默认 %d；gc2093/CSI2 只有这四档:\n",
             g_default.probe_fps);
+    app_log("                         1920x1080@30、1920x1080@60、1280x960@90、1280x720@90\n");
+    app_log("                         例: --acq 1280x720 --fps 90  /  --fps 60)\n");
     app_log("  --vision <on|off>      视觉子系统 (默认 on；off 则不配置 CHN0)\n");
     app_log("  --record <on|off>      录像子系统 (默认 on；off 则不配置 CHN1)\n");
     app_log("  --vis-out <WxH>        视觉通道尺寸 (默认 %ux%u)\n",
@@ -206,9 +210,11 @@ static void usage(void)
     app_log("  --kpu-nms <own>        kpu NMS 实现（只支持 own；SDK 的 librvv.a\n");
     app_log("                         实际没实现 nms()，见 README 说明）\n");
     app_log("  --kpu-sync <0|1>       kpu 输入 tensor 是否 sync_write_back（默认 0）\n");
-    app_log("  --rec-mode <shared|bind>  录像取帧方式 (默认 shared:\n");
-    app_log("                        单通道、识别交棒给编码器；bind=双通道硬件直连，实验特性)\n");
-    app_log("  --dump-timeout <ms>    dump 等待上限 (默认 %d ms)\n", g_default.dump_timeout_ms);
+    app_log("  --rec-feed <copy|borrow>  录像怎么拿帧 (默认 copy:\n");
+    app_log("                        copy=拷进录像私有 VB 块，解耦且最稳；\n");
+    app_log("                        borrow=直接把 VICAP 帧借给编码器，送完立刻归还，零拷贝对照)\n");
+    app_log("  --dump-timeout <ms>    dump 等帧的兜底上限 (默认 %d ms;\n", g_default.dump_timeout_ms);
+    app_log("                        正常路径就是阻塞等下一帧，不 sleep 不轮询)\n");
     app_log("  --vicap-mode <auto|online|offline>  采集工作模式 (默认 auto:\n");
     app_log("                 shared 单通道 -> offline；bind 双通道 -> online)\n");
     app_log("  --pm-perf              把 CPU/KPU 的 PM governor 设为 performance\n");
@@ -222,6 +228,7 @@ static int parse_args(int argc, char **argv)
 {
     static const struct option opts[] = {
         { "csi",      required_argument, 0, 'c' },
+        { "acq",      required_argument, 0, 'a' },
         { "fps",      required_argument, 0, 'f' },
         { "vision",   required_argument, 0, 'V' },
         { "record",   required_argument, 0, 'R' },
@@ -260,6 +267,10 @@ static int parse_args(int argc, char **argv)
     while ((c = getopt_long(argc, argv, "", opts, NULL)) != -1) {
         switch (c) {
         case 'c': g_cfg.csi = atoi(optarg); break;
+        case 'a':
+            if (parse_pair(optarg, &g_cfg.acq_w, &g_cfg.acq_h) != 0)
+                return -1;
+            break;
         case 'f': g_cfg.probe_fps = atoi(optarg); break;
         case 'V':
             if (parse_onoff(optarg, &g_cfg.vision_on) != 0)
@@ -301,7 +312,14 @@ static int parse_args(int argc, char **argv)
         case 'C': g_cfg.cap_bytes = strtoull(optarg, NULL, 0); break;
         case 'd': g_cfg.detector = optarg; break;
         case 'P': g_cfg.pm_perf = 1; break;
-        case 'j': g_cfg.rec_mode = (strcmp(optarg, "bind") == 0) ? 1 : 0; break;
+        case 'j':
+            if (strcmp(optarg, "borrow") == 0)
+                g_cfg.rec_feed = REC_FEED_BORROW;
+            else if (strcmp(optarg, "copy") == 0)
+                g_cfg.rec_feed = REC_FEED_COPY;
+            else
+                return -1;
+            break;
         case 'u': g_cfg.dump_timeout_ms = atoi(optarg); break;
         case 'M':
             if (strcmp(optarg, "online") == 0)
@@ -331,6 +349,10 @@ static int parse_args(int argc, char **argv)
         g_cfg.probe_fps = g_default.probe_fps;
     if (g_cfg.vis_w < 160 || g_cfg.vis_h < 120 || g_cfg.rec_w < 160 || g_cfg.rec_h < 120)
         return -1;
+    if (g_cfg.acq_w < 640 || g_cfg.acq_h < 480) {
+        app_log(APP_NAME_STR ": --acq 太小 (%ux%u)\n", g_cfg.acq_w, g_cfg.acq_h);
+        return -1;
+    }
     if (g_cfg.step_x == 0 || g_cfg.step_y == 0)
         return -1;
     if (g_cfg.rec_fps <= 0)
@@ -338,28 +360,26 @@ static int parse_args(int argc, char **argv)
     if (g_cfg.status_period_s < 1)
         g_cfg.status_period_s = 1;
     /*
-     * 录像取帧方式：
-     *   shared（默认）：只有 CHN0 一条通道，识别处理完把帧交给编码器，
-     *                   取流线程在拿到对应码流后归还 —— 与旧工程同形态（实测 40079 帧稳定）
-     *   bind（实验）： 额外配 CHN1 并硬件绑定到 VENC。本板实测该形态 200~400 帧后
-     *                   两条通道一起衰减到停，故不作为默认。
+     * 录像取帧方式（只有 CHN0 一条通道，双通道/bind 已被板端证伪）：
+     *   copy（默认）：识别处理完立刻把帧拷进录像私有 VB 块，VICAP 帧拷完即归还；
+     *                 编码器只碰录像自己的块，两个子系统彻底解耦。
+     *   borrow：直接把 VICAP 帧借给编码器，送帧返回后立刻归还（官方 uvc 样例写法，
+     *           零拷贝对照用）。
      */
-    if (g_cfg.rec_mode == 0 && g_cfg.record_on &&
-        (g_cfg.rec_w != g_cfg.vis_w || g_cfg.rec_h != g_cfg.vis_h))
-        app_log(APP_NAME_STR ": shared 模式与识别共用 CHN0，--rec-out 被忽略"
+    if (g_cfg.record_on && (g_cfg.rec_w != g_cfg.vis_w || g_cfg.rec_h != g_cfg.vis_h))
+        app_log(APP_NAME_STR ": 录像与识别共用 CHN0，--rec-out 被忽略"
                 "（录像尺寸 = 识别尺寸 %ux%u）\n", g_cfg.vis_w, g_cfg.vis_h);
 
-    if (g_cfg.rec_mode == 0 && !g_cfg.vision_on && g_cfg.record_on) {
-        app_log(APP_NAME_STR ": vision off + shared 无法供帧，录像自动改用 bind 模式\n");
-        g_cfg.rec_mode = 1;
-    }
+    if (!g_cfg.vision_on && g_cfg.record_on)
+        app_log(APP_NAME_STR ": vision off 时 CHN0 仍会配置并取帧（它是录像的帧源），"
+                "只是不跑检测\n");
 
     /*
-     * 采集工作模式（auto）：shared 是单通道 -> OFFLINE（旧工程验证过）；
-     * bind 是双通道 -> ONLINE（官方 yolov8_run_camera 的组合）。
+     * 采集工作模式（auto）：单通道一律 OFFLINE —— 旧工程同形态实测跑过 40079 帧，
+     * 双通道(含 online)在板端被证伪（CHN0 会在 4~147 帧后永久 NOTREADY）。
      */
     if (g_cfg.vicap_online < 0)
-        g_cfg.vicap_online = (g_cfg.rec_mode == 1) ? 1 : 0;
+        g_cfg.vicap_online = 0;
 
     /* 后端决定视觉通道的像素格式：color 需要 NV12，kpu 走 ISP 出的 RGB 平面 */
     g_cfg.vis_rgb_planar = (strcmp(g_cfg.detector, "kpu") == 0) ? 1 : 0;
@@ -436,18 +456,18 @@ int main(int argc, char **argv)
     app_log(APP_NAME_STR ": probe request csi=%d %ux%u@%d (适配表精确命中要求)\n",
             g_cfg.csi, g_cfg.acq_w, g_cfg.acq_h, g_cfg.probe_fps);
     app_log(APP_NAME_STR ": subsystems vision=%s record=%s rec_fps=%d detector=%s "
-            "vicap_mode=%s rec_mode=%s dump_timeout=%dms\n",
+            "vicap_mode=%s rec_feed=%s dump_timeout=%dms\n",
             g_cfg.vision_on ? "on" : "off", g_cfg.record_on ? "on" : "off", g_cfg.rec_fps,
             g_cfg.detector, g_cfg.vicap_online ? "online" : "offline",
-            g_cfg.rec_mode ? "bind" : "shared", g_cfg.dump_timeout_ms);
+            g_cfg.rec_feed == REC_FEED_BORROW ? "borrow" : "copy", g_cfg.dump_timeout_ms);
 
     if (g_cfg.pm_perf)
         pm_lock_performance();
 
     /*
      * 采集/录像的编排顺序照抄官方 sample_venc：
-     *   vicap_setup -> record_bind(VICAP CHN1 -> VENC) -> vicap_start -> record_run
-     * 绑定必须在 start_stream 之前完成。
+     *   vicap_setup -> record_setup(输出池+VENC) -> vicap_start -> vision_start
+     *   -> record_run。录像不再与 VICAP 有任何绑定关系，顺序上只是为了先备好池子。
      */
     if (vicap_setup() != 0) {
         app_log(APP_NAME_STR ": vicap setup failed, exit\n");
@@ -456,7 +476,7 @@ int main(int argc, char **argv)
 
     int rec_bound = 0;
     if (g_cfg.record_on)
-        rec_bound = (record_bind() == 0);
+        rec_bound = (record_setup() == 0);
 
     if (vicap_start() != 0) {
         app_log(APP_NAME_STR ": vicap start failed, exit\n");
@@ -464,17 +484,21 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    if (g_cfg.vision_on && vision_start() != 0)
+    /*
+     * CHN0 是唯一帧源：即使 --vision off 也要起采集/处理线程（只取帧不检测），
+     * 否则录像没有帧可拷。--record off 时则完全不拷、不编码。
+     */
+    if (vision_start() != 0)
         app_log(APP_NAME_STR ": vision start failed (录像不受影响)\n");
 
     if (g_cfg.record_on) {
         if (!rec_bound) {
-            app_log(APP_NAME_STR ": 录像已禁用（绑定失败），视觉继续工作\n");
+            app_log(APP_NAME_STR ": 录像已禁用（VENC 初始化失败），视觉继续工作\n");
         } else if (record_run() != 0) {
             app_log(APP_NAME_STR ": record start failed (视觉不受影响)\n");
         }
     } else {
-        app_log(APP_NAME_STR ": recorder disabled (--record off：未配置 CHN1/VENC)\n");
+        app_log(APP_NAME_STR ": recorder disabled (--record off：不拷贝、不建 VENC 流水)\n");
     }
 
     control_start();

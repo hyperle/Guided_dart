@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_path="$(readlink -f -- "${BASH_SOURCE[0]}")"
+repo_dir="$(cd -- "$(dirname -- "${script_path}")/.." && pwd)"
+build_dir="${repo_dir}/build/video_player"
+binary="${build_dir}/video_player"
+
+if [[ ! -x "${binary}" ]]; then
+    echo "video_player 尚未构建，正在构建..." >&2
+    cmake -S "${repo_dir}/tools/video_player" -B "${build_dir}"
+    cmake --build "${build_dir}" -j"$(getconf _NPROCESSORS_ONLN 2>/dev/null || printf '2')"
+fi
+
+exec "${binary}" "$@"

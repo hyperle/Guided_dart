@@ -23,18 +23,36 @@
 # ============================================================================
 
 # ---- 本机实际启用的启动项（后台常驻）----
-# green_led_ai = VICAP 唯一持有者，内部两条互不影响的流水：
-#   CHN0 -> 绿灯识别（RVV CIELAB 查表阈值；后续可切 KPU/NanoDet-Plus）
-#   CHN1 -> H.264 录像（25fps 抽样，VENC 直接吃 VICAP 物理地址，零拷贝）
+# green_led_ai（v4）= VICAP 唯一持有者，只配一条通道 CHN0，内部三条互不阻塞的流水：
+#   CHN0 --识别--> RVV CIELAB 查表阈值（只由采集线程 dump/release，不加锁）
+#        --录像--> 拷一份进录像私有 VB 块，VENC 只吃这份拷贝（VICAP 帧拷完即归还）
 # 日志:  /sdcard/app/logs/green_led_ai.log
 # 录像:  /sdcard/app/recording/rec_XXXX.h264 + rec_XXXX.csv
 # 控制:  socket /sdcard/app/green_led_ai.ctl（vision on|off / record on|off / status）
 #        pid 在 /sdcard/app/green_led_ai.pid；kill -USR1 开始常录、-USR2 停止常录
-/sdcard/app/green_led_ai &
+#
+# 【采集帧率】gc2093 在 CSI2 的适配表只有四档，请求必须精确命中，否则会静默退回
+#   “同分辨率最高帧率”（日志里会有 sensor actual ... WARN 那一行）：
+#     1920x1080@30（默认）  1920x1080@60  1280x960@90  1280x720@90
+#   ★ 本轮按你的要求请求 80fps：适配表里没有这一档，实际会落到 1920x1080@60。
+#     想要真的 90fps，把下面那行 1280x720@90 的注释打开、把本行注释掉即可。
+#
+# 【容量】这张卡总共 1GB（已用 566MB，多半是历史录像），默认 --cap 是 8GB 等于不淘汰，
+#   录像会一直吃到卡满为止；建议显式给个小一点的上限，例如 --cap 600M。
+#
+# 请求 80fps（会落到 1080p60）:
+/sdcard/app/green_led_ai --fps 80 --cap 600M &
 
-# 只跑识别、不录像（录像子系统连 CHN1 都不配置，省一份 VB）:
+# 真的 90fps（1280x720，带宽余量最大，推荐以后用这条）:
+# /sdcard/app/green_led_ai --acq 1280x720 --fps 90 --cap 600M &
+# 1080p60（不改分辨率，最省事）:
+# /sdcard/app/green_led_ai --fps 60 --cap 600M &
+# 1280x960@90（分辨率高、带宽余量小）:
+# /sdcard/app/green_led_ai --acq 1280x960 --fps 90 --cap 600M &
+
+# 只跑识别、不录像（不拷贝、不建 VENC 流水）:
 # /sdcard/app/green_led_ai --record off &
-# 只录像、不识别:
+# 只录像、不识别（CHN0 照取帧，只是不跑检测）:
 # /sdcard/app/green_led_ai --vision off --rec-fps 25 &
 # 调参示例（参数含义见 apps/green_led_ai/README.md）:
 # /sdcard/app/green_led_ai --roi 160,120,320,240 --step 2,2 --lab 12,-20,8 --pix-min 50 &
