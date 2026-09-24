@@ -15,6 +15,8 @@
 | 日志有，但没有状态行（`xx.x fps \|`） | 环节 2/3：卡在初始化或取帧 | 日志最后一行停在哪 |
 | 状态行 `无帧 > 0`、fps 很低 | 环节 3：VICAP 取帧失败 | `vicap: 取帧失败 ret=0x…` |
 | 二值化图全黑 / 没有白像素 | 环节 4 正常，场景里没有光源（见 §4.1） | `取证: raw… 亮度 均值X maxY` |
+| 识别结果一直是 `cx=-1` | 环节 5：启动态没确认出目标（先看 `识别自检` 是否 PASS） | 状态行的 `识别: 状态=启动 …` 与 `全图候选` |
+| 状态在「跟踪/丢失」间反复跳 | 环节 5：ROI 太小 / 测量被拒（看 `超框`、`KF拒`） | `识别: 状态 …→…` 那几行 |
 | `dart/` 里没有 PBM/PGM/CSV | 环节 6：取证通道没开或写失败 | `取证: …` 那几行 |
 | `编码器录像 0 帧` | 环节 7：本板固件上 VENC 不可用（见 §7） | `录像: 自检[…] … 字节 0` |
 | 板子重启（`launcher.log` 多次 `boot launcher start`） | 环节 7/6：给卡死通道拆链 / 写线程栈溢出（历史两种） | 日志最后一行 |
@@ -35,7 +37,8 @@
          └─ 环节2 MPP 初始化  sensor 探测 → VB → VICAP dev/CHN0 → init → 启动取流
              └─ 环节3 取帧      dump_frame → cached 映射 + invalidate → RawFrame 作用域归还
                  └─ 环节4 二值化  RVV 阈值 → 写进池帧（cached）
-                     └─ 环节5 识别    IDetector::detect（当前是 DetectorStub 占位）
+                     └─ 环节5 识别    DetectionPipeline：启动态全图 RVV 粗筛 + 3 帧滑窗确认 /
+                                     跟踪态动态 ROI + 尺度自适应卡尔曼（见 DETECTION_DESIGN.md）
                          ├─ 环节6 取证通道  PBM(每9帧) / PGM(每90帧) / CSV(每帧)，写线程负责落盘
                          └─ 环节7 编码器录像 VENC（本板固件不可用，用 --no-record 关闭）
                              └─ 环节8 收尾  --seconds 到点 → 写线程收尾 → 主循环退出 → 拆链（有安全阀）
@@ -123,7 +126,13 @@ vicap: 第一帧到手 640x360 stride=640
 
 **本项目实测**：固定曝光 250µs + 阈值 128 下，背景亮度 ~3~6、绿 LED ~144~189，分离干净；
 放上目标后 845 张 PBM 里 **641 张出现白斑**（稳定期质心固定 (312,206)，单帧最多 6725 个白像素）。
-⇒ **曝光不要改**；没有目标时"全黑"是正常的，不是故障。
+⇒ **曝光的位置只有一个**：`include/core/config.hpp::exposure_us`（当前 **500us**），
+或命令行 `--exp US` 临时覆盖一档。**改 `apps/green_led_ai/` 里的 `.exposure_us` 与本程序无关**
+（那是另一个应用，板子跑的是 `self_guiding_dart`）—— 这里踩过：反复上调那个值，板端日志一直是 250us。
+
+**"全黑"要先看数不看图**：`取证: raw*.pgm 亮度 均值X maxY`。`max` 上不到 **128**（二值化阈值）就必然
+"无目标"，即整轮 PBM 全黑。板端实测 250us 时 `max` 只有 1~57、842 张 PBM 里 840 张全黑 —— 那不是故障，
+是**进光不够**：先确认光源亮着且在画面里，仍不够就调大曝光（该模式允许 13~11096us；调大会增加运动模糊）。
 
 **注意**
 
@@ -138,14 +147,75 @@ vicap: 第一帧到手 640x360 stride=640
 
 ---
 
-## 5. 环节 5：识别
+## 5. 环节 5：识别与跟踪
 
-**职责**：`IDetector::detect(GrayFrame&) → DetectResult{cx, cy, roi, cost_us}`。
-`main.cpp` 里当前是 `DetectorStub`（永远 `cx=cy=-1`、`cost_us=0`），所以状态行的 `识别 0 us`、
-CSV 里的 `cx=-1 cy=-1` 都是**占位值**，不是结论。
+**职责**：`IDetector::detect(GrayFrame&) → DetectResult{cx, cy, roi, cost_us, radius, state, roi_x..roi_h}`。
+实现在 `src/detection/`（`DetectionPipeline`），**设计/公式/参数表见 [`DETECTION_DESIGN.md`](DETECTION_DESIGN.md)**。
+两句话版本：
 
-**接真识别器**：在 `vision/detector.hpp` 后实现一个类，替换 `main.cpp` 的 `DetectorStub` 即可；
-流程、内存、取证、录像都不用动。注意耗时字段是毫秒粒度（`<1ms` 会显示 0），要微秒精度需改 `clock_gettime`。
+- **启动态**：全图 RVV 瓦片粗筛取最亮 Top-K，再用 3 帧滑窗验证位移矢量平滑性（剔除随机闪烁坏点）→ 确认目标；
+- **跟踪态**：只在预测 ROI 内扫描（动态 ROI = `kp·ŝ + B_margin + k_σ·σ_pred`），
+  测量进 6 维卡尔曼 `[x y vx vy s vs]`（`s = sqrt(A/π)` 是目标等效半径，`vs` 就是膨胀速率），
+  `R_scale` 远档大（靠模型压住尺寸跳动）/ 近档小（贴合轮廓变化）。
+
+**成功判据**（日志）
+
+```
+self_guiding_dart: 识别自检 PASS（RVV 粗筛 vs 标量 + ROI 测量解析）    ← PASS 之前先别信任何识别结果
+self_guiding_dart: 识别/跟踪参数 扫描=rvv-tile(瓦片16 …) ROI: W=kp*s+margin+kσ*σ …
+识别: 状态 启动 → 跟踪（第3帧，距上次迁移3帧）：中心(312,206) r=4.2px ROI 55x55@(285,178) …
+识别: 状态=跟踪 | 全图帧 3 ROI帧 417 | 命中 417 未命中 0 | 扫描 avg38us max61us 整链 max82us | …
+识别总结: 处理 420 帧，命中 417 未命中 3 | 全图扫描 3 帧 ROI 扫描 417 帧 | 确认 1 丢失 0 重捕(软0/硬0) 复位 0 | …
+```
+
+| 现象 | 含义 / 动作 |
+|---|---|
+| `识别自检 FAIL` | RVV 粗筛的向量路径与标量参考不一致（或 ROI 测量解析错）→ **别继续**，先查 `src/detection/light.cpp` 的 RVV 段 |
+| 状态一直在「启动」 | 没确认出目标：看 `全图候选`（0 = 阈值/曝光/`--det-min-area` 的问题）；有候选但 `拒闪` 持续涨 = 平滑性门太严（`--arm-accel`）或目标真的在乱跳 |
+| 状态在「跟踪/丢失」间反复跳 | ROI 太小或测量不稳定：看 `超框` 计数（>0 说明目标贴着窗口边）、`KF拒`（>0 说明被马氏门限拒收） |
+| `KF拒` 持续增长 | `R_scale` 配得比真实测量噪声小，或目标真的在急机动（发散保护会兜住，但属"正在挣扎"） |
+| `贴边跳` 持续增长而没目标 | 正常：镜头前有东西扫过（手/反光）被贴边门挡住了 —— 它**不是**坏点，所以单列不混进 `拒闪` |
+| **`全图确认` 持续增长 / `全图帧` 与帧数齐涨** | **ROI 退化成整幅了**（跟踪态本该只在 ROI 内扫）。round13 就是这样抓出来的：近距离目标 r≈40px 时旧的回退判据让它永远走全图。修好后跟踪态 `全图确认` 应恒为 0 |
+| `frames_prev.csv` 出现 | 正常：这一轮启动时把上一轮的 CSV 改名保留了（板上多上一次电就多跑一轮，避免静默覆盖）。它的图像已清空，别和本轮 img/ 配对 |
+| 参数行与下一行粘在一起 | 已修（`log_line` 缓冲 256→512，且截断时强制保住换行）。若再出现，看 `src/core/log.cpp` |
+| `扫描 avg/max` 吃掉帧预算 | 启动态粗筛每帧都跑全图；跟踪态若 ROI 常态很大（`roi_w×roi_h` 接近整幅），查 `roi.kp/margin` |
+| CSV 里 `cx=-1` | 这一帧确实没目标（不再像 DetectorStub 时代那样是占位值） |
+
+**耗时字段**：`cost_us` 已改成**微秒**粒度（原来毫秒粒度下"启动阶段粗筛 ~0.15ms"一律显示 0，见旧版此处的记录）。
+整链耗时由 `main` 测量，扫描本身的耗时在 1Hz 状态行的 `扫描 avg/max`。
+
+**round13（第一次有目标）实测基线**：目标 r≈40px 时命中 4443/7546 帧、连续跟踪 481 帧（≈5.3s），
+但 ROI 几乎没用上（全图 7350 / ROI 196）→ 已修（见上表"整幅回退按面积判"）。
+
+**round12（识别层第一次上板）实测基线**：`识别自检 PASS`；90.0 fps 不掉；全图 RVV 粗筛
+`扫描 avg ≈ 505~570us`、整链 p50=528 / p95=631 / max=2713us（帧预算 11109us）。
+那一轮画面里没目标（826 张二值图 91% 全黑），暴露并修掉了两个缺陷：贴边候选会被确认为目标、
+`log_line` 的 256 字节缓冲截断了参数行（详见 `logs/board/round12_notes.md`）。
+
+**改识别层之后**：三道闸，按顺序过，别跳级。
+
+```bash
+bash tests/host/run.sh detection    # ① 逻辑：331 项检查，合成图 + 假时钟，不用板子（标量路径）
+bash scripts/rvv_qemu.sh            # ② 向量：交叉编译后在 qemu-riscv64 上跑 RVV 路径（需装 qemu-user）
+bash scripts/build.sh self_guiding_dart   # ③ 上板：只剩"真 RVV 时序 + 内存带宽 + 真实曝光"三类
+```
+
+① 用的是标量参考路径；② 用 `-cpu rv64,v=true,vlen=128`（对应 C908 的 VLEN=128）把**向量路径**
+按板端同一个自检函数跑一遍（`LightScanner::selftest()` 逐位比对 + 解析校验 + 整链 ROI 门控）；
+③ 才需要拔卡/上电。装 qemu：`sudo apt install -y qemu-user`（脚本没找到 qemu 会明确提示，
+`--build-only` 可只做编译检查）。qemu 的耗时不是板端耗时，性能判据永远看板端日志的
+`识别: 状态=… 扫描 avg/max=…us`。
+
+**卡插回来之后的复盘**（一条命令出判据表，不用再翻日志）：
+
+```bash
+python3 scripts/detect_review.py /media/$USER/<卡>/dart
+```
+
+它读 `frames.csv`，给出：状态时间线（启动/跟踪/丢失 各段帧数与秒数）、跟踪态命中率、
+位置轨迹连续性、**等效半径 r 的膨胀速率与线性拟合 R²**（验证"均匀变大"）、ROI 尺寸分布与
+占整幅比例、目标是否始终落在窗口内、帧率/断档/重复帧、cost_us 分位数，
+最后一张判据表（`[ ok ]/[注意]/[FAIL]`）。`--selftest` 用合成数据自测整条分析链。
 
 ---
 
@@ -156,16 +226,30 @@ CSV 里的 `cx=-1 cy=-1` 都是**占位值**，不是结论。
 
 **产出**（`/sdcard/dart/`）
 
+**目录布局**（2025-09 起）——图像与 CSV **分层放**：一轮 90s 会产生 800+ 张 PBM，
+全堆在一层时 `frames.csv` 会被埋掉，而且板上 RTC 没设、vfat 把所有文件写成同一个时间戳，
+按时间排序同样找不到。
+
 | 文件 | 内容 | 默认节奏 |
 |---|---|---|
-| `f%06lu.pbm` | 二值化图（1bit/像素，bit=1 黑） | `--pbm 9` = 每 9 帧一张（≈10fps） |
-| `raw%06lu.pgm` | 原始 Y 平面（8bit，无损） | `--raw 90` = 每秒一张 |
-| `frames.csv` | 每帧一行 | 每帧 |
+| `dart/frames.csv` | 每帧一行（**放根目录，一眼可见**） | 每帧 |
+| `dart/img/f%06lu.pbm` | 二值化图（1bit/像素，bit=1 黑） | `--pbm 9` = 每 9 帧一张（≈10fps） |
+| `dart/img/raw%06lu.pgm` | 原始 Y 平面（8bit，无损） | `--raw 90` = 每秒一张 |
 
-CSV 列：`seq, mono_ms, src_pts, d_pts_us, exp_us, cx, cy, roi, cost_us, captured_fps, pbm`
+> 两个复盘脚本（`pbm_review.py` / `detect_review.py`）都能自动识别新布局，也兼容旧布局
+> （图像与 CSV 同层）——归档里的老数据照样能读。
+
+CSV 列：`seq, mono_ms, src_pts, d_pts_us, exp_us, cx, cy, roi, cost_us, captured_fps, pbm, radius, circ, state, roi_x0, roi_y0, roi_x1, roi_y1`
 
 - `d_pts_us` 来自源帧 `pts` —— **真实帧间隔**，用它算出的才是真帧率（"自己数循环次数"只能证明消费了多少帧）。
 - 判重复帧要用 `src_pts` 是否与上一帧相同，**不要用图像哈希**（二值图内容恒定时哈希必然相同，我们误报过 2797 处）。
+- 后 7 列是识别/跟踪层加的：`radius` 是等效半径 `r=sqrt(A/π)`，`circ` 是目标块的**圆度**（0~1，
+  圆目标 0.75~0.95、细长反光 <0.3；`--circ-weight` / `--min-circ` 就是按这一列定的），
+  `state` 是 `0=启动 1=跟踪 2=丢失`，
+  `roi_x0/roi_y0/roi_x1/roi_y1` 是**本帧实际扫描窗口的四个角像素坐标**（全图扫描时就是整幅
+  `0,0,639,359`）。角坐标是**闭区间**：`roi_x1/roi_y1` 是框内最后一个像素 —— 画框、和 PBM
+  逐像素对照时可以直接用，不必再做一次 `x+w-1` 的换算（那个 -1 正是最容易记错的地方）。
+  标定"确认要几帧、ROI 开多大、尺度跟不跟得住"就靠这几列（见 `DETECTION_DESIGN.md` §6）。
 
 **健康判据**
 
@@ -271,7 +355,8 @@ self_guiding_dart: 到达 --seconds 90，开始干净退出
 | `/sdcard/app/logs/launcher.log` / `launcher-child.log` | 自启器日志 / 子进程 stdout |
 | `/sdcard/app/self_guiding_dart.log` | **兜底路径**，常出现看门狗心跳 |
 | `/sdcard/app/self_guiding_dart.lock` | 单实例守卫锁文件（fcntl 写锁，进程死自动释放） |
-| `/sdcard/dart/` | 取证产出：`f*.pbm` / `raw*.pgm` / `frames.csv`（编码器可用时另有 `rec_*.h264`） |
+| `/sdcard/dart/` | 取证根目录：`frames.csv`（每帧一行）+ 编码器可用时的 `rec_*.h264` |
+| `/sdcard/dart/img/` | 图像：`f*.pbm`（二值图）/ `raw*.pgm`（原始 Y 平面） |
 | `logs/board/round*` | 本仓归档的各轮真实日志与样本图 |
 
 ---
@@ -279,9 +364,10 @@ self_guiding_dart: 到达 --seconds 90，开始干净退出
 ## 10. 常用命令
 
 ```bash
-# 编译 + 主机侧回归（7 个场景，ASan/UBSan：块状态机 / 编码器自检 / 取证写线程 / 非致命初始化 …）
+# 编译 + 主机侧回归（ASan/UBSan：块状态机 / 编码器自检 / 取证写线程 / 非致命初始化 …）
 bash scripts/build.sh self_guiding_dart
-bash tests/host/run.sh
+bash tests/host/run.sh              # 录像/取证 + 识别/跟踪（331 项检查）
+bash tests/host/run.sh detection    # 只跑识别/跟踪（改动 src/detection/ 之后先跑这个）
 
 # 部署：卡在读卡器上（推荐，覆盖文件安全）
 cp build/self_guiding_dart/self_guiding_dart /media/$USER/<卡>/app/
@@ -291,6 +377,8 @@ sync
 # 读结果（卡插回来后）
 python3 scripts/pbm_review.py /media/$USER/<卡>/dart --check
 python3 scripts/pbm_review.py /media/$USER/<卡>/dart --mp4 review.mp4 --dump-overlay first.png
+python3 scripts/detect_review.py /media/$USER/<卡>/dart      # 识别/跟踪判据表（状态/ROI/膨胀速率/耗时）
+# 两者都会自动找到 dart/frames.csv 与 dart/img/（旧布局也能读）
 ```
 
 **CLI 旋钮**（改 `startup_final.list` 一行即生效，不必重编）
@@ -305,6 +393,22 @@ python3 scripts/pbm_review.py /media/$USER/<卡>/dart --mp4 review.mp4 --dump-ov
 | `--vision N` | 先纯视觉跑 N 秒再开录像 |
 | `--venc-mode {m,h,i}` / `--venc-chn N` / `--venc-intbuf MB` / `--venc-probe` | 编码器排障（一轮只试一档） |
 | `--mem-slim` | 收紧我方 VB 池（帧池太小会被预留门限挡住，见病历 8-A） |
+
+**识别/跟踪旋钮**（同理，改清单一行即生效；完整含义与调参后果见 `DETECTION_DESIGN.md` §8）
+
+| 参数 | 作用 |
+|---|---|
+| `--det off` | 换回占位识别器（恒无目标），量"识别链路本身的开销"基线 |
+| `--no-track` | 关掉 ROI/滤波，只跑"全图粗筛 + 3 帧滑窗确认"（回归对照：现象是否由 ROI 门控引起） |
+| `--thr N` | 二值化阈值（默认 128） |
+| `--det-topk N` / `--det-min-area N` / `--det-tile N` | 启动态粗筛：Top-K 个数 / 最小面积 / 瓦片边长 |
+| `--arm-window N` / `--arm-hits N` / `--arm-accel F` / `--arm-gate F` | 启动确认：滑窗帧数 / 最少命中 / 位移平滑性门(px) / 关联门(px) |
+| `--roi-kp F` / `--roi-margin F` / `--roi-ksigma F` | 动态 ROI：`W=kp·ŝ+margin+kσ·σ_pred`（`--roi-ksigma 0` = 严格规格公式） |
+| `--kf-rfar F` / `--kf-rnear F` / `--kf-sfar F` / `--kf-snear F` | 尺度自适应噪声：远/近档 R_scale 与分界尺度（px） |
+| `--lost-after N` / `--rescan-after N` | 状态机：几帧无测量算丢失 / 丢失几帧后回头全图重扫 |
+
+> 一轮上电**只测一档参数**：状态迁移与 `扫描 avg/max` 是这一轮唯一的证据来源，
+> 同时改两个旋钮就分不清是谁的效果（与 `--venc-mode` 同一条纪律）。
 
 ---
 

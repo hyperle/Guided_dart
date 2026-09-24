@@ -48,7 +48,7 @@ static cfg_t g_default = {
     .acq_w = 1920,
     .acq_h = 1080,
     .ae_enable = 0,
-    .exposure_us = 200,
+    .exposure_us = 500,
     .fix_gain = 1,
 
     .vision_on = 1,

@@ -62,6 +62,7 @@ private:
     static void *thread_entry(void *self);
     void run();
     bool write_slot(const char *path, const uint8_t *data, uint32_t len, const char *what);
+    void clear_images(); // 开轮时清空 img/ 里的上一轮图像（见实现里的"为什么图像不跟着轮转"）
 
     pthread_t               thread_{};
     bool                    thread_started_ = false;
@@ -82,7 +83,9 @@ private:
     char     csv_flush_[kCsvChunk]; // 写线程的搬运缓冲（成员，不放栈上）
     uint32_t csv_len_ = 0;
 
-    char     dir_[160];
+    char     dir_[160];     // 取证根目录：frames.csv 写在它下面
+    char     img_dir_[176]; // 图像子目录 <dir>/img：PBM/PGM 写在这里（别和 csv 混在一层）
+                            // 比 dir_(160) 多留 16 字节给 "/img"，否则 snprintf 会被判可能截断
     int      csv_fd_ = -1;
 
     uint64_t busy_us_ = 0; // 写线程累计 I/O 忙时（us）

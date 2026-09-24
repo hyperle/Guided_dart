@@ -51,4 +51,37 @@
 # 主机侧回放/校验：
 #   python3 scripts/pbm_review.py /media/hyperlee/SDCARD/dart --check
 #   python3 scripts/pbm_review.py /media/hyperlee/SDCARD/dart --mp4 review.mp4 --dump-overlay first.png
-/sdcard/app/self_guiding_dart --seconds 90 --no-record --pbm 9 --csv --raw 90 &
+#
+# 【识别/跟踪（工况 1 启动 + 工况 2 跟踪）本轮怎么跑】
+#   识别链路默认全开：启动态全图 RVV 粗筛 + 3 帧滑窗确认 → 跟踪态动态 ROI + 尺度自适应卡尔曼。
+#   设计/公式/参数表见 DETECTION_DESIGN.md。**这一轮不要在清单里额外加旋钮**（一轮只测一档），
+#   需要对照时常用的几个（改这一行即生效，不必重编重传）：
+#     --no-track                只跑"全图 + 3 帧确认"，判断现象是否由 ROI/滤波引起
+#     --det off                 换回占位识别器（恒无目标），量识别链路本身的开销基线
+#     --det-min-area N          启动态候选最小面积（默认 3；目标确实很小可试 2）
+#     --arm-window N --arm-hits N    滑窗帧数 / 最少命中（默认 3 / 3）
+#     --arm-accel F             位移平滑性门（px/帧，默认 2.5；坏点漏网就调小）
+#     --roi-kp F --roi-margin F 动态 ROI 大小（默认 5 / 24px；目标出框就调大）
+#     --kf-rnear F --kf-rfar F  尺度噪声远近两档（默认 0.6 / 25 px²）
+#     --circ-weight F           圆度权重：排序键 = 面积 × 圆度^F（默认 1.0；0=纯面积做对照）
+#     --min-circ F              圆度门限（默认 0 不筛）。先看 frames.csv 的 circ 列再定：
+#                               圆目标 0.75~0.95、细长反光 <0.3，一般取"目标中位 × 0.6"
+#     --exp US                  固定曝光微秒（0=交回 AE）。**默认值在 core/config.hpp::exposure_us**
+#                               （当前 500）；改 apps/green_led_ai/ 里的 .exposure_us 与本程序无关！
+#                               一轮试一档曝光时用这个开关，不用重编重传。
+#   证据：日志里的 `识别自检 PASS`、`识别: 状态 X → Y`（每次迁移一行，带现场）、
+#         1Hz 的 `识别: 状态=… 扫描 avg/max=…`，以及 dart/frames.csv 新增的
+#         radius/state/roi_x0/roi_y0/roi_x1/roi_y1 六列（扫描窗口**四角像素坐标**，闭区间）。
+#         产出分层：dart/frames.csv（根目录）+ dart/img/{f*.pbm,raw*.pgm}。
+#
+# 【曝光怎么定：目标是发光体 → 往小取，别往大取】
+#   发光体自己发光，不需要靠曝光"提亮"：板端历史数据 250us 时绿灯 LED 就是 144~189，
+#   背景只有 3~6 —— 这正是"阈值 128 二值化"能干净分离的前提。
+#   曝光调大的**代价**：LED 打到 255 就饱和，白斑形状变成由过曝扩散决定 →
+#   质心会偏、面积会虚胖 → 等效半径 r=sqrt(A/π) 失真（尺度与 ROI 一起被带偏）。
+#   调法（一轮一档；只看这一行 + 日志里的 `亮度 ... max`）：
+#     max < 120                  发光体太暗/太远/不在画面：先确认它在视野里，再加曝光 500 → 800
+#     max 150~220                正好，用这档
+#     max = 255 且白斑明显变大    过曝：往回收 250 → 180 → 130
+#   `--exp 0` = 交回 ISP 自动曝光（跟随场景漂，标定时不要用）。
+/sdcard/app/self_guiding_dart --seconds 90 --no-record --pbm 9 --csv --raw 90 --exp 250 &

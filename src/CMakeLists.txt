@@ -1,9 +1,10 @@
 # ============================================================================
-# src —— 导引主程序（采集 → 二值化 → 识别 → 录像）
+# src —— 导引主程序（采集 → 二值化 → 识别/跟踪 → 录像）
 #
 #   采集: SensorSource  —— VICAP OFFLINE 单通道 CHN0，1280x720@90 缩放到 640x360
-#   二值化: GraphicsUtils::binarize —— RVV 向量
-#   识别: IDetector 接口（实现由使用方提供）
+#   二值化: GraphicsUtils::binarize —— RVV 向量（写进池帧，录像/取证/识别共用同一张二值图）
+#   识别: DetectionPipeline（dart::detection）—— 启动态全图 RVV 粗筛 + 3 帧滑窗确认；
+#         跟踪态动态 ROI + 连通域测量 + 带尺度预测的卡尔曼滤波（详见 DETECTION_DESIGN.md）
 #   录像: Recorder —— 池帧零拷贝送 VENC 编黑白 H.264，左上角烧入关键数据
 #
 # 编译: bash scripts/build.sh self_guiding_dart
@@ -19,7 +20,14 @@ add_executable(${APP_NAME}
     evidence/evidence_writer.cpp
     capture/sensor_source.cpp
     vision/frame_pool.cpp
-    record/recorder.cpp)
+    recording/recorder.cpp
+    detection/light.cpp
+    detection/blob_measure.cpp
+    detection/armer.cpp
+    detection/kalman.cpp
+    detection/roi_prediction.cpp
+    detection/tracker.cpp
+    detection/pipeline.cpp)
 
 target_include_directories(${APP_NAME} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../include")
 

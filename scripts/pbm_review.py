@@ -46,11 +46,26 @@ def load_csv(path: Path) -> list[dict]:
         return [row for row in csv.DictReader(fh) if row.get("seq")]
 
 
+# ------------------------------------------------------------------ 目录布局
+# 板端布局（2025-09 起）：frames.csv 在取证根目录，图像在 <dir>/img/ 下 ——
+# 一轮 90s 会产生 800+ 张 PBM，混在一层时 CSV 会被埋掉（板上 RTC 没设，
+# vfat 还会把所有文件写成同一个时间戳，按时间排序也找不到）。
+# 旧布局（图像与 CSV 同层）继续支持：本函数两处都找。
+def resolve_layout(directory: Path) -> tuple[Path, Path]:
+    """返回 (图像目录, frames.csv 路径)"""
+    img = directory / "img"
+    pbm_dir = img if any(img.glob("f*.pbm")) else directory
+    for cand in (directory / "frames.csv", img / "frames.csv", pbm_dir / "frames.csv"):
+        if cand.exists():
+            return pbm_dir, cand
+    return pbm_dir, directory / "frames.csv"
+
+
 def pbm_files(directory: Path) -> list[tuple[int, Path]]:
     out = []
     for p in sorted(directory.glob("f*.pbm")):
         try:
-            out.append((int(p.stem[1:]), p))
+            out.append((int(p.stem[-6:]), p))
         except ValueError:
             continue
     return out
@@ -59,9 +74,10 @@ def pbm_files(directory: Path) -> list[tuple[int, Path]]:
 # ------------------------------------------------------------------------ check
 
 def cmd_check(directory: Path, fps_override: float | None) -> int:
-    rows = load_csv(directory / "frames.csv")
-    pbms = pbm_files(directory)
-    print(f"目录: {directory}")
+    pbm_dir, csv_path = resolve_layout(directory)
+    rows = load_csv(csv_path)
+    pbms = pbm_files(pbm_dir)
+    print(f"目录: {pbm_dir}（CSV: {csv_path}）")
     print(f"CSV 行数: {len(rows)}    PBM 张数: {len(pbms)}")
 
     if not rows:
@@ -142,9 +158,10 @@ def cmd_render(directory: Path, out: Path, fps: float | None, overlay: bool,
     if Image is None:
         print("!! 需要 Pillow（pip install pillow）才能合成 mp4")
         return 1
-    rows = load_csv(directory / "frames.csv")
-    by_seq = {int(r["seq"]): r for r in rows}
-    pbms = pbm_files(directory)
+    pbm_dir, csv_path = resolve_layout(directory)
+    rows = load_csv(csv_path)
+    by_line = {line: row for line, row in enumerate(rows, 1)}
+    pbms = pbm_files(pbm_dir)
     if not pbms:
         print("!! 没有 PBM 图，无法合成 mp4")
         return 1
@@ -179,8 +196,9 @@ def cmd_render(directory: Path, out: Path, fps: float | None, overlay: bool,
         img = Image.open(path).convert("L")
         if img.size != (w, h):
             img = img.resize((w, h))
-        if overlay and seq in by_seq:
-            _draw_overlay(img, by_seq[seq])
+        line = seq
+        if overlay and line in by_line:
+            _draw_overlay(img, by_line[line])
         if idx == 0 and dump_overlay is not None:
             img.save(dump_overlay)  # 第一帧存成 PNG：方便直接肉眼核对二值化与标注
             print(f"已导出首帧带标注 PNG: {dump_overlay}")

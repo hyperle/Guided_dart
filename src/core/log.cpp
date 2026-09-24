@@ -50,7 +50,10 @@ void open_log_file() {
 } // namespace
 
 void log_line(const char *fmt, ...) {
-    char buf[256];
+    // 512 字节：识别/跟踪层的状态行字段多、且中文一个字 3 字节。板端 round12 实测
+    // `识别/跟踪参数` 行 290 字节 > 256 被截断，**尾部换行也一起丢了**，于是下一行
+    // 被粘在同一行里 —— "一行一条证据"的前提没了，复盘时对不上账。
+    char buf[512];
 
     va_list ap;
     va_start(ap, fmt);
@@ -58,8 +61,11 @@ void log_line(const char *fmt, ...) {
     va_end(ap);
     if (n <= 0)
         return;
-    if (n > static_cast<int>(sizeof(buf)) - 1)
+    if (n > static_cast<int>(sizeof(buf)) - 1) {
+        // 就算还是太长，也必须保住换行：截断只许丢内容，不许把两行粘起来。
         n = static_cast<int>(sizeof(buf)) - 1;
+        buf[n - 1] = '\n';
+    }
 
     open_log_file();
 

@@ -327,10 +327,18 @@ int main() {
         int fails_before = g_failures;
         std::vector<int> types;
         long sz = 0;
-        check(h264_types(dir + "/f000001.pbm", &types, &sz), "G: PBM 文件不存在");
+        // 布局（2025-09 起）：CSV 在取证根目录，图像在 img/ 子目录 —— 一轮 90s 有 800+ 张 PBM，
+        // 混在一层时 frames.csv 会被埋掉（板上 RTC 没设，vfat 还把时间戳写成一个值）。
+        // 这里同时守住"两样东西确实分开了"：csv 必须在根、pbm 必须在 img/。
+        const std::string img_dir = dir + "/img";
+        check(h264_types(img_dir + "/f000001.pbm", &types, &sz), "G: PBM 文件不在 img/ 子目录下");
         check(sz == 11 + 80 * 360, "G: PBM 大小不对");
+        if (std::FILE *probe = std::fopen((dir + "/f000001.pbm").c_str(), "rb")) {
+            std::fclose(probe);
+            check(false, "G: PBM 不该再写在取证根目录（要和 frames.csv 分开）");
+        }
         // 极性/逐位正确性：左半是暗(0) → bit=1 → 0xFF；右半是亮(255) → bit=0 → 0x00
-        if (std::FILE *pf = std::fopen((dir + "/f000001.pbm").c_str(), "rb")) {
+        if (std::FILE *pf = std::fopen((img_dir + "/f000001.pbm").c_str(), "rb")) {
             std::vector<uint8_t> row(11 + 80);
             (void)!std::fread(row.data(), 1, 11 + 80, pf);
             std::fclose(pf);
@@ -338,7 +346,7 @@ int main() {
             check(row[11] == 0xFF && row[11 + 39] == 0xFF, "G: PBM 左半（暗）应为 0xFF");
             check(row[11 + 40] == 0x00 && row[11 + 79] == 0x00, "G: PBM 右半（亮）应为 0x00");
         }
-        std::FILE *f = std::fopen((dir + "/raw000000.pgm").c_str(), "rb");
+        std::FILE *f = std::fopen((img_dir + "/raw000000.pgm").c_str(), "rb");
         check(f != nullptr, "G: PGM 文件不存在");
         if (f != nullptr) {
             std::vector<uint8_t> buf(16);
@@ -355,6 +363,40 @@ int main() {
             std::fclose(c);
             check(has_row, "G: CSV 没有数据行");
         }
+        // ---- G2：同一目录再开一轮（板上多上一次电就会这样）----
+        // 必须做到两件事：① 上一轮 CSV 保留为 frames_prev.csv；② img/ 里不留上一轮的图
+        //（图与 CSV 必须同轮配对，配对错比缺文件更难查）。
+        {
+            const int before = g_failures;
+            {
+                std::unique_ptr<dart::EvidenceWriter> ev2(new dart::EvidenceWriter(dir.c_str()));
+                std::vector<uint8_t>                  bin(640 * 360, 255);
+                ev2->submit_pbm(7, bin.data(), 640, 360, 640); // 第二轮只写一张，且帧号不同
+                for (int i = 0; i < 500 && ev2->written_pbm() < 1; ++i)
+                    usleep(2000);
+            }
+            std::FILE *prev = std::fopen((dir + "/frames_prev.csv").c_str(), "rb");
+            check(prev != nullptr, "G2: 上一轮 CSV 没有保留成 frames_prev.csv");
+            if (prev != nullptr) {
+                char  line[256];
+                int   rows = 0;
+                while (std::fgets(line, sizeof(line), prev) != nullptr)
+                    ++rows;
+                std::fclose(prev);
+                check(rows >= 2, "G2: frames_prev.csv 里应有一轮的数据行（实得 " + std::to_string(rows) + " 行）");
+            }
+            std::FILE *old_img = std::fopen((img_dir + "/f000001.pbm").c_str(), "rb");
+            check(old_img == nullptr, "G2: 上一轮的图没被清掉（img/ 会和新 CSV 配错）");
+            if (old_img != nullptr)
+                std::fclose(old_img);
+            std::FILE *new_img = std::fopen((img_dir + "/f000007.pbm").c_str(), "rb");
+            check(new_img != nullptr, "G2: 本轮的新图没写进去");
+            if (new_img != nullptr)
+                std::fclose(new_img);
+            std::printf("G2 取证轮转: %s（断言失败 %d）\n", g_failures == before ? "通过" : "失败",
+                        g_failures - before);
+        }
+
         std::printf("G 取证写线程: %s（断言失败 %d）\n", g_failures == fails_before ? "通过" : "失败",
                     g_failures - fails_before);
     }

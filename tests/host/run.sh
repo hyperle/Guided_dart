@@ -32,7 +32,7 @@ g++ -std=gnu++20 -O1 -g -Wall -Wextra \
     "${INC[@]}" \
     "${REPO_ROOT}/tests/host/recorder_host_test.cpp" \
     "${REPO_ROOT}/tests/host/stub_mpp.cpp" \
-    "${REPO_ROOT}/src/record/recorder.cpp" \
+    "${REPO_ROOT}/src/recording/recorder.cpp" \
     "${REPO_ROOT}/src/vision/frame_pool.cpp" \
     "${REPO_ROOT}/src/core/mpp_map.cpp" \
     "${REPO_ROOT}/src/core/mmz.cpp" \
@@ -42,3 +42,27 @@ g++ -std=gnu++20 -O1 -g -Wall -Wextra \
 set +x
 
 "${BUILD}/recorder_host_test"
+
+# ---------------------------------------------------------------------------
+# 识别/跟踪层：合成二值图 + 假时钟，把"启动确认 / 坏点剔除 / 状态机 / 尺度自适应滤波 /
+# ROI 门控"整条链在 x86 上跑一遍（不需要 RVV、相机、SDK）。
+#   bash tests/host/run.sh detection   # 只跑这一组（改动识别层时用）
+# ---------------------------------------------------------------------------
+if [[ "${1:-}" == "" || "${1:-}" == "detection" ]]; then
+    set -x
+    g++ -std=gnu++20 -O1 -g -Wall -Wextra \
+        -fsanitize=address,undefined -fno-omit-frame-pointer \
+        -I"${REPO_ROOT}/include" \
+        "${REPO_ROOT}/tests/host/detection_host_test.cpp" \
+        "${REPO_ROOT}/src/detection/light.cpp" \
+        "${REPO_ROOT}/src/detection/blob_measure.cpp" \
+        "${REPO_ROOT}/src/detection/armer.cpp" \
+        "${REPO_ROOT}/src/detection/kalman.cpp" \
+        "${REPO_ROOT}/src/detection/roi_prediction.cpp" \
+        "${REPO_ROOT}/src/detection/tracker.cpp" \
+        "${REPO_ROOT}/src/detection/pipeline.cpp" \
+        -o "${BUILD}/detection_host_test"
+    set +x
+
+    "${BUILD}/detection_host_test"
+fi

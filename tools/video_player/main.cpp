@@ -18,8 +18,11 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cctype>
 #include <cstdint>
+#include <iostream>
 #include <filesystem>
+#include <limits>
 #include <fstream>
 #include <optional>
 #include <regex>
@@ -33,7 +36,7 @@ namespace fs = std::filesystem;
 
 struct LogRow {
     std::unordered_map<std::string, std::string> values;
-    int seq = 0;
+    int line = 0;
 };
 
 struct Rect {
@@ -127,6 +130,45 @@ static std::optional<QImage> read_pbm(const fs::path& path) {
     return image;
 }
 
+static std::optional<QImage> read_pgm(const fs::path& path) {
+    std::ifstream file(path, std::ios::binary);
+    if (!file) return std::nullopt;
+    auto read_token = [&file]() {
+        std::string token;
+        char c = 0;
+        while (file.get(c)) {
+            if (std::isspace(static_cast<unsigned char>(c))) continue;
+            if (c == '#') {
+                file.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+                continue;
+            }
+            token.push_back(c);
+            break;
+        }
+        while (file.get(c) && !std::isspace(static_cast<unsigned char>(c))) token.push_back(c);
+        return token;
+    };
+    if (read_token() != "P5") return std::nullopt;
+    const auto width = to_int(read_token());
+    const auto height = to_int(read_token());
+    const auto max_value = to_int(read_token());
+    if (!width || !height || !max_value || *width <= 0 || *height <= 0 || *max_value <= 0 || *max_value > 255) return std::nullopt;
+    std::vector<std::uint8_t> pixels(static_cast<std::size_t>(*width) * static_cast<std::size_t>(*height));
+    file.read(reinterpret_cast<char*>(pixels.data()), static_cast<std::streamsize>(pixels.size()));
+    if (file.gcount() != static_cast<std::streamsize>(pixels.size())) return std::nullopt;
+    QImage image(*width, *height, QImage::Format_Grayscale8);
+    for (int y = 0; y < *height; ++y) {
+        auto* scan = image.scanLine(y);
+        for (int x = 0; x < *width; ++x) {
+            const auto value = pixels[static_cast<std::size_t>(y * *width + x)];
+            scan[x] = static_cast<std::uint8_t>((static_cast<unsigned>(value) * 255u) / static_cast<unsigned>(*max_value));
+        }
+    }
+    return image;
+}
+
+enum class ImageMode { Frames, Raw };
+
 class ImageView final : public QWidget {
     Q_OBJECT
 public:
@@ -183,8 +225,8 @@ private:
 
 class Player final : public QMainWindow {
 public:
-    Player(fs::path image_dir, fs::path csv_path) : image_dir_(std::move(image_dir)) {
-        setWindowTitle(QStringLiteral("SelfGuidingDart PBM Frame Player"));
+    Player(fs::path image_dir, fs::path csv_path, ImageMode mode) : image_dir_(std::move(image_dir)), mode_(mode) {
+        setWindowTitle(mode_ == ImageMode::Raw ? QStringLiteral("SelfGuidingDart Raw PGM Player") : QStringLiteral("SelfGuidingDart PBM Frame Player"));
         resize(1100, 700);
         load_logs(csv_path);
         load_frames();
@@ -212,7 +254,7 @@ public:
             slider_->setRange(0, static_cast<int>(frames_.size()) - 1);
             show_frame(0);
         } else {
-            info_->setText(QStringLiteral("No f*.pbm files found in %1").arg(QString::fromStdString(image_dir_.string())));
+            info_->setText(QStringLiteral("No %1 files found in %2").arg(mode_ == ImageMode::Raw ? QStringLiteral("raw*.pgm") : QStringLiteral("f*.pbm")).arg(QString::fromStdString(image_dir_.string())));
         }
     }
 protected:
@@ -232,40 +274,45 @@ private:
         std::string line;
         if (!std::getline(file, line)) return;
         const auto headers = split_csv(line);
+        int log_line = 0;
         while (std::getline(file, line)) {
+            if (line.empty()) continue;
             const auto fields = split_csv(line);
             if (fields.empty()) continue;
             LogRow row;
             for (std::size_t i = 0; i < headers.size() && i < fields.size(); ++i) row.values[headers[i]] = fields[i];
-            if (const auto seq = to_int(row.values["seq"])) row.seq = *seq;
-            logs_[row.seq] = std::move(row);
+            row.line = ++log_line;
+            logs_[row.line] = std::move(row);
         }
     }
     void load_frames() {
         if (!fs::exists(image_dir_)) return;
         for (const auto& entry : fs::directory_iterator(image_dir_)) {
-            if (!entry.is_regular_file() || entry.path().extension() != ".pbm") continue;
+            if (!entry.is_regular_file()) continue;
             const std::string stem = entry.path().stem().string();
-            if (stem.size() < 2 || stem[0] != 'f') continue;
-            if (const auto seq = to_int(stem.substr(1))) frames_.push_back({*seq, entry.path()});
+            const std::string prefix = mode_ == ImageMode::Raw ? "raw" : "f";
+            const std::string extension = mode_ == ImageMode::Raw ? ".pgm" : ".pbm";
+            if (entry.path().extension() != extension || stem.size() < prefix.size() + 6 || stem.compare(0, prefix.size(), prefix) != 0) continue;
+            const std::string suffix = stem.substr(stem.size() - 6);
+            if (const auto line = to_int(suffix)) frames_.push_back({*line, entry.path()});
         }
         std::sort(frames_.begin(), frames_.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
     }
     void show_frame(int index) {
         if (index < 0 || index >= static_cast<int>(frames_.size())) return;
         const auto& frame = frames_[static_cast<std::size_t>(index)];
-        const auto image = read_pbm(frame.second);
+        const auto image = mode_ == ImageMode::Raw ? read_pgm(frame.second) : read_pbm(frame.second);
         if (!image) { info_->setText(QStringLiteral("Failed to read %1").arg(QString::fromStdString(frame.second.string()))); return; }
         std::optional<QPoint> center;
         std::optional<Rect> roi;
-        QString details = QStringLiteral("frame %1\nfile: %2\nsize: %3 x %4\n")
+        QString details = QStringLiteral("image line %1\nfile: %2\nsize: %3 x %4\n")
             .arg(frame.first).arg(QString::fromStdString(frame.second.filename().string())).arg(image->width()).arg(image->height());
         if (const auto it = logs_.find(frame.first); it != logs_.end()) {
             const auto& values = it->second.values;
             const auto cx = to_int(values.count("cx") ? values.at("cx") : "");
             const auto cy = to_int(values.count("cy") ? values.at("cy") : "");
             if (cx && cy && *cx >= 0 && *cy >= 0) center = QPoint(*cx, *cy);
-            details += QStringLiteral("\nlog seq: %1").arg(frame.first);
+            details += QStringLiteral("\nlog line: %1").arg(frame.first);
             for (const char* key : {"mono_ms", "src_pts", "d_pts_us", "exp_us", "cx", "cy", "roi", "cost_us", "captured_fps", "pbm"}) {
                 if (values.count(key)) details += QStringLiteral("\n%1: %2").arg(key).arg(QString::fromStdString(values.at(key)));
             }
@@ -278,6 +325,7 @@ private:
         statusBar()->showMessage(QStringLiteral("frame %1/%2").arg(index + 1).arg(frames_.size()));
     }
     fs::path image_dir_;
+    ImageMode mode_ = ImageMode::Frames;
     std::vector<std::pair<int, fs::path>> frames_;
     std::unordered_map<int, LogRow> logs_;
     ImageView* view_ = nullptr;
@@ -286,10 +334,22 @@ private:
 };
 
 int main(int argc, char** argv) {
+    ImageMode mode = ImageMode::Frames;
+    int positional = 1;
+    if (argc > 1 && (std::string(argv[1]) == "-f" || std::string(argv[1]) == "-r")) {
+        mode = std::string(argv[1]) == "-r" ? ImageMode::Raw : ImageMode::Frames;
+        positional = 2;
+    }
+    if (argc > positional + 2 || (argc > 1 && std::string(argv[1]) == "--help")) {
+        std::cerr << "Usage: " << argv[0] << " [-f|-r] [image-dir] [csv]\n"
+                  << "  -f  play f*.pbm frames (default)\n"
+                  << "  -r  play raw*.pgm images\n";
+        return argc > 1 && std::string(argv[1]) == "--help" ? 0 : 2;
+    }
     QApplication app(argc, argv);
-    const fs::path image_dir = argc > 1 ? argv[1] : "records/dart";
-    const fs::path csv_path = argc > 2 ? argv[2] : "records/logs/frames.csv";
-    Player player(image_dir, csv_path);
+    const fs::path image_dir = argc > positional ? argv[positional] : "records/img";
+    const fs::path csv_path = argc > positional + 1 ? argv[positional + 1] : "records/logs/frames.csv";
+    Player player(image_dir, csv_path, mode);
     player.show();
     return app.exec();
 }

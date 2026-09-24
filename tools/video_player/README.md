@@ -1,7 +1,7 @@
 # PBM 逐帧播放器
 
-这是一个轻量的 Qt Widgets 主机工具，用于查看 `records/dart` 中的 PBM，并将
-`records/logs/frames.csv` 中相同 `seq` 的日志显示在右侧。它不自动播放，只在滑块、
+这是一个轻量的 Qt Widgets 主机工具，用于查看 `records/img` 中的 PBM，并将
+`records/logs/frames.csv` 中与图片文件名末六位数字对应的数据行显示在右侧（表头后的第一条记录算第 1 行）。它不自动播放，只在滑块、
 左右键或鼠标点击时切换帧。
 
 ```sh
@@ -13,13 +13,14 @@ cmake --build build/video_player -j
 仓库提供了可自动构建并启动播放器的入口（从任意工作目录调用均可）：
 
 ```sh
-./scripts/player
+./scripts/player -f    # 播放 f*.pbm（默认模式）
+./scripts/player -r    # 播放 raw*.pgm
 ```
 
 也可以直接指定目录：
 
 ```sh
-./build/video_player/video_player records/dart records/logs/frames.csv
+./build/video_player/video_player records/img records/logs/frames.csv
 ```
 
 点击图像会在状态栏和右侧显示 PBM 像素坐标。CSV 的 `cx/cy` 用绿色十字标注；

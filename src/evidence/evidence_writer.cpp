@@ -1,5 +1,8 @@
 #include "evidence/evidence_writer.hpp"
 
+#include <ctype.h>
+#include <dirent.h>
+
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -98,6 +101,15 @@ uint32_t pack_pgm(uint8_t *dst, const uint8_t *y_plane, uint32_t w, uint32_t h, 
 } // namespace
 
 // 注意：本对象约 640KB（PBM 4 槽 + PGM 2 槽），**必须堆分配**，不要放栈上。
+//
+// 目录布局（板端实测一轮 90s 会产生 800+ 张 PBM + 84 张 PGM，混在一起时 frames.csv
+// 会被埋掉、按时间排序还找不到 —— 而且板上 RTC 没设，vfat 会把所有文件写成同一个时间戳）：
+//
+//   <out_dir>/frames.csv      每帧一行，**放根目录**，一眼就能看到
+//   <out_dir>/img/f%06lu.pbm  二值图（新）
+//   <out_dir>/img/raw%06lu.pgm 原始 Y 平面（新）
+//
+// 想改这个布局：主机侧 scripts/{pbm_review,detect_review}.py 里有对应的解析（都兼容旧布局）。
 EvidenceWriter::EvidenceWriter(const char *dir) {
     std::snprintf(dir_, sizeof(dir_), "%s", dir != nullptr ? dir : "");
     if (dir_[0] != '/') { // 路径必须绝对：上一版 dir_ 被冲空后写出过 /f000001.pbm
@@ -107,17 +119,48 @@ EvidenceWriter::EvidenceWriter(const char *dir) {
     if (mkdir(dir_, 0777) != 0 && errno != EEXIST)
         log_line("取证: mkdir %s 失败 errno=%d（继续试开文件）\n", dir_, errno);
 
-    char path[224];
-    std::snprintf(path, sizeof(path), "%s/frames.csv", dir_);
-    csv_fd_ = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0666);
-    if (csv_fd_ < 0) {
-        log_line("取证: frames.csv 打不开，取证通道关闭\n");
+    // 图像子目录：先建出来，失败也不致命（后面 open 会再报一次具体路径）。
+    // 路径拼不下就**直接关掉取证通道**：截断过的路径会写到别的目录，
+    // 那种"文件不知道去哪了"比"没有文件"难查得多（上一版 dir_ 被冲空就写出过 /f000001.pbm）。
+    const int n_img = std::snprintf(img_dir_, sizeof(img_dir_), "%s/img", dir_);
+    if (n_img <= 0 || n_img >= static_cast<int>(sizeof(img_dir_))) {
+        log_line("取证: 输出目录过长('%s')，取证通道关闭\n", dir_);
+        dir_[0] = '\0';
         return;
     }
-    const char *hdr = "seq,mono_ms,src_pts,d_pts_us,exp_us,cx,cy,roi,cost_us,captured_fps,pbm\n";
+    if (mkdir(img_dir_, 0777) != 0 && errno != EEXIST)
+        log_line("取证: mkdir %s 失败 errno=%d（图像会写不进去）\n", img_dir_, errno);
+    else
+        clear_images(); // 图像不跨轮复用：清掉上一轮的，保证 img/ 与 frames.csv 是同一轮
+
+    char path[224];
+    std::snprintf(path, sizeof(path), "%s/frames.csv", dir_);
+    // 上一轮的 CSV 改名保留一代：板上是 launcher 自启，**多上一次电就多跑一轮**，
+    // 而 frames.csv 是每次启动截断重写的 —— 板端 round13 实测：日志里攒了三轮，
+    // CSV/图像却只剩最后一轮的（前两轮的数据被静默覆盖）。
+    // 图像不跟着轮转（img/ 里 600+ 个文件重命名/删除的失败面太大）：**图随 CSV 一起清**，
+    // 这样"某一轮的 CSV + 同一轮的图"永远配得上（配对错比没有更难查）。
+    char prev_csv[224];
+    std::snprintf(prev_csv, sizeof(prev_csv), "%s/frames_prev.csv", dir_);
+    if (rename(path, prev_csv) == 0)
+        log_line("取证: 上一轮 CSV 保留为 %s（其图像已随本轮清空，别配对分析）\n", prev_csv);
+
+    csv_fd_ = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+    if (csv_fd_ < 0) {
+        log_line("取证: %s 打不开，取证通道关闭\n", path);
+        return;
+    }
+    // 表头必须与 main.cpp 的 emit_csv 列**顺序一致**（末尾 6 列是识别/跟踪层加的：
+    // 等效半径、状态 0启动/1跟踪/2丢失、本帧实际扫描窗口的**四个角像素坐标**）。
+    // 主机侧 py 脚本用 DictReader 按列名取值，所以加列是安全的，但改名会让脚本静默取不到值
+    // （老 CSV 用 roi_x/roi_y/roi_w/roi_h，脚本里仍兼容，能读旧归档）。
+    const char *hdr =
+        "seq,mono_ms,src_pts,d_pts_us,exp_us,cx,cy,roi,cost_us,captured_fps,pbm,"
+        "radius,circ,state,roi_x0,roi_y0,roi_x1,roi_y1\n";
     (void)!write(csv_fd_, hdr, std::strlen(hdr));
     fsync(csv_fd_);
-    log_line("取证: %s（写线程负责落盘）\n", path);
+    log_line("取证: %s（每帧一行，写线程负责落盘）\n", path);
+    log_line("取证: 图像目录 %s（PBM/PGM）\n", img_dir_);
     enabled_ = true;
 
     pthread_attr_t attr;
@@ -127,6 +170,36 @@ EvidenceWriter::EvidenceWriter(const char *dir) {
     pthread_attr_destroy(&attr);
     if (!thread_started_)
         log_line("取证: 写线程创建失败，取证通道关闭\n");
+}
+
+// 清空图像目录里的 f*.pbm / raw*.pgm（只删这两种前缀，别动别人的东西）。
+// 失败不致命：写文件时会按名字覆盖，最坏情况是旧图留下一部分 —— 所以失败要打日志。
+void EvidenceWriter::clear_images() {
+    DIR *d = opendir(img_dir_);
+    if (d == nullptr)
+        return;
+    int removed = 0, failed = 0;
+    struct dirent *e;
+    while ((e = readdir(d)) != nullptr) {
+        const char *n = e->d_name;
+        const bool mine = (n[0] == 'f' && std::isdigit(static_cast<unsigned char>(n[1]))) ||
+                          (std::strncmp(n, "raw", 3) == 0 && std::isdigit(static_cast<unsigned char>(n[3])));
+        if (!mine)
+            continue;
+        char p[512]; // 176(img_dir_) + 1 + 255(readdir 名字上限) + 1：留够，绝不截断路径
+        const int np = std::snprintf(p, sizeof(p), "%s/%s", img_dir_, n);
+        if (np <= 0 || np >= static_cast<int>(sizeof(p))) {
+            ++failed; // 拼不下就跳过并计数（截断过的路径会删错文件）
+            continue;
+        }
+        if (unlink(p) == 0)
+            ++removed;
+        else
+            ++failed;
+    }
+    closedir(d);
+    if (removed || failed)
+        log_line("取证: 图像目录清空 %d 张（失败 %d）\n", removed, failed);
 }
 
 EvidenceWriter::~EvidenceWriter() {
@@ -162,7 +235,7 @@ void EvidenceWriter::submit_pbm(uint64_t seq, const uint8_t *bin, uint32_t w, ui
     }
     PbmSlot &slot = pbm_[idx]; // 直接在槽里打包，不做任何大尺寸拷贝
     slot.len = pack_pbm(slot.data, bin, w, h, stride);
-    std::snprintf(slot.path, sizeof(slot.path), "%s/f%06llu.pbm", dir_,
+    std::snprintf(slot.path, sizeof(slot.path), "%s/f%06llu.pbm", img_dir_,
                   static_cast<unsigned long long>(seq));
     ++pbm_count_;
     cv_.notify_one();
@@ -186,7 +259,7 @@ void EvidenceWriter::submit_pgm(uint64_t seq, const uint8_t *y_plane, uint32_t w
     }
     PgmSlot &slot = pgm_[idx];
     slot.len = pack_pgm(slot.data, y_plane, w, h, stride);
-    std::snprintf(slot.path, sizeof(slot.path), "%s/raw%06llu.pgm", dir_,
+    std::snprintf(slot.path, sizeof(slot.path), "%s/raw%06llu.pgm", img_dir_,
                   static_cast<unsigned long long>(seq));
     ++pgm_count_;
     cv_.notify_one();

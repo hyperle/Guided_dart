@@ -13,3 +13,7 @@ compile_commands.json
 *.elf
 *.log
 .vscode/*.log
+
+# 录屏
+records/img/
+records/logs/

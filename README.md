@@ -29,6 +29,11 @@ apps/
 > 当前主线应用是 **`apps/green_led_ai/`**，用 `--vision on/off`、`--record on/off`
 > 分别开关识别与录像；设计说明、板端自查步骤、参数表见
 > [`apps/green_led_ai/README.md`](apps/green_led_ai/README.md)。
+>
+> 当前主线**导引程序**是 **`src/`**（`bash scripts/build.sh self_guiding_dart`），
+> 识别/跟踪层（启动阶段全图 RVV 粗筛 + 3 帧滑窗确认 → 跟踪阶段动态 ROI +
+> 带尺度预测的卡尔曼）的设计说明见 [`DETECTION_DESIGN.md`](DETECTION_DESIGN.md)，
+> 板端调试见 [`DEBUG_GUIDE.md`](DEBUG_GUIDE.md)，主机侧回归 `bash tests/host/run.sh`。
 
 - **一个 `apps/<应用名>/` 目录 = 一个板端可执行程序**。
 - 目录结构与官方 SDK 的 `src/applications/<应用名>/` 一一对应：
