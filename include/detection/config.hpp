@@ -237,6 +237,82 @@ struct MeasureConfig {
 };
 
 // ---------------------------------------------------------------------------
+// 装甲板识别（第二路输出，include/detection/armor.hpp）
+//
+// 工况是"逐渐接近"，所以**没有固定像素门限**：灯条门限写成"绿灯尺度 s 的倍数
+// + 物理硬地板"，s 由跟踪层给的等效半径导出（s = 2r）。默认值取自 MicroPython
+// 板端调参版（tools/armor_detect_k230.py §1），那几个数是现场调出来的，别乱动。
+//
+// 注意：二值化阈值**不在这里** —— 装甲板吃的是整条链共用的那张二值图
+// （阈值在采集/二值化那一层定），这也正好落成"装甲板当黑白处理、不看颜色"。
+// ---------------------------------------------------------------------------
+struct ArmorConfig {
+    // 关掉这一路：绿灯那一路照跑（用来做 A/B 对照，看装甲板是不是在帮倒忙）。
+    bool enable = true;
+
+    // ---- 灯条门限 = 灯尺的倍数 + 硬地板（远→近自动缩放 100 倍量级）----
+    float    len_min_k = 0.2f;   // 最短长边 = len_min_k · s（再小不成"条"）
+    float    len_max_k = 8.0f;   // 最长长边 = len_max_k · s（再长是板体/干扰，不是灯条）
+    uint32_t len_floor = 2;      // 长度硬地板（px）
+    uint32_t px_floor = 2;       // 像素数硬地板（像素下限由长度推：len_min/2）
+
+    // ---- 形状判据 ----
+    // 近档（长边 ≥ tiny_px）：长宽比 + 填充率可信，照用。
+    // 远档（长边 < tiny_px）：几个像素的"长宽比"是量化噪声，改判**与尺度无关的圆度**
+    //   （roundness_from_moments）：灯条细长 → 圆度低；圆斑/反光 → 圆度高。
+    //   这是 C++ 侧相对 MicroPython 版的升级点（那边远档只能整条跳过形状判据）。
+    float tiny_px = 8.0f;
+    float aspect_min = 2.0f;     // 长边 >= aspect_min · 短边（板上调到 2）
+    float fill_min = 0.5f;       // 填充率（实心亮条，不是散点）
+    float circ_max_far = 0.85f;  // 远档：灯条圆度上限（越高越像圆 → 越不像灯条）
+    // ---- 斜灯条（"两条灯条平行但不竖直"）----
+    // 包围盒对旋转极其敏感：5x40 转 30° → 包围盒 24x37（长宽比 8.0→1.5、填充 1.0→0.22），
+    // 两条门限会**同时**失效。所以判据改用主轴（principal_axis）的长短边：
+    //   · 长度/长宽比用主轴长度与厚度（与旋转无关）；
+    //   · 填充率只在"基本正放"时用（斜的时候 fill 天然变低，拿它筛等于筛真灯条）；
+    //   · 端点改为"中心 ± (L/2)·主轴方向"，而不是包围盒边的中点。
+    float flat_deg = 12.0f;      // 主轴偏离竖直/水平小于它 = 基本正放（此时仍用填充率）
+    float parallel_deg = 15.0f;  // 两条灯条主轴夹角上限（"两条平行"这条已知事实的用法）
+    float thick_ratio = 0.3f;    // 两条灯条厚度比下限（同一块板上两条灯条一样粗）
+
+    // ---- 两条灯条配对 ----
+    float len_ratio = 0.4f;      // 两条长度比下限（透视下会差，但差一倍以上不是一对）
+    float overlap = 0.4f;        // 沿长轴投影重叠下限（并排，不是首尾相接）
+    float gap_max_k = 10.0f;     // 中心距 <= gap_max_k · 长边（离太远不是同一块板）
+    float diag_min_sin = 0.30f;  // 两条对角线夹角下限 |sin|（近平行时交点对噪声极敏感）
+    int32_t border_penalty = 30; // 贴窗口边（面积只是下界）的灯条在配对打分里罚多少
+
+    // ---- 窗口 = 绿灯正上方那块（尺寸随灯尺，下沿贴绿灯上沿）----
+    float    roi_w_k = 3.0f;
+    float    roi_h_k = 2.0f;
+    float    roi_gap_k = 0.0f;   // >0 会把整块装甲板顶出窗口（踩过，默认 0）
+    float    roi_min_side = 24.0f;
+    // 跟踪态：只在上一对灯条周围开小窗（省时间）；与"绿灯上方整块"取交，
+    // 免得一个错的跟踪状态把搜索带到画面别处。
+    float track_k = 0.8f;
+
+    // ---- 尺度：线性一步外推（与仓库"目标均匀变大"同口径）----
+    float scale_v_k = 1.0f;      // s_pred = s + scale_v_k · ds_ema
+    float scale_v_max = 4.0f;    // 单帧外推上限（px）：防一个坏值把门限带飞
+
+    // ---- 装甲板自己的 track（关联优先于重选）----
+    uint32_t hold = 2;           // 上一对短暂丢掉时先保持几帧（日志/输出里标 Held）
+    float    assoc_k = 0.6f;     // 关联容差 = 灯条尺寸 · 该系数（+ 下限）
+    float    assoc_min = 4.0f;
+
+    // ---- 刚性几何先验（绿灯与装甲板固定在同一块板上，已确认）----
+    // 全部是**比值**，与距离无关 —— 远档形状判据不可信时它是唯一还在工作的判据。
+    // 默认给得很宽（近似不启用）；用日志里的 "比值(条长/尺 间距/尺 高/尺 横偏/尺)"
+    // 把下面几个数填成实测值附近，才真正收紧。
+    float span_lo_k = 0.2f, span_hi_k = 12.0f;  // 两灯条间距 / s
+    float up_lo_k = 0.0f, up_hi_k = 12.0f;      // (灯上沿 - 板心y) / s
+    float offx_k = 6.0f;                        // |板心x - 灯心x| / s
+};
+
+// 同一帧里最多带出多少片候选灯条（定长数组，运行期零分配）
+constexpr uint32_t kArmorMaxBars = 32;
+
+// ---------------------------------------------------------------------------
 // 状态机时序
 // ---------------------------------------------------------------------------
 struct TrackerConfig {
@@ -258,6 +334,7 @@ struct DetectionConfig {
     KfConfig      kf;
     RoiConfig     roi;
     TrackerConfig tracker;
+    ArmorConfig   armor;
 
     // 关掉跟踪（永远走"全图扫描 + 滑窗确认"）：用来做 A/B 对照 ——
     // 怀疑 ROI 门控或滤波带来问题时，先关掉它看现象是否消失。
@@ -286,6 +363,21 @@ struct DetectionConfig {
             roi.kp = 0.0f;
         if (roi.k_sigma < 0.0f)
             roi.k_sigma = 0.0f;
+        // 装甲板：门限必须是"非负倍数 + 不越界的角度"，手输负值会算出反向门限
+        if (armor.len_min_k < 0.0f)
+            armor.len_min_k = 0.0f;
+        if (armor.len_max_k < armor.len_min_k)
+            armor.len_max_k = armor.len_min_k;
+        if (armor.aspect_min < 1.0f)
+            armor.aspect_min = 1.0f;
+        if (armor.diag_min_sin < 0.0f)
+            armor.diag_min_sin = 0.0f;
+        if (armor.diag_min_sin > 1.0f)
+            armor.diag_min_sin = 1.0f;
+        if (armor.hold > 32)
+            armor.hold = 32;
+        if (armor.roi_min_side < 4.0f)
+            armor.roi_min_side = 4.0f;
     }
 };
 

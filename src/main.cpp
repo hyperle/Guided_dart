@@ -202,10 +202,14 @@ uint64_t                            g_det_transitions_total = 0; // 全程
 // 现象和原因之间隔着一层（板端为此白跑了两轮）。这条提示把"先去看 亮度 行的 max"直说出来。
 constexpr uint32_t kDarkHintFrames = 300;
 
+// 最近一帧的装甲板结果（1Hz 状态行 / 取证用；逐帧结果本身在 DetectResult.armor 里）
+dart::ArmorTarget g_det_armor_last{};
+
 void note_det_result(const dart::Frame *f) {
     if (g_det_pipe == nullptr)
         return;
     const dart::DetectResult    &r = f->result;
+    g_det_armor_last = r.armor;
     const dart::detection::DetectionStats &st = g_det_pipe->stats();
 
     // 全图扫描帧且一个候选都没有 → 说明整张二值图没有超过阈值的像素
@@ -280,6 +284,17 @@ void emit_det_status() {
              static_cast<unsigned long long>(st.tracker.kf_reject),
              static_cast<unsigned long long>(st.tracker.out_of_roi),
              static_cast<unsigned>(st.tracker.arm_frames), g_det_pipe->config().arm.window);
+    // 装甲板那一路（第二路输出）：锚=%d 远档=%d 灯尺=%d 块 %u 条 %u 对 %u 先验否 %u
+    // 窗口 %uppx 耗时 %uus；mode: 0 无 / 1 本帧实测 / 2 保持(带年龄)
+    const dart::ArmorTarget &at = g_det_armor_last;
+    log_line("装甲板: mode=%u(年龄%u) 板心=(%d,%d) 条长 %u/%u | 锚 %u 远档 %u 灯尺 %d "
+             "块 %u 条 %u 对 %u 先验否 %u 窗口 %u px 耗时 %u us\n",
+             static_cast<unsigned>(at.mode), static_cast<unsigned>(at.held), at.cx, at.cy,
+             static_cast<unsigned>(at.a_len), static_cast<unsigned>(at.b_len),
+             st.armor_trace.anchored ? 1u : 0u, st.armor_trace.far ? 1u : 0u,
+             st.armor_trace.scale, st.armor_trace.blobs, st.armor_trace.bars,
+             st.armor_trace.pairs, st.armor_trace.rejected_prior, st.armor_trace.window_px,
+             st.armor_trace.cost_us);
     g_det_scan_sum = 0;
     g_det_scan_max = 0;
     g_det_total_max = 0;
@@ -374,6 +389,29 @@ void parse_args(int argc, char **argv, dart::Config &cfg, dart::detection::Detec
             dcfg.scan.min_area = static_cast<uint32_t>(std::atoi(argv[++i]));
         } else if (!std::strcmp(argv[i], "--det-tile") && i + 1 < argc) {
             dcfg.scan.tile = static_cast<uint32_t>(std::atoi(argv[++i]));
+        } else if (!std::strcmp(argv[i], "--armor-off")) {
+            // 关掉装甲板那一路（绿灯照跑）：用来做 A/B 对照，看它是不是在帮倒忙
+            dcfg.armor.enable = false;
+        } else if (!std::strcmp(argv[i], "--armor-hold") && i + 1 < argc) {
+            dcfg.armor.hold = static_cast<uint32_t>(std::atoi(argv[++i]));
+        } else if (!std::strcmp(argv[i], "--armor-aspect") && i + 1 < argc) {
+            dcfg.armor.aspect_min = static_cast<float>(std::atof(argv[++i]));
+        } else if (!std::strcmp(argv[i], "--armor-len-k") && i + 1 < argc) {
+            // 灯条长度门限 = 灯尺(2r) 的倍数：远→近自动缩放，这两个数定范围
+            dcfg.armor.len_min_k = static_cast<float>(std::atof(argv[++i]));
+        } else if (!std::strcmp(argv[i], "--armor-len-kmax") && i + 1 < argc) {
+            dcfg.armor.len_max_k = static_cast<float>(std::atof(argv[++i]));
+        } else if (!std::strcmp(argv[i], "--armor-roi-w") && i + 1 < argc) {
+            dcfg.armor.roi_w_k = static_cast<float>(std::atof(argv[++i]));
+        } else if (!std::strcmp(argv[i], "--armor-roi-h") && i + 1 < argc) {
+            dcfg.armor.roi_h_k = static_cast<float>(std::atof(argv[++i]));
+        } else if (!std::strcmp(argv[i], "--armor-span") && i + 2 < argc) {
+            // 刚性几何先验：两灯条间距 / 灯尺 的允许范围（用日志"比值"填，才真正收紧）
+            dcfg.armor.span_lo_k = static_cast<float>(std::atof(argv[++i]));
+            dcfg.armor.span_hi_k = static_cast<float>(std::atof(argv[++i]));
+        } else if (!std::strcmp(argv[i], "--armor-circ-far") && i + 1 < argc) {
+            // 远档的圆度上限：灯条"不像圆"（3px 也成立的判据）
+            dcfg.armor.circ_max_far = static_cast<float>(std::atof(argv[++i]));
         } else if (!std::strcmp(argv[i], "--circ-weight") && i + 1 < argc) {
             // 圆度在排序里的占比：score = 面积 × 圆度^w（0 = 退回"纯面积"）
             const float cw = static_cast<float>(std::atof(argv[++i]));
@@ -442,7 +480,7 @@ int main(int argc, char **argv) {
     log_line("self_guiding_dart: 请求 %ux%u@%u, 画幅 %ux%u venc_chn=%u, 输出 %s\n", cfg.sensor_width,
              cfg.sensor_height, cfg.sensor_fps, cfg.width, cfg.height, cfg.venc_chn, cfg.out_dir);
     {
-        char det_buf[512];
+        char det_buf[768];
         dart::detection::DetectionPipeline::describe(dcfg, det_buf, sizeof(det_buf));
         log_line("self_guiding_dart: 识别/跟踪参数 %s\n", det_buf);
     }

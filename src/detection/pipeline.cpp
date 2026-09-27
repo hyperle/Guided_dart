@@ -11,6 +11,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <ctime>
 
 namespace dart::detection {
@@ -105,7 +106,7 @@ DetectionPipeline::DetectionPipeline(const DetectionConfig &cfg, const Deps &dep
     : cfg_(sanitized(cfg)), owned_scanner_(cfg_.scan), owned_measurer_(cfg_.measure),
       scanner_(deps.scanner ? deps.scanner : &owned_scanner_),
       measurer_(deps.measurer ? deps.measurer : &owned_measurer_), now_fn_(deps.now_us),
-      tracker_(cfg_, deps.noise) {
+      tracker_(cfg_, deps.noise), armor_(cfg_.armor, cfg_.measure) {
     // 候选缓冲只分配一次：全图扫描每帧都要写它，运行期不允许分配（板端堆只有 16MB，
     // 而且"帧内分配"会把 11ms 的帧预算啃掉一块）。
     cands_.resize(cfg_.scan.top_k ? cfg_.scan.top_k : 1);
@@ -117,6 +118,7 @@ uint64_t DetectionPipeline::now_us() const { return now_fn_ ? now_fn_() : real_n
 
 void DetectionPipeline::reset() {
     tracker_.reset();
+    armor_.reset();
     stats_ = DetectionStats{};
 }
 
@@ -150,6 +152,15 @@ DetectResult DetectionPipeline::detect(const GrayFrame &frame) {
 
     // 3) 状态机 + 滤波
     const TrackOutput out = tracker_.end_frame(rep);
+
+    // 3.5) 装甲板（第二路输出）：绿灯当锚 → 它上方那块窗口里找两片灯条 → 对角线交点。
+    // 用的是**同一张二值图**（所以装甲板天然就是"黑白口径、不看颜色"），
+    // 窗口由锚现算、只在窗口内做连通域，代价与绿灯那一路的 ROI 测量同量级。
+    // 绿灯没锚（!out.found）就不出结果 —— 宁可不报，也不拿一个凭空的位置开窗。
+    if (cfg_.armor.enable) { // --armor-off：绿灯照跑，装甲板这一路整段跳过
+        armor_.detect(frame, out, now_us(), &r.armor);
+        stats_.armor_trace = armor_.last_trace();
+    }
 
     // 4) 翻译成核心层的结果类型（录像标注 / CSV 取证 / 状态行都读它）
     r.roi = out.roi;
@@ -211,6 +222,19 @@ void DetectionPipeline::describe(const DetectionConfig &cfg_in, char *buf, size_
                   static_cast<double>(cfg.roi.k_sigma), cfg.arm.window, cfg.arm.min_hits,
                   static_cast<double>(cfg.arm.max_accel_px), static_cast<double>(cfg.arm.gate_px),
                   cfg.enable_tracking ? "on" : "off(--no-track)");
+    // 装甲板这一路单独接一段：它有自己的门限口径（灯尺倍数 + 地板 + 刚性先验）
+    const size_t used = std::strlen(buf);
+    if (used < n) {
+        std::snprintf(buf + used, n - used,
+                      " 装甲板=%s(条长 %.2f~%.2f·s 地板%u 近档长宽比>=%.1f 远档圆度<=%.2f "
+                      "窗 %.1f~%.1f×2r 先验间距 %.1f~%.1f·s 保持%u)",
+                      cfg.armor.enable ? "on" : "off(--armor-off)",
+                      static_cast<double>(cfg.armor.len_min_k), static_cast<double>(cfg.armor.len_max_k),
+                      cfg.armor.len_floor, static_cast<double>(cfg.armor.aspect_min),
+                      static_cast<double>(cfg.armor.circ_max_far), static_cast<double>(cfg.armor.roi_w_k),
+                      static_cast<double>(cfg.armor.roi_h_k), static_cast<double>(cfg.armor.span_lo_k),
+                      static_cast<double>(cfg.armor.span_hi_k), cfg.armor.hold);
+    }
 }
 
 } // namespace dart::detection

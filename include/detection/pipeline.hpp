@@ -24,6 +24,7 @@
 #include <vector>
 
 #include "core/frame.hpp"
+#include "detection/armor.hpp"
 #include "detection/blob_measure.hpp"
 #include "detection/config.hpp"
 #include "detection/light.hpp"
@@ -46,6 +47,8 @@ struct DetectionStats {
     TrackerCounters tracker{};
     LightScanner::Trace   scan_trace{};
     RoiBlobMeasurer::Trace measure_trace{};
+    // 装甲板这一路（第二路输出）的明细：条数/对数/远档/窗口像素/耗时
+    ArmorDetector::Trace  armor_trace{};
 };
 
 class DetectionPipeline final : public IDetector {
@@ -94,6 +97,9 @@ private:
     IRoiMeasurer      *measurer_ = nullptr;
     std::function<uint64_t()> now_fn_; // 空 = 真实单调钟
     TargetTracker      tracker_;
+    // 装甲板那一路：绿灯当锚，在同一张二值图上再扫一小块（它自带一个测量器实例，
+    // 免得和绿灯这个抢 last_trace；缓冲按帧复用，运行期不分配）
+    ArmorDetector      armor_;
     std::vector<LightCandidate> cands_;
     DetectionStats     stats_{};
 };

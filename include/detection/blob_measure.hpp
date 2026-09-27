@@ -42,6 +42,30 @@ public:
     TargetMeasurement measure(const GrayFrame &frame, const RoiWindow &window) override;
     const char       *name() const override { return "roi-rle-cc"; }
 
+    // ------------------------------------------------------------------
+    // 窗口内**全部**合格块（不是"最好的那一个"）。装甲板这一路要的是"两片灯条"，
+    // 甚至"两片灯条 + 干扰块"，所以需要列表；而它的门限随尺度变（远距离真灯条
+    // 只有 2~6px），不可能塞进固定的 MeasureConfig，于是面积下限由调用方给、
+    // 形状判据由调用方自己判。
+    //
+    // 出参用调用方给的定长数组：不分配、不拷贝 vector（本类内部那套游程/并查集
+    // 缓冲是按帧复用的，容量只增不减）。返回写入个数；数组不够时置 overflow。
+    // ------------------------------------------------------------------
+    struct BlobInfo {
+        uint16_t x0 = 0, y0 = 0, x1 = 0, y1 = 0; // **画面绝对坐标**（闭区间）
+        uint32_t area = 0;
+        uint8_t  border = 0;   // 贴窗口边 → 面积只是下界（被窗口削掉了）
+        float    circularity = 0.0f; // roundness_from_moments（与尺度无关）
+        float    fill = 0.0f;        // area / 包围盒面积
+        // 主轴（二阶矩分解，见 types.hpp::principal_axis）：包围盒对旋转极其敏感，
+        // 斜灯条的长宽比/填充率会同时失效，只有主轴的**长短边与方向**与旋转无关。
+        float    theta = 0.0f;       // 主轴方向（弧度，从 +x 轴起算）
+        float    len_major = 0.0f;   // 主轴方向上的等效边长（灯条的真实长度）
+        float    len_minor = 0.0f;   // 次轴方向上的等效边长（灯条的真实厚度）
+    };
+    uint32_t collect(const GrayFrame &frame, const RoiWindow &window, uint32_t min_area,
+                     BlobInfo *out, uint32_t cap);
+
     // 上一帧的明细（板端调参：游程数 / 合格块数 / 被丢的原因）
     struct Trace {
         uint32_t runs = 0;
@@ -66,6 +90,10 @@ private:
     };
 
     int32_t find_root(int32_t i);
+    // 游程 + 并查集 → blobs_（窗口内相对坐标）。measure() 与 collect() 共用这一段，
+    // 保证"装甲板看到的块"与"绿灯量到的块"是**同一套连通域口径**。
+    // 返回 false = 本帧没有可用结果（非法窗口 / 游程超上限）。
+    bool build_blobs(const GrayFrame &frame, const RoiWindow &window);
 
     MeasureConfig cfg_;
     // ---- 游程 + 并查集（全部按帧复用，容量只增不减，运行期零分配）----

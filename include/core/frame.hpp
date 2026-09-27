@@ -19,6 +19,35 @@ enum class RoiState : uint8_t {
     TargetOutOfRoi = 2,
 };
 
+// 装甲板结果（识别层的**第二路**输出：绿灯上方那两片灯条的对角线交点）。
+//
+// 为什么放在 core 而不是 detection：DetectResult 是核心层的 POD，核心层不能反向
+// 依赖识别层。这里只放"上游要看的东西"（坐标 + 状态 + 窗口四角），灯条明细/调参
+// 明细留在 ArmorDetector::Trace（那是识别层内部的事，不往录像标注里塞）。
+struct ArmorTarget {
+    // mode：0 = 本帧没有；1 = 本帧实测（两条对角线的交点）；2 = 保持的旧中心。
+    // **1 和 2 必须分得清**：保持值是"上一帧的结论"，当成新测量喂给外环等于凭空
+    // 补了一条假观测（宁可不更新，不可乱更新）。
+    enum : uint8_t { None = 0, Fresh = 1, Held = 2 };
+
+    int32_t  cx = -1;
+    int32_t  cy = -1;
+    uint8_t  mode = None;
+    uint8_t  held = 0;        // mode=Held 时：已经连续保持了这么多帧
+
+    // 两片灯条的中心/长边长度（取证与调参用：比值 = 条长 / 灯尺，用来收紧刚性先验）
+    int32_t  a_cx = -1;
+    int32_t  b_cx = -1;
+    uint32_t a_len = 0;
+    uint32_t b_len = 0;
+
+    // 本帧**实际扫的窗口**（闭区间四角，口径与 DetectResult::roi_* 完全一致：
+    // x1/y1 是框内最后一个像素）。跟踪时它是收窄后的小窗，不是"绿灯上方整块"。
+    uint32_t x0 = 0, y0 = 0, x1 = 0, y1 = 0;
+
+    bool found() const { return mode != None; }
+};
+
 // 识别输出：中心像素坐标，无目标即 (-1,-1)（所以不需要单独的 found 字段）
 struct DetectResult {
     int32_t  cx = -1;
@@ -42,6 +71,11 @@ struct DetectResult {
     uint32_t roi_y0 = 0;
     uint32_t roi_x1 = 0;
     uint32_t roi_y1 = 0;
+
+    // ---- 装甲板（detection/armor.hpp 填；绿灯是锚，装甲板出精确板心）----
+    // 绿灯那一路给的是"发光点的中心"，装甲板那一路给的是"板面上两片灯条围出的
+    // 几何中心"——两者都在 DetectResult 里，谁用哪个由上层决定（外环/撞点选择）。
+    ArmorTarget armor;
 };
 
 // 池里的一帧：像素内存 + 元数据 + 这一帧自己的识别结果

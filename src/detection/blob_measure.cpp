@@ -5,6 +5,11 @@
 // 中间掩码，而跟踪态的窗口最大可以到整幅的一半 —— 板端用户堆只有 16MB，
 // 这块内存得省。游程法的中间态只有"每行的游程表"，正常 ROI 只有几十条。
 // 像素访问次数与掩码法一致（每像素一次），并查集的开销在游程级别（更少）。
+//
+// 两个出口共用同一段连通域（build_blobs）：
+//   measure() —— 绿灯那一路：形状筛后取"最好的一个"（跟踪层的测量）
+//   collect() —— 装甲板那一路：**全部**块（两片灯条 + 可能的干扰），
+//                面积下限由调用方给（它的门限随尺度变，塞不进静态配置）
 // ============================================================================
 
 #include "detection/blob_measure.hpp"
@@ -35,15 +40,14 @@ int32_t RoiBlobMeasurer::find_root(int32_t i) {
     return i;
 }
 
-TargetMeasurement RoiBlobMeasurer::measure(const GrayFrame &f, const RoiWindow &w) {
+bool RoiBlobMeasurer::build_blobs(const GrayFrame &f, const RoiWindow &w) {
     trace_ = Trace{};
-    TargetMeasurement m{};
 
     // 非法窗口/非法 stride：返回"没测到"。调用方（状态机）会把它当成一次 miss ——
     // 比越界读或者断言崩掉都好，板端跑起来时"少测一帧"是可以接受的代价。
     if (f.pixels == nullptr || w.empty() || f.stride < f.width || w.right() > f.width ||
         w.bottom() > f.height) {
-        return m;
+        return false;
     }
 
     parent_.clear();
@@ -82,7 +86,7 @@ TargetMeasurement RoiBlobMeasurer::measure(const GrayFrame &f, const RoiWindow &
 
             if (run_x0_.size() >= max_runs) { // 病态画面（半幅椒盐）：本帧按没测到处理
                 trace_.overflow = true;
-                return TargetMeasurement{};
+                return false;
             }
             const int32_t id = static_cast<int32_t>(run_x0_.size());
             const uint32_t len = x - start;
@@ -138,7 +142,7 @@ TargetMeasurement RoiBlobMeasurer::measure(const GrayFrame &f, const RoiWindow &
     const size_t nruns = run_x0_.size();
     trace_.runs = static_cast<uint32_t>(nruns);
     if (nruns == 0)
-        return m; // 整窗全黑：常态（启动阶段背景就是全黑的）
+        return false; // 整窗全黑：常态（启动阶段背景就是全黑的）
 
     // ------------------------------------------------------------------
     // 第 2 步：按根结算每个组件的面积/矩/包围盒
@@ -173,6 +177,13 @@ TargetMeasurement RoiBlobMeasurer::measure(const GrayFrame &f, const RoiWindow &
             if (run_y_[i] > b.y1) b.y1 = run_y_[i];
         }
     }
+    return !blobs_.empty();
+}
+
+TargetMeasurement RoiBlobMeasurer::measure(const GrayFrame &f, const RoiWindow &w) {
+    TargetMeasurement m{};
+    if (!build_blobs(f, w))
+        return m;
 
     // ------------------------------------------------------------------
     // 第 3 步：形状筛选后取最大块（与 detect_color 同口径）
@@ -227,6 +238,49 @@ TargetMeasurement RoiBlobMeasurer::measure(const GrayFrame &f, const RoiWindow &
     m.quality = touch ? cfg_.clip_quality : 1.0f;
     m.roi = touch ? RoiState::TargetOutOfRoi : RoiState::Hit;
     return m;
+}
+
+uint32_t RoiBlobMeasurer::collect(const GrayFrame &f, const RoiWindow &w, uint32_t min_area,
+                                  BlobInfo *out, uint32_t cap) {
+    if (out == nullptr || cap == 0)
+        return 0;
+    if (!build_blobs(f, w))
+        return 0;
+
+    uint32_t n = 0;
+    for (const Blob &b : blobs_) {
+        if (b.area < min_area) {
+            ++trace_.rejected;
+            continue;
+        }
+        ++trace_.blobs;
+        if (n >= cap) { // 不截断静默丢弃：置 overflow，调用方知道本帧候选被砍过
+            trace_.overflow = true;
+            break;
+        }
+        const uint32_t bw = static_cast<uint32_t>(b.x1 - b.x0) + 1u;
+        const uint32_t bh = static_cast<uint32_t>(b.y1 - b.y0) + 1u;
+        BlobInfo      &o = out[n++];
+        o.x0 = static_cast<uint16_t>(w.x + b.x0);
+        o.y0 = static_cast<uint16_t>(w.y + b.y0);
+        o.x1 = static_cast<uint16_t>(w.x + b.x1);
+        o.y1 = static_cast<uint16_t>(w.y + b.y1);
+        o.area = b.area;
+        // 贴**窗口**边：包围盒/面积只是下界（可能被窗口削掉一截）。
+        // 这是仓库在启动阶段踩过的坑（贴边块面积是下界、质心是偏的），
+        // 装甲板这一路同样要吃它：被削的灯条长度不可信，配对时该被罚分。
+        o.border = ((b.x0 == 0) || (b.y0 == 0) || (b.x1 == w.w - 1u) || (b.y1 == w.h - 1u)) ? 1u : 0u;
+        o.circularity = roundness_from_moments(
+            b.area, static_cast<double>(b.sx), static_cast<double>(b.sy), static_cast<double>(b.sxx),
+            static_cast<double>(b.syy), static_cast<double>(b.sxy),
+            static_cast<double>(bw), static_cast<double>(bh));
+        o.fill = static_cast<float>(b.area) / static_cast<float>(bw * bh);
+        // 主轴：斜灯条的长宽比/填充率会同时失效，判据必须建在主轴上（与旋转无关）
+        principal_axis(static_cast<double>(b.area), static_cast<double>(b.sx), static_cast<double>(b.sy),
+                       static_cast<double>(b.sxx), static_cast<double>(b.syy), static_cast<double>(b.sxy),
+                       &o.theta, &o.len_major, &o.len_minor);
+    }
+    return n;
 }
 
 } // namespace dart::detection

@@ -227,6 +227,43 @@ inline float radius_from_area(float area) {
     return area > 0.0f ? std::sqrt(area / 3.14159265358979323846f) : 0.0f;
 }
 
+// 主轴分解（与 roundness_from_moments 同源的二阶矩，但**保留方向与尺度**）：
+//   theta    = 主轴方向（弧度，从 +x 轴起算，落在 [-π/2, π/2]）。轴是直线，mod π 无歧义。
+//   len_major/len_minor = 主/次轴上的等效矩形边长。实心矩形的二阶矩 λ = L²/12，
+//                        所以 L = sqrt(12·λ)（6x60 的灯条 → λmax=300 → L=60 ✓）。
+//
+// 为什么需要它：**包围盒对旋转极其敏感**。一条 5x40 的灯条转 30°，包围盒变成 24x37 ——
+// 长宽比 8.0→1.5、填充率 1.00→0.22，于是"长宽比门限"和"填充率门限"同时失效，
+// 端点也会从"长轴端点"退化成"包围盒边中点"（偏出半个包围盒宽）。
+// 而主轴长短边与方向**与旋转无关**，灯条平行但不竖直时它照样准。
+inline void principal_axis(double area, double sx, double sy, double sxx, double syy, double sxy,
+                           float *theta, float *len_major, float *len_minor) {
+    if (theta != nullptr)
+        *theta = 0.0f;
+    if (len_major != nullptr)
+        *len_major = 0.0f;
+    if (len_minor != nullptr)
+        *len_minor = 0.0f;
+    if (area <= 0.0)
+        return;
+    const double mx = sx / area, my = sy / area;
+    const double cxx = sxx / area - mx * mx;
+    const double cyy = syy / area - my * my;
+    const double cxy = sxy / area - mx * my;
+    const double tr = cxx + cyy;
+    const double det = cxx * cyy - cxy * cxy;
+    const double disc = tr * tr * 0.25 - det;
+    const double sq = disc > 0.0 ? std::sqrt(disc) : 0.0;
+    const double lam_major = tr * 0.5 + sq;
+    const double lam_minor = tr * 0.5 - sq;
+    if (theta != nullptr)
+        *theta = static_cast<float>(0.5 * std::atan2(2.0 * cxy, cxx - cyy));
+    if (len_major != nullptr)
+        *len_major = lam_major > 0.0 ? static_cast<float>(std::sqrt(12.0 * lam_major)) : 0.0f;
+    if (len_minor != nullptr)
+        *len_minor = lam_minor > 0.0 ? static_cast<float>(std::sqrt(12.0 * lam_minor)) : 0.0f;
+}
+
 inline float area_from_radius(float r) {
     return r > 0.0f ? 3.14159265358979323846f * r * r : 0.0f;
 }

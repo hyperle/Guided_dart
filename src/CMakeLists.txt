@@ -27,7 +27,12 @@ add_executable(${APP_NAME}
     detection/kalman.cpp
     detection/roi_prediction.cpp
     detection/tracker.cpp
-    detection/pipeline.cpp)
+    detection/pipeline.cpp
+    control/flight_state_machine.cpp
+    control/visual_outer_loop.cpp
+    control/attitude_inner_loop.cpp
+    control/control_allocator.cpp
+    control/flight_controller.cpp)
 
 target_include_directories(${APP_NAME} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../include")
 
