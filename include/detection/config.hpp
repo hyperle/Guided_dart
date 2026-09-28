@@ -287,9 +287,17 @@ struct ArmorConfig {
     float    roi_h_k = 2.0f;
     float    roi_gap_k = 0.0f;   // >0 会把整块装甲板顶出窗口（踩过，默认 0）
     float    roi_min_side = 24.0f;
-    // 跟踪态：只在上一对灯条周围开小窗（省时间）；与"绿灯上方整块"取交，
-    // 免得一个错的跟踪状态把搜索带到画面别处。
-    float track_k = 0.8f;
+    // 跟踪态怎么开窗（两条路）：
+    //   · 绿灯半径 < per_bar_r（远）：开**一个合窗**（上一对灯条周围），与"绿灯上方整块"取交
+    //   · 绿灯半径 >= per_bar_r（近）：**每条灯条各开一个小窗**
+    // 为什么要单条窗：合窗必须同时盖住两条灯条 + 中间空白 + 转动后的外接矩形变化，
+    // 尺寸被"整块板的跨度"绑死 —— 板一斜就包不住（实测：旧窗把 L140 的灯条切到只剩
+    // 122、L220 切到 133，配对与长度判据全被带偏）。单条窗只需盖住它自己，与板跨度无关。
+    float per_bar_r = 20.0f;    // 绿灯半径 >= 它就切单条窗（远距离灯条太小，合窗更稳）
+    float bar_margin_k = 0.25f; // 窗 margin = **该灯条**长度 × 系数（不是按整对的尺寸！）
+    float bar_margin_min = 8.0f;  // margin 下限(px)：盖住帧间位移与小幅转动
+    float bar_margin_max = 24.0f; // margin 上限(px)：不封顶的话"板比窗口大"时反而更贵
+                                  // （实测 L220/gap175：不封顶 67341px > 旧窗 38400px）
 
     // ---- 尺度：线性一步外推（与仓库"目标均匀变大"同口径）----
     float scale_v_k = 1.0f;      // s_pred = s + scale_v_k · ds_ema
@@ -301,12 +309,18 @@ struct ArmorConfig {
     float    assoc_min = 4.0f;
 
     // ---- 刚性几何先验（绿灯与装甲板固定在同一块板上，已确认）----
-    // 全部是**比值**，与距离无关 —— 远档形状判据不可信时它是唯一还在工作的判据。
-    // 默认给得很宽（近似不启用）；用日志里的 "比值(条长/尺 间距/尺 高/尺 横偏/尺)"
-    // 把下面几个数填成实测值附近，才真正收紧。
-    float span_lo_k = 0.2f, span_hi_k = 12.0f;  // 两灯条间距 / s
-    float up_lo_k = 0.0f, up_hi_k = 12.0f;      // (灯上沿 - 板心y) / s
-    float offx_k = 6.0f;                        // |板心x - 灯心x| / s
+    // 两条都与距离无关，所以远档形状判据全不可信时它们是唯一还在工作的判据：
+    //   ① 板心到灯心的**径向**距离 < near_k × 绿灯半径  （= 是不是同一个整体）
+    //   ② 两灯条间距 / 灯尺 ∈ [span_lo_k, span_hi_k]     （= 板的尺寸对不对）
+    // ① 为什么用径向而不是矩形框（原来是 上高/横偏 两个方向约束）：**距离与倾角无关**，
+    //   板子斜着转时矩形框会把真目标切掉；而且只有一个旋钮好调。
+    // 默认给得很宽（近似不启用）；用日志里的 "离心/半径"、"间距/尺" 实测值收紧。
+    float near_k = 8.0f;      // 板心到灯心 <= near_k × 绿灯半径
+    // 但**半径很小时"半径倍数"本身是量化噪声**（±1px 就是几成误差）：r=2 时 8×2=16px
+    // 会把一个真实偏移 21px 的板心判死。所以再给一条像素地板，量级与窗口地板
+    // （RoiConfig::min_side ≈ 24px，其对角 ≈ 34px）一致。
+    float near_min_px = 32.0f;
+    float span_lo_k = 0.2f, span_hi_k = 12.0f;  // 两灯条间距 / 灯尺
 };
 
 // 同一帧里最多带出多少片候选灯条（定长数组，运行期零分配）
@@ -378,6 +392,12 @@ struct DetectionConfig {
             armor.hold = 32;
         if (armor.roi_min_side < 4.0f)
             armor.roi_min_side = 4.0f;
+        if (armor.bar_margin_min < 1.0f)
+            armor.bar_margin_min = 1.0f;
+        if (armor.bar_margin_max < armor.bar_margin_min)
+            armor.bar_margin_max = armor.bar_margin_min;
+        if (armor.near_k < 0.0f)
+            armor.near_k = 0.0f;
     }
 };
 

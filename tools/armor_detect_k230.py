@@ -32,16 +32,24 @@ K230 CanMV(MicroPython) 调参脚本：绿色 LED + 装甲板（两片平行细�
                还会和周围的亮块粘成一片（包围盒一撑大，长宽比判据立刻失效）。
                怎么定：看着预览窗把 BIN_TH 慢慢往下调，直到灯条被清晰地切出来
                （板体/背景还是黑的），再对着打印行里每条灯条的 aspect / fill
-               核一遍：长宽比要 >= BAR_ASPECT_MIN(3)，填充率要 >= BAR_FILL_PCT。
+               核一遍（每一条判据的**定义式**见 §1.0 符号表与各参数那行注释）：
+               反解长边 L >= BAR_ASPECT_MIN × 反解厚度 t（默认 2）；
+               且基本正放时 fill = px/(w×h) >= BAR_FILL_PCT/100（默认 0.50）。
 
 两个参数的生效顺序是硬约束（写反了手动曝光完全不生效）：
   auto_exposure(False) 必须在 sensor.run() **之前**；
   exposure() / again()  必须在 sensor.run() **之后**。
 
-装甲板走 detect-track（静止画面下"结果乱跳"的对策，详见 ArmorTracker）：
-  未跟踪 → 在"绿灯上方整块"里 detect（pick_armor）
-  已跟踪 → 先关联上一帧那两条灯条（就近、容差按尺寸），**上一对还在就绝不换人**；
-           只扫上一对周围的小窗（省时间）；短暂丢了先保持 ARMOR_HOLD 帧并标 held
+装甲板走 detect-track，**门限只在 detect 需要**（详见 ArmorTracker.plan/update）：
+  plan() 给出这一帧走哪条路（跟踪器不认识像素，图像层由主循环执行 ——
+  与仓库 C++ 里 TargetTracker::begin_frame → Plan → end_frame 同一套路）：
+    detect（未跟踪/重捕）：整块窗 + **全门限**（is_bar 长度/长宽比/填充率/圆度）
+                           + O(n²) 配对 + 刚性先验 → 用 find_bars
+    track （已跟踪）      ：每条灯条一个窗（或合窗）+ **只认亲**
+                           （位置 + 尺寸容差，形状判据一条都不做）→ 用 find_blobs_raw
+  判定"还是同一个目标"靠的就是**在它自己的窗里连续变化**；反解只对认到的
+  这两条算（端点要用 L 与主轴）。认不到 → 记 miss、标 held → 超 ARMOR_HOLD 退回 detect。
+  日志的 `模式=` 就是这一栏（detect/track）。
   日志里 armor 一栏：OK = 本帧实测；HOLDn = 保持了 n 帧的旧中心（不是新测量）；
   MISS = 这一帧没有；无窗口 = 绿灯没锁住（绿灯是装甲板窗口的锚，没锚就不猜）。
 
@@ -69,7 +77,7 @@ K230 CanMV(MicroPython) 调参脚本：绿色 LED + 装甲板（两片平行细�
 刚性几何（已确认：绿灯与装甲板固定在同一块板上）多给两条**与距离无关**的判据
 （plate_prior —— 远档形状判据全跳过时，它是唯一还在工作的判据）：
   · 两灯条间距 / 灯尺 ∈ [PLATE_SPAN_LO_PCT, PLATE_SPAN_HI_PCT]
-  · 板心在绿灯上方的高度、横向偏移 / 灯尺 在允许范围内
+  · 板心到灯心的**径向**距离 < ARMOR_NEAR_K × 绿灯半径（= 同一个整体）
   这些比值是板上固定几何的常数。用日志 OK 行里打印的 "比值(…)" 填 §1 那几个数；
   默认给得很宽（等于不启用），填了才收紧。**同一套比值在 3px 和 300px 时都成立。**
 
@@ -102,107 +110,173 @@ except ImportError:
 # §1 参数注入区 —— 改这里即可，改完直接重新运行
 # ============================================================================
 
+# ============================ §1.0 符号表 ============================
+# 下面每个门限的注释都用这几个量写，**量就是代码里那个量**（改代码时请同步改这里）。
+#
+#   led        绿灯 blob 的包围盒 (led.x, led.y, led.w, led.h, led.px)
+#   s          灯尺 = max(led.w, led.h)                ← py 侧的"目标尺度"
+#              C++ 侧用跟踪层给的 s = 2r（等效直径），两者量级一致但不完全相等
+#   r          绿灯半径 = s / 2                        ← 只有 *_R / NEAR_K 用半径
+#   b          任一候选 blob（包围盒 + b.px 像素数）
+#   L,t,tilt   bar_shape(b.w, b.h, b.px) **反解**出的真实长边 / 厚度 / 倾角(0~45°)
+#              斜灯条必须用它：5x40 的灯条转 30°，包围盒是 24x37（长宽比 1.5、填充 0.22），
+#              而 (L,t,tilt) 仍然是 (39.7, 5.0, 29.6°)
+#   fill       = b.px / (b.w × b.h)                    包围盒填充率（无量纲 0~1）
+#   asp        = b.w / b.h                             包围盒宽高比
+#   ds_ema     尺度逐帧增量 s−s_prev 的 EMA（0.5/0.5）
+#   s_pred     = s + clamp(SCALE_V_K × ds_ema, ±SCALE_V_MAX)   线性一步外推
+#   s_lo,s_hi  尺度包络 = (min(s, s_pred), max(s, s_pred))     ← 门限用它而不是单点 s
+#   span       pair_span(a,b) = 两条灯条中心在**垂直于长轴**方向的距离
+#              （竖条取 |a.cx − b.cx|，横条取 |a.cy − b.cy|）
+#   score      配对分数（越小越像一对）= 长度差% + 沿长轴错位% + BAR_BORDER_PENALTY×贴边数
+#   win        本帧实际扫的窗：整块 / 合窗 / 单条窗（由 ARMOR_PER_BAR_R 决定）
+#
+# 日志里跟这些量对应的字段：`尺=`(s) `半径=`(r) `L= t= tilt=`(L,t,tilt)
+# `条长/尺=`(L/s) `间距/尺=`(span/s) `离心/半径=`(板心到灯心距离/r) `窗=单条x2|合窗`
+
 # ---- ★ 手动曝光 / 二值化（你要调的两个）------------------------------------
-EXPOSURE_US = 500       # 手动曝光时间(us)。None = 不设，保持固件默认
-GAIN_DB = None          # 可选：固定模拟增益(dB)。None = 不设。
-                        # 手动曝光设了却"越跑越亮/越暗"，说明 AGC 在补偿，才来设它
-BIN_TH = 20             # ★装甲板二值化阈值(L, 0~100)：只卡亮度，不看颜色（黑白口径）
+EXPOSURE_US = 500       # 手动曝光时间(us)。None = 不设，保持固件默认。
+                        # 必须在 sensor.run() **之后**设（之前固件不收）
+GAIN_DB = None          # 模拟增益(dB)。None = 不设（保持固件的自动增益）
+BIN_TH = 20             # ★装甲板二值化阈值：命中条件 = 像素的 LAB 亮度 L >= BIN_TH
+                        # 范围 0~100（LAB 的 L）；A、B 两个色度通道全放开（-128~127）
+                        # 所以它是"只看亮度、不看颜色"的黑白口径。作用范围 = win（只在窗口内二值化）
+                        # 日志对应：MISS 行里每条候选的 `fill=`、预览二值图（PREVIEW_BIN=1）
 
 # ---- 绿灯颜色阈值（照搬 C++ / 旧脚本，已经调好，一般不用动）------------------
 TH_GREEN = (12, 100, -128, -20, 8, 100)
+                        # CanMV find_blobs 的 LAB 六元组，命中条件（四个都要满足）：
+                        #   12 <= L <= 100   且   -128 <= A <= -20   且   8 <= B <= 100
+                        # 即"够亮 + 足够绿(A<=-20) + 不太蓝(B>=8)"。A 越往 -10 放越宽松
 
 # ---- 采集（不要求高帧率，30fps 跑满即可）------------------------------------
-FRAME_W = 640
-FRAME_H = 480
-SENSOR_FPS = 30
-PREVIEW = True          # 走 IDE 预览窗；不要预览就 False
-PRINT_EVERY = 30        # 每多少帧打一行统计（打印在 30fps 下约 1 秒一行）
-RUN_SELFTEST = False    # True = 板上只跑几何自测，不开相机
+FRAME_W = 640           # 传感器输出宽(px)
+FRAME_H = 480           # 传感器输出高(px)
+SENSOR_FPS = 80         # 给传感器的目标帧率。循环再快也只能跑到它（实测 snap≈33ms 就是等帧）
+PREVIEW = True          # True = 走 IDE 预览窗（show_image）；False = 不显示（省 ~17ms/帧）
+PRINT_EVERY = 30        # 每处理多少帧打一行统计（30fps 下 ≈ 1 行/秒）
+RUN_SELFTEST = False    # True = 板上只跑几何自测、不开相机
 
-# ---- 绿灯 blob 判据（C++：填充 >=55%、0.7<=宽高比<=1.4、取最大）--------------
-GREEN_PIX_MIN = 30
-GREEN_FILL_PCT = 50
-GREEN_ASPECT_LO_NUM = 5     # 10*w >= 7*h
-GREEN_ASPECT_HI_NUM = 20    # 10*w <= 14*h
-GREEN_STEP = 2              # 全图搜索时隔点采样（绿灯是大亮斑，够了；省一半时间）
+# ---- 绿灯 blob 判据（只在 s >= TINY_PX 即"近档"时生效；远档形状是噪声，整条跳过）--
+GREEN_PIX_MIN = 30      # 远近档分界之一：led.px < 它 → 远档（要 FAR_CONFIRM 帧确认）
+                        # led.px = find_blobs 数到的点数 × GREEN_STEP²（隔点采样换算回真实像素）
+GREEN_FILL_PCT = 50     # 判据：led.px×100 >= GREEN_FILL_PCT × led.w×led.h
+                        # 即 fill = led.px/(led.w×led.h) >= 0.50（实心光斑，不是散点）
+GREEN_ASPECT_LO_NUM = 5 # 判据：led.w×10 >= 5 × led.h → 包围盒宽高比 asp = w/h >= 0.50
+GREEN_ASPECT_HI_NUM = 20# 判据：led.w×10 <= 20 × led.h → asp = w/h <= 2.00
+                        # 两条一起把绿灯限制成"大致方形/圆形"，长条反光被挡掉
+GREEN_STEP = 2          # find_blobs 的 x_stride = y_stride（只在**未锁定**的全图搜索时用；
+                        # 锁定后走小窗用 1，免得包围盒被量化 → 打印的 px 也×4 换算过）
 
 # ---- 预览：让 IDE 里看到"检测器实际看到的那张图"（调 BIN_TH 靠它）----------
 PREVIEW_BIN = 1         # 0 = 原始帧 + 标注
-                        # 1 = **整帧二值图** + 标注（就是装甲板检测真正跑的那张二值图）
-                        # 2 = 原始帧 + 标注，左上角再贴一块放大后的"窗口二值图"
-PREVIEW_BIN_ZOOM = 2    # 仅模式 2：窗口二值图的放大倍数（放不下就退回 1 倍）
+                        # 1 = **整帧二值图**(img.binary([(BIN_TH,100,-128,127,-128,127)])) + 标注
+                        # 2 = 原始帧 + 标注，左上角贴一块放大后的"窗口二值图"
+PREVIEW_BIN_ZOOM = 2    # 仅模式 2：窗口二值图的放大倍数（放不下自动退回 1 倍）
 
 # ---- 阶段计时：回答"33.3ms 花在哪一段"（调帧率时开，平时可以关）-------------
 TIME_STAGES = True      # 每 PRINT_EVERY 帧打一次 snap/led/armor/show 四段平均 ms
 
 # ---- 尺度自适应：工况是"逐渐接近"，固定像素门限在物理上就不成立 ------------
-# 远→近：目标从几个像素长到几十像素。形状判据（长宽比/填充率/长度）只在目标
-# 够大时才有意义；几个像素的"长宽比"是量化噪声。所以：
-#   远档（尺度 < TINY_PX）：跳过形状判据，只留像素地板 + 多要一帧确认 + 位移平滑
-#   近档（尺度 >= TINY_PX）：形状判据全开，确认帧数可以少要
-# 尺度 s = 绿灯的等效尺寸 max(w,h)；s 是**状态**（ScaleModel 线性一步外推）。
-TINY_PX = 8             # 小于这个尺度算远档
-GREEN_PIX_FLOOR = 3     # 绿灯像素数地板：再小不可能是光斑（远档的门）
-FAR_CONFIRM = 3         # 远档连续命中几帧才锁（噪点级目标必须多要帧）
-FAR_JUMP_K = 1.5        # 远档位移平滑门限 = max(FAR_JUMP_MIN, K*上一帧尺度)
-FAR_JUMP_MIN = 6        # 远档位移门限下限(px)：跳太远就不算同一帧里那条目标
-SCALE_V_K = 1.0         # 尺度线性模型: s_pred = s + SCALE_V_K * ds_ema（一帧外推）
-SCALE_V_MAX = 4         # 单帧尺度增量上限(px)：防一个坏值把外推跑飞
-# 灯条门限 = 绿灯尺度 s 的倍数，只在物理无意义处保留硬地板
-BAR_LEN_MIN_K = 0.2     # 灯条最短 = 0.2 * s
-BAR_LEN_MAX_K = 8.0     # 最长 = 8 * s（再长就不是灯条，是板体/干扰）
-BAR_LEN_FLOOR = 2       # 长度硬地板(px)：再小就不成"条"
-BAR_PX_FLOOR = 2        # 像素数硬地板（像素数下限由"最短长度"推出来：ln_min//2）
+#   s < TINY_PX（远档）：跳过形状判据，只留像素floor + FAR_CONFIRM 帧确认 + 位移平滑
+#   s >= TINY_PX（近档）：形状判据全开，CONFIRM_N 帧就锁
+# 注意 TINY_PX 被用在**两处**，同一把尺子量两个对象：
+#   ① Lock：led 的长边 max(led.w,led.h) < 它 → 这个测量算"远档"
+#   ② is_bar：候选灯条的包围盒长边 max(b.w,b.h) < 它 → 这条灯条算"远档"
+TINY_PX = 20            # 远/近档分界(px)，见上面两处用法
+GREEN_PIX_FLOOR = 3     # 绿灯像素数**地板**：led.px < 它直接丢（再小不可能是光斑）
+                        # 与 GREEN_PIX_MIN 的区别：它是"收不收"，MIN 是"算不算远档"
+FAR_CONFIRM = 3         # 远档：连续命中几帧才进 LOCK（近档用 CONFIRM_N）
+FAR_JUMP_K = 2.5        # 远档位移平滑门限 = max(FAR_JUMP_MIN, FAR_JUMP_K × 上一帧灯尺)
+FAR_JUMP_MIN = 10       # 位移门限下限(px)。判据：|Δcx| > 门限 或 |Δcy| > 门限 → hits 归零重数
+                        # Δ 是"本帧测量中心 − 上一帧**报出去**的中心"
+SCALE_V_K = 1.0         # 尺度线性外推的系数：s_pred = s + SCALE_V_K × ds_ema（只外推一帧）
+SCALE_V_MAX = 4         # 单帧尺度增量上限(px)：防止 ds_ema 被一个坏测量带飞
+# 灯条门限 = 灯尺的倍数 + 硬地板（下面的 L 都是反解出来的真实长边）
+BAR_LEN_MIN_K = 0.6     # 灯条最短 = BAR_LEN_MIN_K × s_lo（s_lo 是包络下界 → 取宽松的那侧）
+BAR_LEN_MAX_K = 1.5     # 灯条最长 = BAR_LEN_MAX_K × s_hi（s_hi 是包络上界）
+                        # 两条合起来的实际判据：max(BAR_LEN_FLOOR, 0.6×s_lo) <= L <= max(BAR_LEN_FLOOR, 1.5×s_hi)
+BAR_LEN_FLOOR = 2       # 上面两条的硬地板(px)：L < 2px 不成"条"
+BAR_PX_FLOOR = 2        # 像素数地板：b.px >= max(BAR_PX_FLOOR, 灯条最短长度 // 2)
+                        # （1px 宽的实心条长 L 就有 L 个像素，所以 L/2 是"成条"的下限）
 
 # ---- 刚性几何先验（已确认：绿灯与装甲板固定在同一块板上）--------------------
-# 前提确认之后，除了"尺度同步"，刚性还多给两条**与距离无关**的判据：
-#   ① 两灯条间距 ∝ 灯尺（板子上两根灯条的间距是固定的）
-#   ② 板心相对绿灯的位置（上方多少、横向偏多少）∝ 灯尺
-# 远档形状判据不可信时，这是唯一还在工作的判据 —— 任何尺度都成立。
-# 下面几个数是**比值上限/下限**（百分数，×100），用日志 OK 行里打印的"比值"填；
-# 默认给得很宽 = 基本不启用，填了才真正收紧。
-PLATE_SPAN_LO_PCT = 20      # 间距/尺 下限（默认 0.20）
-PLATE_SPAN_HI_PCT = 1200    # 间距/尺 上限（默认 12.0）
-PLATE_UP_LO_PCT = 0         # (绿灯上沿 - 板心y)/尺 下限（板心必须在绿灯上方）
-PLATE_UP_HI_PCT = 1200      # 上限
-PLATE_OFFX_PCT = 600        # |板心x - 灯心x|/尺 上限
+# 两条判据都与距离无关（比值 / 半径倍数），所以远档形状判据全不可信时它们还在工作。
+# 数值用日志里的 `间距/尺=` 与 `离心/半径=` 实测值收紧；现在给得很宽 ≈ 近似不启用。
+PLATE_SPAN_LO_PCT = 100     # 判据：span × 100 >= X × s 
+PLATE_SPAN_HI_PCT = 500     # 判据：span × 100 <= X × s 
+                            # （span = 两灯条中心在垂直于长轴方向的距离；s = 灯尺）
+# "是不是同一个整体"：径向判据 —— 板心到灯心的**欧氏距离** < 门限
+ARMOR_NEAR_K = 8.0          # 门限 = max(ARMOR_NEAR_K × r, ARMOR_NEAR_MIN_PX)
+                            # r = led_radius = max(led.w,led.h)/2
+ARMOR_NEAR_MIN_PX = 32      # 门限的像素地板(px)：半径很小时"半径倍数"本身是量化噪声
+                            # （r=2 时 8×2=16px 会把真实偏移 21px 的板心判死）
 
-# ---- 灯条判据 + 配对门限 ----------------------------------------------------
-BAR_ASPECT_MIN = 2      # ★长边 >= X*短边（只对近档生效：远档形状不可信，整条跳过）
-BAR_FILL_PCT = 50       # 灯条是实心亮条，不是散点（同上，只对近档生效）
+# ---- 灯条形状判据（近档；L/t/tilt 都是反解值，不是包围盒）-------------------
+BAR_ASPECT_MIN = 2.5      # 判据：L >= 2 × t（真实长宽比 >= 2，与倾斜无关）
+BAR_FILL_PCT = 50       # 判据：b.px×100 >= 50 × b.w×b.h 即 fill >= 0.50
+                        # **只在 tilt < BAR_FLAT_DEG（基本正放）时生效**：
+                        # 斜的时候包围盒被撑大、fill 天然变低（30° 时 0.22），拿它筛会筛掉真灯条
 # ---- 斜灯条（"平行但不竖直"）：包围盒口径会同时废掉长宽比与填充率 ----------
-# 一条 5x40 的灯条转 30°，包围盒变成 24x37：长宽比 8.0 → 1.5、填充率 1.00 → 0.22，
-# 两条门限**同时**失效。所以斜的时候改用**反解**出来的真实长短边（见 bar_shape）。
-BAR_FLAT_DEG = 12       # 反解倾角小于它 = 基本竖直/水平：包围盒口径仍可信，照旧用 fill
-BAR_PARALLEL_DEG = 15   # 两条灯条倾角之差上限（"两条灯条平行"这条已知事实的直接用法）
-BAR_THICK_MIN_RATIO_NUM = 3  # 两条灯条厚度比下限 = 3/10（同一块板上两条灯条一样粗）
+# 一条 5x40 的灯条转 30°，包围盒 24x37：长宽比 8.0→1.5、填充率 1.00→0.22，
+# 于是"长宽比"和"填充率"**同时**失效。所以斜的时候改用反解出来的 L/t（见 bar_shape），
+# 端点也从"包围盒边中点"改成"中心 ± (L/2)·主轴方向"（见 paired_ends）。
+BAR_FLAT_DEG = 12       # tilt < 它 → 认为基本竖直/水平：启用 fill 判据 + 用包围盒口径取端点
+BAR_PARALLEL_DEG = 15   # 判据：|tilt_a − tilt_b| <= 15°（"两条灯条平行"这条事实的用法）
+BAR_THICK_MIN_RATIO_NUM = 3  # 判据：min(t_a,t_b) × 10 >= 3 × max(t_a,t_b)（两条一样粗，比值>=0.3）
+BAR_BORDER_PENALTY = 30     # 贴搜索窗边（长度只是下界）的灯条，在 score 里加 30/条。
+                            # score 的单位是"百分数"（长度差% + 错位%），所以 30 ≈ 多算 30% 长度差
 
-BAR_LEN_RATIO_PCT = 40  # 两条长度比 >= 50%（透视下会差，但差一倍以上就不是一对）
-BAR_OVERLAP_PCT = 40    # 沿长轴投影重叠 >= 50%（并排，不是首尾相接）
-BAR_GAP_MAX_PCT = 1000   # 两条中心距 <= X*长边（离太远不是同一块板）
-DIAG_MIN_SIN_PCT = 30   # 两条对角线夹角 sin >= X（保险：交点不能靠近平行线求）
+BAR_LEN_RATIO_PCT = 40  # 判据：min(L_a,L_b) × 100 >= 40 × max(L_a,L_b)（两条长度比 >= 0.40）
+BAR_OVERLAP_PCT = 40    # 判据：(hi − lo) × 100 >= 40 × min(L_a,L_b)
+                        # 其中 [lo,hi] 是两条灯条**包围盒在长轴方向上的区间**求交
+                        # （竖条：lo = max(a.y,b.y)，hi = min(a.y+a.h, b.y+b.h)）
+                        # 含义：并排，不是首尾相接
+BAR_GAP_MAX_PCT = 1000  # 判据：sep × 100 <= 1000 × max(L_a,L_b) 即 sep <= 10×较长的那条
+                        # sep = 垂直于长轴的中心距（竖条 = |a.cx − b.cx|）
+DIAG_MIN_SIN_PCT = 30   # 判据：|sin∠(两条对角线)| >= 0.30
+                        # 两条对角线 = A上角点—B下角点 与 A下角点—B上角点；
+                        # sin 用叉积算：|d| / (|a|×|b|)，d = ax·by − ay·bx。
+                        # 夹角太小（近平行）时交点对 1px 抖动极敏感 → 宁可不出结果
 
-# ---- 装甲板窗口 = 绿灯上方（尺寸随绿灯缩放）---------------------------------
-ARMOR_ROI_W_K = 3.0     # 窗口宽 = 绿灯宽 * 这个系数
-ARMOR_ROI_H_K = 2.0     # 窗口高 = 绿灯高 * 这个系数
-ARMOR_ROI_GAP_K = 0.0   # 窗口下沿离绿灯上沿的间隔 = 绿灯高 * 这个系数。
-                        # 0 = 下沿正好贴着绿灯上沿（默认）；要往上抬才给正数，
-                        # 给到 1.0 会把整条装甲板顶出窗口（踩过）
+# ---- 装甲板窗口 = 绿灯上方那块（首次/重捕/远距离用；尺寸随绿灯包围盒缩放）----
+ARMOR_ROI_W_K = 3.0     # 窗口宽 = 3.0 × led.w（再取 max(..., ROI_MIN_SIDE)）
+ARMOR_ROI_H_K = 2.0     # 窗口高 = 2.0 × led.h（同上）
+ARMOR_ROI_GAP_K = 0.0   # 窗口下沿离绿灯上沿的间隔 = GAP_K × led.h
+                        # 窗口 y 区间 = [led.y − gap − 高, led.y − gap]
+                        # 0 = 下沿正好贴绿灯上沿（默认）；给到 1.0 会把整块装甲板顶出窗口（踩过）
 
 # ---- 装甲板 detect-track：静止画面下结果乱跳的对策 ---------------------------
-ARMOR_HOLD = 2          # 上一对灯条短暂丢掉时，先保持旧中心最多几帧（日志里标 held）
-ARMOR_ASSOC_K = 0.6     # 关联容差 = 灯条尺寸 * 这个系数（+ 下限），超出就认为不是同一条
-ARMOR_ASSOC_MIN = 4     # 关联容差下限(px)
-ARMOR_TRACK_K = 0.8     # 跟踪时搜索小窗 = 上一对灯条包围盒外扩 最大边*这个系数
+ARMOR_HOLD = 2          # 关联失败（这一帧没配成对）时，先返回上一次的中心最多几帧，
+                        # 日志标 HOLD<n>；n > ARMOR_HOLD 就释放并整块重捕
+ARMOR_ASSOC_K = 0.6     # 关联容差：tx = max(ARMOR_ASSOC_K × ref.w, ARMOR_ASSOC_MIN)，
+                        # ty 同理用 ref.h（ref = 上一帧那一条灯条的包围盒）
+                        # 判据：|Δcx|<=tx 且 |Δcy|<=ty 且 |Δw|<=tx 且 |Δh|<=ty 才算"还是它"
+ARMOR_ASSOC_MIN = 4     # 上面的容差下限(px)
+# ---- 单条灯条 ROI（绿灯够大时才开）：解决"合窗在某些角度包不住装甲板" ----------
+# 合窗要同时盖住两条灯条 + 中间空白 + 转动后的外接矩形变化 → 尺寸被"板跨度"绑住，一斜就切。
+# 单条窗只盖住它自己，与板跨度无关；中间的空白也不再付像素。
+ARMOR_PER_BAR_R = 20.0   # 门限：r >= 它 → 每条灯条各开一个窗；否则开一个合窗
+ARMOR_BAR_MARGIN_K = 0.25  # 单条窗 margin = 0.25 × L（**该灯条自己的长度**，不是整对的尺寸）
+ARMOR_BAR_MARGIN_MIN = 8   # margin 下限(px)：盖住帧间位移与小幅转动
+ARMOR_BAR_MARGIN_MAX = 24  # margin 上限(px)：不封顶的话"板比窗口大"时单条窗反而更贵
+                           # （实测 L220/gap175：不封顶 67341px > 旧窗 38400px；封到 24 → 37520px）
+                           # 最终 margin = clamp(int(0.25×L), 8, 24) + 增长补偿
+                           # 增长补偿 = int(L × (本帧r / 上次采到那一对时的r − 1) × 0.5)
+                           # （逐渐接近时目标每帧长大，不补就会被切：实测 ×1.35/帧 时长度只剩 0.58）
 
-# ---- 锁 ---------------------------------------------------------------------
-CONFIRM_N = 2           # 连续命中几帧才算锁定（防单帧噪声误锁）
-MISS_LIMIT = 3          # 连续丢几帧就释放锁（防锁死在一个已经没了的目标上）
-MARGIN_K = 0.8          # 锁定后搜索窗 = 上一帧包围盒 + 这个系数*尺寸
-LED_DEADBAND = 2        # 绿灯包围盒死区(px)：抖动不超过它就别动窗口 —— 否则窗口
-                        # 边界会一帧一帧地蹭在灯条上，把灯条截断（见 ArmorTracker）
-ROI_MIN_MARGIN = 12     # 窗口至少外扩这么多像素（目标很小时也得留出运动余量）
-ROI_MIN_SIDE = 24       # 窗口裁完小于这个边长就视为没有窗口
+# ---- 锁（绿灯的）------------------------------------------------------------
+CONFIRM_N = 2           # 近档：连续命中几帧才进 LOCK（hits >= 它）
+                        # 远档用 FAR_CONFIRM 代替它
+MISS_LIMIT = 3          # 连续 miss 几帧就释放锁（misses >= 它 → locked=False，回全图）
+MARGIN_K = 0.8          # 锁定后绿灯搜索窗 = 上一帧报出的包围盒 外扩 m，
+                        # m = max(int(0.8 × max(box.w, box.h)), ROI_MIN_MARGIN)
+LED_DEADBAND = 2        # 死区(px)：|本帧x − 上次报出的x| <= 2 且 |Δy| <= 2 → 继续用旧框。
+                        # 否��� ±1px 抖动会让下游窗口边界一帧一帧地蹭在灯条上（把灯条截断）
+ROI_MIN_MARGIN = 12     # 上面 m 的下限(px)：目标很小时也得留出运动余量
+ROI_MIN_SIDE = 24       # 窗口边长地板(px)：**用于** 绿灯搜索窗、绿灯上方整块窗、合窗；
+                        # **不用于**单条窗（单条窗的地板是 ARMOR_BAR_MARGIN_MIN=8，
+                        # 拿 24 卡它会让 r≈20 时单条窗静默失效 —— 踩过）
 
 SEARCH_ROI = (0, 0, FRAME_W, FRAME_H)   # 未锁定时绿灯的全图搜索范围
 
@@ -223,6 +297,7 @@ class Box(object):
         self.cx = self.x + self.w // 2
         self.cy = self.y + self.h // 2
         self._shp = None           # (L, t, 倾角°) 缓存：bar_shape() 只算一次
+        self.border = 0            # 1 = 包围盒贴着**搜索窗**边 → 长度/面积只是下界
 
     def shape(self):
         """灯条的真实 (长 L, 厚 t, 倾角°)。反解失败 → 退回包围盒口径（倾角 0）。
@@ -433,13 +508,18 @@ def line_intersection(p0, p1, p2, p3, min_sin_pct=15):
 def pair_score(a, b, cfg):
     """两条灯条像不像同一块装甲板：像 → 分数（越小越像），不像 → None。
 
-    门限（整数比较，全部是"两条同属一块板"的必要条件）：
-      ① 同向：都竖或都横（一竖一横绝不可能是一对）
-      ② 长轴长度比 >= bar_len_ratio_pct
-      ③ 沿长轴投影重叠 >= bar_overlap_pct（并排，不是首尾相接）
-      ④ 间距 <= bar_gap_max_pct% 长边，且两者在横向不重叠（横向重叠的亮块在
-         二值图上本来就是同一块，会被连通域并掉）
-    分数 = 长度差百分比 + 沿长轴错位百分比。
+    门限（全部是"两条同属一块板"的必要条件；符号定义见 §1.0）：
+      ①   同向：a 与 b 都偏竖 或 都偏横（按包围盒 h>=w 判；一竖一横不可能是同一块板）
+      ①b  平行：|tilt_a − tilt_b| <= BAR_PARALLEL_DEG
+      ①c  等粗：min(t_a,t_b) × 10 >= BAR_THICK_MIN_RATIO_NUM × max(t_a,t_b)
+      ②   等长：min(L_a,L_b) × 100 >= BAR_LEN_RATIO_PCT × max(L_a,L_b)
+      ③   重叠：(hi − lo) × 100 >= BAR_OVERLAP_PCT × min(L_a,L_b)
+           [lo,hi] = 两条的**包围盒在长轴方向上**的区间求交（竖条用 y 区间）
+      ④   间距：sep × 2 > (w_a + w_b)（横向不重叠 = 在二值图上本来是同一块的会被并掉）
+           且 sep × 100 <= BAR_GAP_MAX_PCT × max(L_a,L_b)
+           sep = 垂直于长轴的中心距（竖条 = |a.cx − b.cx|）
+    分数 = (max(L)−min(L))×100/max(L) + 沿长轴错位×100/max(L) + BAR_BORDER_PENALTY×贴边条数
+    其中 L/t/tilt 都是 bar_shape() **反解**出来的真实量（包围盒口径斜的时候会同时失效）。
 
     这里**不再**管"单条长度/像素数"：能进到这一步的灯条都已经过 is_bar
     （门限随尺度变），再按固定像素数筛一次就是重复且会漏掉远距离目标。
@@ -490,7 +570,8 @@ def pair_score(a, b, cfg):
         return None
     if sep * 100 > cfg.bar_gap_max_pct * lmax:          # ④ 离太远
         return None
-    return (lmax - lmin) * 100 // lmax + off * 100 // lmax
+    return ((lmax - lmin) * 100 // lmax + off * 100 // lmax
+            + cfg.bar_border_penalty * (a.border + b.border))
 
 
 def paired_ends(a, b, cfg):
@@ -544,27 +625,93 @@ def armor_center(a, b, cfg):
     return line_intersection(a0, b1, a1, b0, cfg.diag_min_sin_pct)
 
 
-def plate_prior(cfg, led, s, a, b, c):
-    """刚性几何先验：板心相对绿灯的位置、两灯条间距，必须是灯尺的固定倍数。
+def _same_box(bars, b):
+    """同一个块是否已经在列表里（两个单条窗万一重叠，collect 会带出重复块）。"""
+    for o in bars:
+        if o.x == b.x and o.y == b.y and o.w == b.w and o.h == b.h:
+            return True
+    return False
 
-    前提是"绿灯与装甲板固定在同一块板上"（已确认）。这条判据的价值在于
-    **与尺度无关**：目标 3px 和 300px 时它同样成立，所以远档（形状判据全跳过、
-    单帧形状与噪声不可分）时它是唯一还在工作的判据。
 
-    门限是比值（百分数），默认给得很宽（等于不启用）；用日志 OK 行里的"比值"
-    把 §1 的 PLATE_*_PCT 填成实测值附近才真正生效。
-    s = 0（灯尺还没建立）时放行 —— 那时没有可比的基准。
+def _win_name(wins):
+    '''日志用：本帧走的是"单条窗"还是"合窗"（门限 = ARMOR_PER_BAR_R）。'''
+    if not wins:
+        return '窗=无'
+    if len(wins) > 1:
+        return '窗=单条x%d' % len(wins)
+    return '窗=合窗'
+
+
+def _union_roi(wins):
+    """多个窗的并集（只用于日志与"整块"参考，不参与搜索）。"""
+    x0 = wins[0][0]
+    y0 = wins[0][1]
+    x1 = wins[0][0] + wins[0][2] - 1
+    y1 = wins[0][1] + wins[0][3] - 1
+    for w in wins[1:]:
+        if w[0] < x0:
+            x0 = w[0]
+        if w[1] < y0:
+            y0 = w[1]
+        if w[0] + w[2] - 1 > x1:
+            x1 = w[0] + w[2] - 1
+        if w[1] + w[3] - 1 > y1:
+            y1 = w[1] + w[3] - 1
+    return (x0, y0, x1 - x0 + 1, y1 - y0 + 1)
+
+
+def dist(x0, y0, x1, y1):
+    """两点距离。**不要用 math.hypot** —— MicroPython 的 math 没有它
+    （CanMV v1.8 上直接 AttributeError，板上跑到日志那一行才炸）。
+    math.sqrt / sin / cos / asin / radians / degrees 都有，可以放心用。
+    只比大小的地方用平方比较（省一次开方），要打印/显示的地方才开方。"""
+    dx = x0 - x1
+    dy = y0 - y1
+    return math.sqrt(dx * dx + dy * dy)
+
+
+def led_radius(led):
+    """绿灯半径（等效）：py 侧只有包围盒 → 取长边的一半。C++ 侧直接用跟踪层的 r。
+    led=None（主机侧单测可以不带锚）→ 0。"""
+    if led is None:
+        return 0.0
+    return (led.w if led.w > led.h else led.h) * 0.5
+
+
+def same_body(cfg, led, cx, cy):
+    """板心与绿灯是不是**同一个整体**：径向距离 < ARMOR_NEAR_K × 绿灯半径。
+
+    为什么用径向而不是矩形框（原来是"上高/横偏"两个方向约束）：**距离与倾角无关**。
+    板子斜着转的时候，矩形框会把真目标切掉；径向判据不会。而且只有一个旋钮，
+    用日志里的 "离心/半径" 实测值收紧即可。
+    绿灯半径还没建立（<=0）时放行 —— 那时没有可比的基准。
     """
+    r = led_radius(led)
+    if r <= 0:
+        return True
+    dx = cx - led.cx
+    dy = cy - led.cy
+    lim = cfg.armor_near_k * r
+    if lim < cfg.armor_near_min_px:
+        lim = cfg.armor_near_min_px             # 小半径下按倍数算会被量化噪声判死
+    return dx * dx + dy * dy <= lim * lim       # 平方比较，省一次开方
+
+
+def plate_prior(cfg, led, s, a, b, c):
+    """刚性几何先验：① 两灯条间距 ∝ 灯尺（板的**尺寸**是固定的）
+                     ② 板心离灯心 < ARMOR_NEAR_K × 半径（是不是**同一个整体**）
+
+    前提是"绿灯与装甲板固定在同一块板上"（已确认）。两条都是**与距离无关**的判据
+    （比值/半径倍数），所以远档形状判据全不可信时它们是唯一还在工作的判据。
+    间距那两个数是比值（百分数），默认很宽 = 基本不启用，用日志里的比值收紧。
+    s <= 0（灯尺没建立）时只做②。
+    """
+    if not same_body(cfg, led, c[0], c[1]):
+        return False
     if s <= 0:
         return True
     span = pair_span(a, b)
-    up = led.y - c[1]                       # 板心在绿灯上沿之上为正
-    offx = _absdiff(c[0], led.cx)
     if span * 100 < cfg.plate_span_lo_pct * s or span * 100 > cfg.plate_span_hi_pct * s:
-        return False
-    if up * 100 < cfg.plate_up_lo_pct * s or up * 100 > cfg.plate_up_hi_pct * s:
-        return False
-    if offx * 100 > cfg.plate_offx_pct * s:
         return False
     return True
 
@@ -704,6 +851,25 @@ def find_led(img, roi, cfg, step):
     return best
 
 
+def find_blobs_raw(img, roi, cfg):
+    '''窗口内**全部**亮块，不做任何形状判据（track 阶段的图像层入口）。
+
+    为什么 track 可以省掉门限：判定"还是同一个目标"靠的是**窗口 + 位置/尺寸容差**
+    （目标在它自己的窗里连续变化），不需要长度/长宽比/填充率/圆度 ——
+    那些是 detect 阶段"从零判断这是不是一条灯条"才需要的。
+    代价：候选可能比 find_bars 多（没筛），但每块只剩一次 find_blobs（native）
+    + 几次整数比较；省掉的是每个候选的 bar_shape（二次方程 + 2 次 sqrt + asin）。
+    '''
+    out = []
+    for b in _find_blobs(img, armor_thresholds(cfg), roi, cfg.bar_px_floor, 1):
+        bb = Box(b.x(), b.y(), b.w(), b.h(), b.pixels())
+        if bb.x <= roi[0] or bb.y <= roi[1] or \
+           bb.x + bb.w >= roi[0] + roi[2] or bb.y + bb.h >= roi[1] + roi[3]:
+            bb.border = 1        # 贴窗边标记仍要：日志里要看得到被切，也便于诊断
+        out.append(bb)
+    return out
+
+
 def armor_thresholds(cfg):
     """装甲板二值化阈值（黑白口径）：只卡亮度 L >= bin_th，A/B 全放开，不看颜色。
 
@@ -789,6 +955,12 @@ def find_bars(img, roi, cfg, gate):
     bars = []
     for b in _find_blobs(img, armor_thresholds(cfg), roi, gate[2], 1):
         bb = Box(b.x(), b.y(), b.w(), b.h(), b.pixels())
+        # 贴**搜索窗**边 = 这条灯条可能被窗口削掉了 → 长度/面积只是下界。
+        # 这是个真信号（实测：旧"绿灯上方整块"把 L140 的灯条切到只剩 122，配对被连带带偏），
+        # 所以配对时罚分而不是硬否 —— 被削的真灯条仍然要用。
+        if bb.x <= roi[0] or bb.y <= roi[1] or \
+           bb.x + bb.w >= roi[0] + roi[2] or bb.y + bb.h >= roi[1] + roi[3]:
+            bb.border = 1
         if is_bar(bb, gate, cfg):
             bars.append(bb)
     return bars
@@ -965,7 +1137,8 @@ class ArmorTracker(object):
          → 规则 C：绿灯包围盒带死区（LED_DEADBAND）+ 锁定后绿灯搜索步长 1。
          这两条在 Lock/主循环里，不在本类。
 
-    效率：跟踪成功后搜索窗只开在上一帧那一对灯条周围（ARMOR_TRACK_K），
+    效率：跟踪成功后绿灯够大就**每条灯条各开一个小窗**（ARMOR_PER_BAR_R 定门限），
+    否则开一个合窗；两者 margin 都按单条灯条长度给（ARMOR_BAR_MARGIN_*），
     比"绿灯上方整块"小得多；丢了 armor_hold 帧就退回整块重新 detect。
     """
 
@@ -974,18 +1147,67 @@ class ArmorTracker(object):
         self.b = None
         self.c = None      # 上一帧的中心
         self.age = 0       # 已经保持了几帧（0 = 本帧有实测）
+        self.r_last = 0.0  # 上次采到那一对时的绿灯半径（算尺度增长用）
 
     def reset(self):
         self.a = None
         self.b = None
         self.c = None
         self.age = 0
+        self.r_last = 0.0
 
-    def search_roi(self, full_roi, img_w, img_h, cfg):
-        """本帧扫哪里：跟踪中 = 上一对灯条周围的小窗（与整块取交），否则 = 整块。
+    def _reach_box(self, led, cfg):
+        """锚的"够得着"范围：以灯心为中心、ARMOR_NEAR_K × 半径 为半边的外接方框。
 
-        与整块取交很关键：跟踪窗永远不能跑到"绿灯上方那块"之外，否则一个错误的
-        跟踪状态会把搜索带到画面别的角落去。
+        单条窗**不再**被"绿灯上方那块"裁剪 —— 那正是"某些角度包不住装甲板"的原因
+        （那块窗口的尺寸被板跨度绑住）。安全性改由这条径向范围提供：
+        窗口可以跟着灯条走，但永远不许跑到离灯心 ARMOR_NEAR_K 个半径之外。
+        """
+        half = cfg.armor_near_k * led_radius(led)
+        return (led.cx - half, led.cy - half, half * 2.0, half * 2.0)
+
+    def _grow_pad(self, led, bar):
+        """按"这一帧目标长大了多少"再补一圈 margin。
+
+        工况是**逐渐接近**：30fps 下目标每帧能长 10~20%（近末端更多）。窗口是按
+        "上次采到的那条灯条"开的，不补偿增长的话这一帧它就顶出窗外 → 被切 → 丢帧 →
+        连续丢够 hold 帧就退回整块重捕（实测：s 从 40 长到 60 那一帧就掉了）。
+
+        增长比直接用绿灯半径的变化量算（灯尺与灯条是同一个尺度）。
+        """
+        if self.r_last <= 0:
+            return 0
+        g = led_radius(led) / self.r_last - 1.0
+        if g <= 0.0:
+            return 0
+        return int(bar_len(bar) * g * 0.5)
+
+    def _bar_window(self, bar, led, img_w, img_h, cfg):
+        """**一条灯条自己**的小窗：margin 按它自己的长度给（与整块板的跨度无关）。
+
+        合窗必须同时盖住两条灯条 + 中间空白 + 转动后的外接矩形变化，所以尺寸被
+        "板跨度"绑住；单条窗只需盖住它自己 —— 板转多少度都不影响这个窗口够不够。
+        """
+        m = int(cfg.armor_bar_margin_k * bar_len(bar)) + self._grow_pad(led, bar)
+        if m < cfg.armor_bar_margin_min:
+            m = cfg.armor_bar_margin_min
+        elif m > cfg.armor_bar_margin_max + self._grow_pad(led, bar):
+            m = cfg.armor_bar_margin_max + self._grow_pad(led, bar)
+        w = intersect_roi((bar.x - m, bar.y - m, bar.w + 2 * m, bar.h + 2 * m),
+                          self._reach_box(led, cfg))
+        if w is None:
+            return None
+        # 地板用"margin 下限"（8px）而不是 roi_min_side（24px）：后者是给**绿灯/整块窗**
+        # 定的（太小扫了没意义），拿它卡单条窗会**静默禁用**这个功能 ——
+        # 实测 r=20（刚过 ARMOR_PER_BAR_R）时窗只有 54x22，被 24 的地板判成"没意义"，
+        # 于是每帧都悄悄退回合窗。C++ 侧本来就是 8，这里对齐。
+        return clamp_roi(w, img_w, img_h, int(cfg.armor_bar_margin_min))
+
+    def _union_window(self, full_roi, led, img_w, img_h, cfg):
+        """合窗（远距离 / 首次 / 单条窗没建起来）：上一对灯条周围一个窗，与整块取交。
+
+        margin 按**灯条长度**给，不再按"整个对的尺寸×0.8" —— 后者在近距离会开出
+        十几万像素的窗口（按对尺寸 0.8 倍算过：128880px vs 35280px）。
         """
         if self.a is None or self.b is None:
             return full_roi
@@ -995,12 +1217,74 @@ class ArmorTracker(object):
         y1a, y1b = self.a.y + self.a.h, self.b.y + self.b.h
         x1 = x1a if x1a > x1b else x1b
         y1 = y1a if y1a > y1b else y1b
-        m = int(((x1 - x0) if (x1 - x0) > (y1 - y0) else (y1 - y0)) * cfg.armor_track_k)
+        side = bar_len(self.a)
+        side_b = bar_len(self.b)
+        if side_b > side:
+            side = side_b
+        pad = self._grow_pad(led, self.a if bar_len(self.a) > bar_len(self.b) else self.b)
+        m = int(cfg.armor_bar_margin_k * side) + pad
+        if m < cfg.armor_bar_margin_min:
+            m = cfg.armor_bar_margin_min
+        elif m > cfg.armor_bar_margin_max + pad:
+            m = cfg.armor_bar_margin_max + pad
         small = clamp_roi((x0 - m, y0 - m, (x1 - x0) + 2 * m, (y1 - y0) + 2 * m),
                           img_w, img_h, cfg.roi_min_side)
         if small is None:
             return full_roi
         return intersect_roi(small, full_roi) or full_roi
+
+    def plan(self, led, img_w, img_h, cfg):
+        '''本帧该怎么扫 —— 跟踪器只给**计划**，图像层由调用方执行。
+        （与仓库 C++ 里 TargetTracker::begin_frame → Plan → end_frame 同一套路：
+          跟踪器不认识像素，调用方按计划去扫，扫完再 end_frame 吃结果。）
+
+        返回 None，或 (mode, wins, gated)：
+          mode='detect'：wins = [整块窗]，gated=True
+                         → 调用方用 find_bars(img, win, cfg, gate)（全门限）
+          mode='track' ：wins = 每条灯条一个窗（或一个合窗），gated=False
+                         → 调用方用 find_blobs_raw(img, win, cfg)（只捞块）
+        返回 None = 这一帧没有可用窗口（绿灯锚出画）→ 调用方整帧跳过装甲板。
+
+        注意：单条窗只需"锚够得着"的范围，**不需要**"绿灯上方整块"那个窗 ——
+        所以算不出整块窗时照样能跟踪（旧写法把整块窗当前置条件，会为它掐掉整帧）。
+        '''
+        full = armor_roi_from_led(led, img_w, img_h, cfg)
+        if self.a is not None and self.b is not None:
+            if led_radius(led) >= cfg.armor_per_bar_r:
+                wins = []
+                for bar in (self.a, self.b):
+                    w = self._bar_window(bar, led, img_w, img_h, cfg)
+                    if w is None:
+                        break
+                    wins.append(w)
+                if len(wins) == 2:
+                    return ('track', wins, False)   # 单条窗：窗本身就是区域门限
+            if full is not None:
+                return ('track', [self._union_window(full, led, img_w, img_h, cfg)], False)
+        if full is None:
+            return None
+        return ('detect', [full], True)
+
+    def search_windows(self, full_roi, led, img_w, img_h, cfg):
+        """本帧该扫**哪些**窗（返回 1~2 个）。
+
+        绿灯够大（半径 >= ARMOR_PER_BAR_R）且已在跟踪 → 两条灯条各一个小窗：
+        窗口只需盖住自己，与板跨度无关，斜到多少度都不会"包不住"。
+        远距离（灯条只有几像素，单条窗太小不可靠）→ 还是合窗。
+        任一条的单条窗建不起来 → 整帧退回合窗（宁可多扫，不可漏）。
+        """
+        if self.a is None or self.b is None:
+            return [full_roi]
+        if led_radius(led) < cfg.armor_per_bar_r:
+            return [self._union_window(full_roi, led, img_w, img_h, cfg)]
+        wins = []
+        for bar in (self.a, self.b):
+            w = self._bar_window(bar, led, img_w, img_h, cfg)
+            if w is not None:
+                wins.append(w)
+        if len(wins) < 2:
+            return [self._union_window(full_roi, led, img_w, img_h, cfg)]
+        return wins
 
     def _assoc(self, bars, ref, cfg):
         """在候选里找 ref 的同一条灯条：位置和尺寸都在容差内，取中心最近的那个。"""
@@ -1025,36 +1309,57 @@ class ArmorTracker(object):
                 found = b
         return found
 
-    def update(self, bars, cfg, led=None, s=0):
-        """喂本帧灯条 → ((bar_a, bar_b, (cx,cy)) 或 None, held_age)。
+    def update(self, win_bars, mode, cfg, led=None, s=0):
+        '''喂本帧捞到的块（**按窗分组**，与 plan() 的 wins 一一对应）
+        → ((bar_a, bar_b, (cx,cy)) 或 None, held_age)。
 
-        led/s 只传给重选路径（pick_armor 的刚性几何先验）；关联/保持路径不再筛
-        —— 那一对在 detect 时已经过关了，跟踪期间再筛一遍只会让它更容易掉。
+        mode='track'：**只认亲**（位置 + 尺寸容差），一条形状判据都不做。
+          判定"还是同一个目标"靠的就是**在它自己的窗里连续变化**：
+          位置容差挡住"跳到别处"，尺寸容差挡住"换了个大小的东西"。
+          所以这里不算 L/t/tilt、不查长度/长宽比/填充率/圆度；反解只对
+          **认到的那两条**做（端点要用 L 和主轴，见 paired_ends）。
+          `same_body`（板心到灯心的径向距离）保留，但只当**释放触发**：
+          一旦认到的东西跑到锚够不着的地方，就记 miss 而不是静默返回一个坏中心，
+          连续超 ARMOR_HOLD 帧就退回 detect 重捕。
+        mode='detect'：全门限。is_bar 已由调用方（find_bars）做过，
+          这里做 O(n²) 配对 + 刚性先验，然后锁上。
+
+        led/s 只给 detect 的配对路径用（pick_armor 的刚性几何先验）。
 
         held_age = 0：本帧实测（可以用作"新测量"）。
-        held_age > 0：这次是保持的旧中心，已经连续丢了这么多帧（上层要区别对待）。
-        """
-        if self.a is not None and self.b is not None:
-            na = self._assoc(bars, self.a, cfg)
-            nb = self._assoc(bars, self.b, cfg)
+        held_age > 0：这是保持的旧中心，已经连续丢了这么多帧（上层要区别对待）。
+        '''
+        if mode == 'track':
+            if self.a is None or self.b is None or self.c is None:
+                return None, 0
+            if len(win_bars) == 2:
+                na = self._assoc(win_bars[0], self.a, cfg)   # 各窗各认各的
+                nb = self._assoc(win_bars[1], self.b, cfg)
+            else:
+                pool = win_bars[0] if win_bars else []
+                na = self._assoc(pool, self.a, cfg)
+                nb = self._assoc(pool, self.b, cfg)
             if na is not None and nb is not None and na is not nb:
-                c = armor_center(na, nb, cfg)
-                if c is not None:
+                c = armor_center(na, nb, cfg)                # 端点用反解（只算这两条）
+                if c is not None and same_body(cfg, led, c[0], c[1]):
                     self.a, self.b, self.c = na, nb, c
                     self.age = 0
+                    self.r_last = led_radius(led)
                     return (na, nb, c), 0
-            self.age += 1                       # 规则 B：先保持
+            self.age += 1                                    # 认不到 → 记 miss
             if self.age <= cfg.armor_hold:
                 return (self.a, self.b, self.c), self.age
-            self.reset()                        # 保持到期 → 放弃这一对，重新 detect
+            self.reset()                                     # 超时 → 退回 detect
+            return None, 0
 
-        r = pick_armor(bars, cfg, led, s)       # 规则 A 入口：没有任何跟踪状态才重选
+        bars = win_bars[0] if win_bars else []               # detect：全门限那条路
+        r = pick_armor(bars, cfg, led, s)
         if r is None:
             return None, 0
         self.a, self.b, self.c = r
         self.age = 0
+        self.r_last = led_radius(led)
         return r, 0
-
 
 # ============================================================================
 # §6 板端：曝光注入 + 主循环（hpp 之外）
@@ -1083,8 +1388,8 @@ def _fmt_bar(b):
     拿它调 BAR_ASPECT_MIN / BAR_FILL_PCT 会被误导 —— 真正参与判据的是 L、t。
     """
     L, t, tilt = b.shape()
-    return '%s L=%.1f t=%.1f tilt=%.0f° bbox(asp=%.1f fill=%d%%)' % (
-        _fmt_box(b), L, t, tilt,
+    return '%s%s L=%.1f t=%.1f tilt=%.0f° bbox(asp=%.1f fill=%d%%)' % (
+        _fmt_box(b), 'B' if b.border else '', L, t, tilt,
         (b.w if b.w > b.h else b.h) * 1.0 / (b.h if b.w > b.h else b.w),
         b.px * 100 // (b.w * b.h))
 
@@ -1143,16 +1448,27 @@ def main():
             # ---- 装甲板：detect-track ----
             # detect：窗口来自**本帧实测**的绿灯（绿灯没锁就一直不检测）；
             # track：上一对灯条周围开小窗（省时间），丢了 ARMOR_HOLD 帧才退回整块。
+            wins = None
             aroi = None
             bars = None
             armor = None
             held = 0
+            mode = '-'
             if led_fresh and locked:
-                aroi = armor_roi_from_led(led, w_img, h_img, cfg)
-                if aroi is not None:
-                    aroi = tracker.search_roi(aroi, w_img, h_img, cfg)
-                    bars = find_bars(img, aroi, cfg, gate)
-                    armor, held = tracker.update(bars, cfg, led, scale.s or 0)
+                # 跟踪器只给计划（mode/wins/gated），图像层由这里执行 ——
+                # detect 走全门限（find_bars），track 只捞块（find_blobs_raw，不做形状判据）
+                p = tracker.plan(led, w_img, h_img, cfg)
+                if p is not None:
+                    mode, wins, gated = p
+                    win_bars = []
+                    for w in wins:
+                        if gated:
+                            win_bars.append(find_bars(img, w, cfg, scale.gate(cfg)))
+                        else:
+                            win_bars.append(find_blobs_raw(img, w, cfg))
+                    aroi = _union_roi(wins)                          # 日志/画框用并集
+                    bars = win_bars[0]
+                    armor, held = tracker.update(win_bars, mode, cfg, led, scale.s or 0)
             t_d = time.ticks_us()
 
             # ---- 预览 ----
@@ -1172,9 +1488,10 @@ def main():
                     img.draw_rectangle(led.x, led.y, led.w, led.h,
                                        color=(255, 255, 0), thickness=1)
                     img.draw_cross(led.cx, led.cy, color=(255, 255, 0), size=5)
-                if aroi is not None:
-                    img.draw_rectangle(aroi[0], aroi[1], aroi[2], aroi[3],
-                                       color=(0, 0, 255), thickness=1)
+                if wins:
+                    for w in wins:      # 单条窗模式会画出两个框
+                        img.draw_rectangle(w[0], w[1], w[2], w[3],
+                                           color=(0, 0, 255), thickness=1)
                 if bars is not None:
                     for b in bars:
                         img.draw_rectangle(b.x, b.y, b.w, b.h,
@@ -1205,18 +1522,19 @@ def main():
                 fps = cfg.print_every * 1000.0 / dt
                 t_win = now
 
-                msg = '[%5d] %s led=%s 尺=%s' % (
+                msg = '[%5d] %s led=%s 尺=%s 半径=%s' % (
                     frame, 'LOCK' if locked else 'HUNT',
                     _fmt_box(led) if led is not None else '-',
-                    scale.s if scale.s is not None else '?')
+                    scale.s if scale.s is not None else '?',
+                    '%.0f' % led_radius(led) if led is not None else '?')
                 if led is None:
                     msg += '(连丢%d)' % led_lock.misses
 
                 if aroi is None:
                     msg += ' | armor: 无窗口(绿灯未锁定或窗口出画)'
                 elif armor is None:
-                    msg += ' | armor: MISS 窗口(%d,%d %dx%d) 灯条%d条' % (
-                        aroi[0], aroi[1], aroi[2], aroi[3], len(bars))
+                    msg += ' | armor: MISS %s/%s 窗口(%d,%d %dx%d) 块%d条' % (
+                        mode, _win_name(wins), aroi[0], aroi[1], aroi[2], aroi[3], len(bars))
                     for b in bars:
                         msg += ' ' + _fmt_bar(b)
                 elif held:
@@ -1229,11 +1547,11 @@ def main():
                     # 刚性几何比值：这几行的值就是"板上固定几何 ÷ 灯尺"，与距离无关。
                     # 拿它去填 §1 的 PLATE_*_PCT，先验才真正生效（不用统计，看几行就够）。
                     if scale.s:
-                        msg += ' 比值(条长/尺=%.2f,%.2f 间距/尺=%.2f 高/尺=%.2f 横偏/尺=%+.2f)' % (
+                        msg += ' %s/%s 比值(条长/尺=%.2f,%.2f 间距/尺=%.2f 离心/半径=%.2f)' % (
+                            mode, _win_name(wins),
                             bar_len(ba) * 1.0 / scale.s, bar_len(bb2) * 1.0 / scale.s,
                             pair_span(ba, bb2) * 1.0 / scale.s,
-                            (led.y - c[1]) * 1.0 / scale.s,
-                            (c[0] - led.cx) * 1.0 / scale.s)
+                            dist(c[0], c[1], led.cx, led.cy) / (scale.s * 0.5))
 
                 msg += ' | %.1f fps' % fps
                 if cfg.time_stages and acc[4]:
@@ -1382,7 +1700,7 @@ def _selftest_geometry():
               lk5.search_roi(640, 480, tc)), '得到 %s' % (lk5.search_roi(640, 480, tc),))
 
     # ⑥ 距离过远：不是同一块板
-    check('间距 400 > 4*长边 → 拒绝',
+    check('间距 400 > BAR_GAP_MAX_PCT×长边 → 拒绝',
           pick_armor([Box(100, 0, 4, 40, 160), Box(500, 0, 4, 40, 160)], cfg) is None)
 
     # ⑦ 近平行 / 共线：交点必须判为不存在（否则会算出个乱跳的中心）
@@ -1455,8 +1773,9 @@ def _selftest_geometry():
     A4, B4 = Box(440, 100, 6, 40, 240), Box(480, 100, 6, 40, 240)
     check('先验: 整块偏到灯心一侧太远(横偏/尺=4.5 > 2) → 拒绝',
           pick_armor([A4, B4], chk, led1, 40) is None)
-    check('先验: 灯尺没建立(s=0) → 放行(宽松兜底)',
-          plate_prior(chk, led1, 0, A2, B2, (320, 40)))
+    check('先验: 灯尺没建立(s=0) → 跳过"间距/尺"，但**径向判据照用**',
+          plate_prior(chk, led1, 0, A2, B2, (320, 100))
+          and not plate_prior(chk, led1, 0, A2, B2, (320, 40)))
 
     # ⑤f 斜灯条（"两条灯条平行但不竖直"）：包围盒口径会同时废掉长宽比与填充率
     sc_ = Config()
@@ -1479,9 +1798,9 @@ def _selftest_geometry():
     # 端点必须落在**灯条自己的轴**上（不是包围盒边的中点）
     ta_, tb_ = Box(300, 100, 24, 37, 200), Box(364, 100, 24, 37, 200)
     e_ = paired_ends(ta_, tb_, sc_)
-    dist = math.hypot(e_[0][0] - ta_.cx, e_[0][1] - ta_.cy)
-    check('斜灯条: 端点落在长轴上(离中心 = L/2 ≈ 20)', abs(dist - 20.0) < 1.5,
-          '得到 %.1f' % dist)
+    d_ = dist(e_[0][0], e_[0][1], ta_.cx, ta_.cy)
+    check('斜灯条: 端点落在长轴上(离中心 = L/2 ≈ 20)', abs(d_ - 20.0) < 1.5,
+          '得到 %.1f' % d_)
     c_ = armor_center(ta_, tb_, sc_)
     check('斜灯条: 板心 ≈ 两条灯条中心的中点', c_ is not None
           and abs(c_[0] - 344) <= 2 and abs(c_[1] - 118) <= 2, '得到 %s' % (c_,))
@@ -1492,47 +1811,118 @@ def _selftest_geometry():
           abs(fat_.shape()[2] - til_) < 15 and pair_score(ta_, fat_, sc_) is None,
           '得到 tilt=%.0f° t=%.1f' % (fat_.shape()[2], fat_.shape()[1]))
 
-    # ⑬ detect-track：静止画面下必须"稳"——不许丢、不许换人、不许假保持
+    # ⑬ detect-track：detect 才判门限，track 只认亲（按窗 + 位置/尺寸容差）
     A0 = Box(300, 100, 6, 40, 240)
     B0 = Box(340, 100, 6, 40, 240)
     FULL = (200, 100, 240, 160)
     tr = ArmorTracker(cfg)
-    check('detect 阶段: 搜索窗 = 绿灯上方整块',
-          tr.search_roi(FULL, 640, 480, cfg) == FULL)
-    r, held = tr.update([A0, B0], cfg)
+    led_small = Box(300, 200, 8, 8, 64)      # 半径 4 < ARMOR_PER_BAR_R → 合窗
+    led_big = Box(300, 200, 60, 60, 3600)    # 半径 30 >= ARMOR_PER_BAR_R → 单条窗
+    led_edge = Box(300, 200, 40, 40, 1600)   # 半径 20 == 门限（刚够）
+
+    # plan()：三种路径 + "算不出整块窗也能跟踪"
+    p0 = tr.plan(led_big, 640, 480, cfg)
+    check('plan(无跟踪状态): detect + 整块窗(=armor_roi_from_led 现算) + 要门限',
+          p0 is not None and p0[0] == 'detect' and p0[2] is True
+          and p0[1] == [armor_roi_from_led(led_big, 640, 480, cfg)],
+          '得到 %s' % (p0,))
+    r, held = tr.update([ [A0, B0] ], 'detect', cfg, led_big, 60)
     check('detect: 首次成对 → 出结果(held=0)', r is not None and held == 0)
+    p1 = tr.plan(led_big, 640, 480, cfg)
+    check('plan(跟踪中+灯大): track + 两条灯条各一个窗 + **不要门限**',
+          p1 is not None and p1[0] == 'track' and len(p1[1]) == 2 and p1[2] is False,
+          '得到 %s' % (p1,))
+    p2 = tr.plan(led_small, 640, 480, cfg)
+    check('plan(跟踪中+灯小): track + 一个合窗 + 不要门限',
+          p2 is not None and p2[0] == 'track' and len(p2[1]) == 1 and p2[2] is False,
+          '得到 %s' % (p2,))
+    led_top = Box(300, 2, 60, 60, 3600)      # 绿灯贴画面顶：算不出"上方整块"窗
+    p3 = tr.plan(led_top, 640, 480, cfg)
+    check('plan: 算不出整块窗时，单条窗路径照样能跟踪（旧写法会掐掉整帧）',
+          p3 is not None and p3[0] == 'track' and len(p3[1]) == 2, '得到 %s' % (p3,))
+
+    # **这一条是本轮的核心**：track 路径不再做"重选"和形状判据。
+    #   可断言的两件事：① pick_armor（O(n²) 配对 + 全部门限）在 track 期间 0 次；
+    #                  ② bar_shape（反解）在 track 期间只算认到的那 2 条/帧。
+    #   至于 is_bar：它由**调用方**在 find_bars 里调（plan 给了 gated=False 就改用
+    #   find_blobs_raw，见上面那条断言），所以这里数不到它 —— 那是设计如此。
+    n_pick = [0]
+    n_shape = [0]
+    orig_pick = globals()['pick_armor']
+    orig_shape = globals()['bar_shape']
+    def _cnt_pick(bars, cfg_, led=None, s=0):
+        n_pick[0] += 1
+        return orig_pick(bars, cfg_, led, s)
+    def _cnt_shape(w, h, a):
+        n_shape[0] += 1
+        return orig_shape(w, h, a)
+    globals()['pick_armor'] = _cnt_pick
+    globals()['bar_shape'] = _cnt_shape
+    try:
+        tr2 = ArmorTracker(cfg)
+        tr2.update([ [A0, B0] ], 'detect', cfg, led_big, 60)      # detect：会走 pick_armor
+        det_pick = n_pick[0]
+        n_pick[0] = 0
+        n_shape[0] = 0
+        for k in range(6):                                        # 静止 + ±1px 抖动
+            d = 1 if k % 2 else -1
+            tr2.update([ [Box(300 + d, 100, 6, 40, 240)],             # 单条窗：各窗各认
+                         [Box(340, 100 + d, 6, 40, 240)] ],
+                       'track', cfg, led_big, 60)
+        track_pick = n_pick[0]
+        track_shape = n_shape[0]
+    finally:
+        globals()['pick_armor'] = orig_pick
+        globals()['bar_shape'] = orig_shape
+    check('track: 不再"重选"（pick_armor 0 次；detect 那次 %d 次）' % det_pick,
+          det_pick > 0 and track_pick == 0, 'track 期间 pick_armor=%d' % track_pick)
+    check('track: 反解只对认到的两条算（6 帧 × 2 条 = 12 次）',
+          track_shape == 12, 'bar_shape 调用 %d 次' % track_shape)
+
     ok_track = True
     cs = []
     for k in range(6):                      # 静止画面 + ±1px 抖动 6 帧
         d = 1 if k % 2 else -1
-        rr, hh = tr.update([Box(300 + d, 100, 6, 40, 240),
-                            Box(340, 100 + d, 6, 40, 240)], cfg)
+        rr, hh = tr.update([ [Box(300 + d, 100, 6, 40, 240)],
+                             [Box(340, 100 + d, 6, 40, 240)] ],
+                           'track', cfg, led_big, 60)
         if rr is None or hh != 0:
             ok_track = False
         else:
             cs.append(rr[2][0])
     check('track: ±1px 抖动 6 帧 → 不丢、不保持、中心只差 1px',
           ok_track and cs and max(cs) - min(cs) <= 1, '得到 %s' % (cs,))
-    sr = tr.search_roi(FULL, 640, 480, cfg)
-    check('track: 搜索窗明显变小(省时间)',
-          sr is not None and sr[2] * sr[3] * 3 < FULL[2] * FULL[3], '得到 %s' % (sr,))
+    sr = tr.plan(led_small, 640, 480, cfg)[1]
+    check('track(远): 灯条太小时仍是**一个**合窗，且比整块小',
+          len(sr) == 1 and sr[0][2] * sr[0][3] * 3 < FULL[2] * FULL[3], '得到 %s' % (sr,))
+    sr2 = tr.plan(led_big, 640, 480, cfg)[1]
+    inside = True
+    for i, bar in enumerate((tr.a, tr.b)):
+        w = sr2[i]
+        if not (w[0] <= bar.x and w[1] <= bar.y
+                and w[0] + w[2] >= bar.x + bar.w and w[1] + w[3] >= bar.y + bar.h):
+            inside = False
+    check('track(近): 每个窗都完整包住自己那条灯条', inside, '得到 %s' % (sr2,))
+    area2 = sr2[0][2] * sr2[0][3] + sr2[1][2] * sr2[1][3]
+    check('track(近): 单条窗合计像素 < 整块', area2 < FULL[2] * FULL[3],
+          '得到 %d < %d' % (area2, FULL[2] * FULL[3]))
 
-    tr2 = ArmorTracker(cfg)                 # 另一对分数更高时不许换人
+    tr3 = ArmorTracker(cfg)                 # 另一对更"完美"时不许换人
     Aa, Bb = Box(300, 100, 6, 40, 240), Box(340, 100, 6, 36, 220)
-    tr2.update([Aa, Bb], cfg)
+    tr3.update([ [Aa, Bb] ], 'detect', cfg, led_big, 60)
     D1, D2 = Box(200, 250, 6, 40, 240), Box(240, 250, 6, 40, 240)
     naive = pick_armor([Aa, Bb, D1, D2], cfg)
-    r2, h2 = tr2.update([Aa, Bb, D1, D2], cfg)
-    check('track: 出现分数更高的另一对 → 不换人',
+    r2, h2 = tr3.update([ [Aa, Bb, D1, D2] ], 'track', cfg, led_big, 60)
+    check('track: 窗里出现另一对 → 仍认原来那两条(不换人)',
           naive is not None and naive[0].x == D1.x and r2 is not None and r2[0].x == Aa.x,
           '无状态会选 x=%d，跟踪仍用 x=%d' % (naive[0].x, r2[0].x))
 
     if cfg.armor_hold >= 1:                 # 保持 → 到期释放
-        tr3 = ArmorTracker(cfg)
-        tr3.update([A0, B0], cfg)
+        tr4 = ArmorTracker(cfg)
+        tr4.update([ [A0, B0] ], 'detect', cfg, led_big, 60)
         h_seq = []
         for k in range(cfg.armor_hold + 1):
-            rr, hh = tr3.update([], cfg)
+            rr, hh = tr4.update([ [] ], 'track', cfg, led_big, 60)   # 窗里什么都没有
             h_seq.append((rr is not None, hh))
         check('hold: 丢 %d 帧内保持(带 age 标记)' % cfg.armor_hold,
               all(ok for ok, _ in h_seq[:cfg.armor_hold])
@@ -1541,9 +1931,28 @@ def _selftest_geometry():
         check('hold: 超过 %d 帧释放(不无限保持)' % cfg.armor_hold,
               h_seq[cfg.armor_hold][0] is False, '得到 %s' % (h_seq,))
 
+    # same_body 在 track 里是"释放触发"：认到的东西跑到锚够不着 → 记 miss 而不是给坏中心
+    tr5 = ArmorTracker(cfg)
+    tr5.update([ [A0, B0] ], 'detect', cfg, led_big, 60)
+    far_pair = [Box(900, 100, 6, 40, 240), Box(940, 100, 6, 40, 240)]  # 离灯心很远
+    rr5, hh5 = tr5.update([ [far_pair[0]], [far_pair[1]] ], 'track', cfg, led_big, 60,
+                          )
+    check('track: 认到的东西跑出锚的够得着范围 → 记 miss(held>0)，不给坏中心',
+          rr5 is None or hh5 > 0, '得到 held=%d' % hh5)
+
+    # 径向判据：板心离灯心太远 → 不是同一个整体
+    led_n = Box(300, 200, 60, 60, 3600)      # 半径 30 → NEAR_K(8) × 30 = 240px
+    check('同一个整体: 板心在灯心旁 40px → 通过', same_body(cfg, led_n, 340, 200))
+    check('同一个整体: 板心在灯心旁 400px → 拒绝', not same_body(cfg, led_n, 700, 200))
+    check('同一个整体: 半径没建立 → 放行', same_body(cfg, Box(0, 0, 0, 0, 0), 700, 200))
+    check('同一个整体: 斜着偏（对角线）也按距离算，不受方向影响',
+          same_body(cfg, led_n, 300 + 200, 200 + 200) is False      # 283px > 240
+          and same_body(cfg, led_n, 300 + 100, 200 + 100) is True)  # 141px < 240
+
     tr4 = ArmorTracker(cfg)                 # 关联容差：整体挪太远 → 不认领
-    tr4.update([A0, B0], cfg)
-    r4, h4 = tr4.update([Box(300, 200, 6, 40, 240), Box(340, 200, 6, 40, 240)], cfg)
+    tr4.update([[A0, B0]], 'detect', cfg, led_big, 60)
+    r4, h4 = tr4.update([[Box(300, 200, 6, 40, 240), Box(340, 200, 6, 40, 240)]],
+                        'track', cfg, led_big, 60)
     check('assoc: 整体挪 100px → 不张冠李戴(先保持而不是认领)', h4 > 0,
           '得到 held=%d' % h4)
 

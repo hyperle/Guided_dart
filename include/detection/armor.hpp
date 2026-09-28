@@ -1,36 +1,30 @@
 #pragma once
 
 // ============================================================================
-// 装甲板识别（识别层第二路输出）：绿灯是锚，装甲板在它正上方那块窗口里。
+// §0 这个文件里为什么有两个类（职责边界）
 //
-// 目标特征：一对**平行的细长发光灯条**。把 A 条的上角点连到 B 条的下角点、
-// A 条的下角点连到 B 条的上角点，两条连线的交点就是装甲板中心
-// （这两条线正是那四个角点围成的四边形的两条对角线）。
+// 这两个类的名字只差一个字母（armer / armor），历史上是两个文件，很容易被误读成
+// "同一个东西的旧版与新版本"。它们**不是**版本关系，职责与代码几乎不重合：
 //
-// 接法（已接进现有识别链，见 pipeline.cpp）：
-//   DetectionPipeline::detect() 里 tracker_.end_frame() **之后**调用 ——
-//   那时同时拿得到 ① 绿灯锚（TrackOutput：cx/cy/radius/state）② 本帧二值图。
-//   窗口由锚现算（下沿贴绿灯上沿），只在窗口内做连通域，代价是几十微秒量级。
+//   §A StartupArmer   —— 绿灯（工况 1）的**启动确认器**：吃全图候选序列，
+//                        3 帧滑窗反向关联 + 三道门（命中数/位移平滑性/物理性），
+//                        确认成功后把整条轨迹交给卡尔曼初始化。
+//                        不认识像素、不认识窗口、不认识装甲板。
+//                        使用者：TargetTracker（tracker.hpp）——它每帧全图扫描时喂候选。
 //
-//   ┌ RoiBlobMeasurer::collect()  ← 复用现有游程+并查集（不新写连通域）
-//   │      ↓ 候选块（全部，不是"最好的一个"）
-//   │  is_bar()    ← 尺度自适应门限（灯尺的倍数 + 硬地板；远档改判圆度）
-//   │      ↓ 灯条
-//   │  pick_pair() ← 两两配对门限 + 刚性几何先验 + 交叉连线求交
-//   │      ↓
-//   └ ArmorTracker  ← 先关联（上一对还在就不换人）→ 短暂丢先保持（标 Held）→ 到期释放
+//   §B ArmorDetector  —— **装甲板**（识别层第二路输出）：吃二值图 + 绿灯锚，
+//                        在窗口内做连通域 → 灯条判据 → 配对 → 交叉连线求交，
+//                        并自带 detect/track 两种路径。
+//                        不认识候选序列表、不认识滑窗、不认识卡尔曼。
+//                        使用者：DetectionPipeline（pipeline.hpp）。
 //
-// 与 MicroPython 版（tools/armor_detect_k230.py）的三处差异，都是"用 C++ 该有的写法"：
-//   ① 不重复实现绿灯的锁：仓库 TargetTracker 已有 启动/跟踪/丢失 + 3 帧滑窗确认 +
-//      尺度自适应卡尔曼，直接用它的输出当锚，不再维护第二套绿灯状态机；
-//   ② 远档的形状判据不是"整条跳过"，而是改用**与尺度无关**的圆度
-//      （types.hpp::roundness_from_moments）—— 3px 的灯条照样能判"不像圆"；
-//   ③ 几何全整数、无浮点；夹角门限改用两次 sqrt 的整数百分比比较，避免
-//      MicroPython 版的 10000·d² 在 int64 上溢出（d 可达 3.4e7 → 1.1e19）。
+// 为什么放在一个文件：名字撞车只需一个文件就不再有"哪个是最新的"这个问题；
+// 但**两个类互不引用、不共享状态、不共享基类**（不是 is-a 关系，硬造父类只会
+// 得到互相泄漏的抽象）。文件的物理组织 = 下面 §A / §B 两段，各自的注释、依赖、
+// 测试都分开：§A 的实现在 armor.cpp，§B 全在头文件里（可直接拿去单测）。
 //
-// 门限随距离变：灯尺 s = 2·r（r 是跟踪层给的等效半径）。
-//   s=4px（远，灯条 3×1px）→ 门限落到地板 (len 2..32, px>=2)
-//   s=100px（近，灯条 140×14）→ 门限自动长到 (20..800, px>=10)
+// 合并的代价（知情选择）：本文件被 tracker.hpp 间接包含，于是绿灯那条链编译时
+// 也会连带编译 blob_measure（§B 需要它的 BlobInfo）。运行期没有任何交叉。
 // ============================================================================
 
 #include <cmath>
@@ -42,6 +36,69 @@
 #include "detection/types.hpp"
 
 namespace dart::detection {
+
+// ============================================================================
+// §A StartupArmer —— 绿灯启动确认器（实现在 armor.cpp）
+// ============================================================================
+
+// 每帧最多缓存多少个候选参与关联（扫描器 Top-K 上限 64，但滑窗里没必要全留）
+constexpr uint32_t kArmMaxPerFrame = 16;
+
+class StartupArmer {
+public:
+    struct Confirmation {
+        bool           ok = false;
+        LightCandidate cand{};   // 确认后的目标（位置/尺度取最新一帧，continuity 已填）
+        uint32_t       hits = 0; // 滑窗内关联上的帧数
+        float          travel_px = 0.0f;    // 首末帧直线距离
+        float          max_accel_px = 0.0f; // 帧间位移差的最大模（平滑性指标）
+        float          radius_rate = 0.0f;  // 尺度变化率（px/s）
+
+        // 整条轨迹（时间升序：旧 → 新），交给 ScaleAwareKalman::init_from_track
+        LightCandidate chain[kArmMaxWindow]{};
+        uint64_t       times_us[kArmMaxWindow]{};
+        size_t         n = 0;
+    };
+
+    explicit StartupArmer(const ArmConfig &cfg);
+
+    void reset();
+
+    // 推入本帧全图候选（按 score 降序最好，内部会再排一次保证确定性），
+    // 返回本帧的确认结果。窗口没填满时 ok 恒为 false。
+    Confirmation push(uint64_t mono_us, const LightCandidate *cands, size_t n);
+
+    uint32_t window() const { return cfg_.window; }
+
+    // 本帧被否掉的候选个数（≈ 随机闪烁坏点计数，写进状态行做取证）
+    uint32_t last_reject() const { return last_reject_; }
+    // 本帧被跳过的**贴画面边**候选个数（与"拒闪"分开统计：那是被边界切掉的块，
+    // 不是闪烁坏点。两者混在一起会让状态行误导调参 —— round12 的教训）
+    uint32_t last_border_skip() const { return last_border_skip_; }
+    // 本帧是否做过确认尝试（窗口填满后才是 true）
+    bool     ready() const { return filled_ >= cfg_.window; }
+
+private:
+    struct Slot {
+        uint64_t       mono_us = 0;
+        uint32_t       n = 0;
+        LightCandidate cands[kArmMaxPerFrame]{};
+    };
+
+    const Slot &at_lag(uint32_t lag) const; // lag=0 最新
+
+    ArmConfig cfg_;
+    Slot      ring_[kArmMaxWindow];
+    uint32_t  head_ = 0;   // 最新一帧所在下标
+    uint32_t  filled_ = 0; // 已填入的帧数（<= window）
+    uint32_t  last_reject_ = 0;
+    uint32_t  last_border_skip_ = 0;
+};
+
+
+// ============================================================================
+// §B ArmorDetector —— 装甲板识别（全在这一个头文件里，可直接单测）
+// ============================================================================
 
 class ArmorDetector {
 public:
@@ -55,6 +112,7 @@ public:
         age_ = 0;
         scale_s_ = 0;
         ds_ = 0.0f;
+        r_last_ = 0.0f;
         trace_ = Trace{};
     }
 
@@ -78,26 +136,59 @@ public:
         trace_.scale = s;
         trace_.far = (static_cast<float>(s) < cfg_.tiny_px);
 
-        // 2) 本帧扫哪里：跟踪态只扫上一对灯条周围（省时间），否则扫"绿灯上方整块"
+        // 2) 本帧扫哪里：
+        //    · 首次/重捕 → "绿灯上方整块"
+        //    · 跟踪中且绿灯够大 → **每条灯条各一个小窗**（只需盖住它自己，与板跨度无关）
+        //    · 跟踪中但目标还小 → 一个合窗
         RoiWindow full{};
         if (!led_window(bin, led, &full))
             return;
-        RoiWindow win = track_window(full);
-        trace_.window_px = static_cast<uint32_t>(win.pixels());
+        RoiWindow         wins[2];
+        const uint32_t    nwin = search_windows(full, led, bin, wins);
+        trace_.windows = static_cast<uint8_t>(nwin);
 
-        // 3) 连通域（复用现有游程+并查集）+ 灯条判据
-        const uint32_t nblob = meas_.collect(bin, win, bar_px_min(s), blobs_, kArmorMaxBars);
-        trace_.blobs = nblob;
-        uint32_t nbar = 0;
-        for (uint32_t i = 0; i < nblob; ++i) {
-            Bar bar;
-            if (!as_bar(blobs_[i], s, &bar)) {
-                ++trace_.rejected;
-                continue;
-            }
-            bars_[nbar++] = bar;
+        const uint32_t pxmin = bar_px_min(s);
+
+        // 3) **track 优先**：已有跟踪状态 → 只"认亲"，一条形状判据都不做。
+        //    判定"还是同一个目标"靠的就是"在它自己的窗里连续变化"：
+        //    位置容差挡住跳到别处、尺寸容差挡住换了个大小的东西。
+        //    （这是 detect-track 的分工：门限只在 detect 需要，track 只认。）
+        if (have_pair_ && track_step(bin, wins, nwin, led, pxmin, out)) {
+            trace_.cost_us = static_cast<uint32_t>(now_us - t0); // track 路径也要记耗时
+            return;
         }
+
+        // 4) detect：全门限（as_bar 长度/长宽比/填充率/圆度）+ O(n²) 配对 + 刚性先验
+        //    （走到这里说明：没有跟踪状态，或者 track 认亲失败且保持到期）
+        trace_.window_px = 0;
+        trace_.blobs = 0;
+        trace_.rejected = 0;
+        uint32_t nbar = 0, nblob_total = 0, px_total = 0;
+        for (uint32_t k = 0; k < nwin; ++k) {
+            px_total += static_cast<uint32_t>(wins[k].pixels());
+            const uint32_t nblob = meas_.collect(bin, wins[k], pxmin, blobs_, kArmorMaxBars);
+            nblob_total += nblob;
+            for (uint32_t i = 0; i < nblob && nbar < kArmorMaxBars; ++i) {
+                Bar bar;
+                if (!as_bar(blobs_[i], s, &bar)) {
+                    ++trace_.rejected;
+                    continue;
+                }
+                // 两个窗万一重叠，同一条灯条会被带出来两次 → 按包围盒去重
+                // （不去重也不会配错：两条"同一条灯条"的间距为 0，会被配对门限挡掉，
+                //   但白算一遍不划算，而且会把候选数灌水）
+                bool dup = false;
+                for (uint32_t j = 0; j < nbar; ++j)
+                    if (bars_[j].x == bar.x && bars_[j].y == bar.y && bars_[j].w == bar.w &&
+                        bars_[j].h == bar.h)
+                        dup = true;
+                if (!dup)
+                    bars_[nbar++] = bar;
+            }
+        }
+        trace_.blobs = nblob_total;
         trace_.bars = nbar;
+        trace_.window_px = px_total;
 
         // 4) 检测-跟踪
         const bool ok = step(bars_, nbar, led, s, out);
@@ -105,7 +196,7 @@ public:
         trace_.rejected_prior = prior_reject_;
         trace_.cost_us = static_cast<uint32_t>(now_us - t0);
         (void)ok;
-        fill_window(out, win);
+        fill_window(out, wins, nwin);
     }
 
     // 板端调参用（对齐 DetectionStats / LightScanner::Trace 的口径）
@@ -118,7 +209,10 @@ public:
         uint32_t pairs = 0;        // 通过配对门限的灯条对数
         uint32_t rejected = 0;     // 被灯条判据否掉的块数
         uint32_t rejected_prior = 0; // 被刚性几何先验否掉的对数
-        uint32_t window_px = 0;    // 本帧实际扫的窗口像素数（ROI 效率）
+        uint32_t window_px = 0;    // 本帧实际扫的**合计**窗口像素数（ROI 效率：单条窗是 2 个之和）
+        uint8_t  windows = 0;      // 本帧开了几个窗（1 = 合窗，2 = 每条灯条各一个）
+        uint8_t  mode = 0;         // 0 = detect（全门限；首次/重捕），1 = track（只认亲）
+        uint8_t  assoc_fail = 0;   // 1 = 本帧认亲失败（没认到 / 跑出锚的够得着范围）
         uint32_t cost_us = 0;
     };
     const Trace &last_trace() const { return trace_; }
@@ -226,6 +320,19 @@ public:
         return line_intersection(a0x, a0y, b1x, b1y, a1x, a1y, b0x, b0y, min_sin, cx, cy);
     }
 
+    // 板心与绿灯是不是同一个整体：径向距离 < near_k × 半径（平方比较，省开方）
+    static bool same_body(const ArmorConfig &cfg, const TrackOutput &led, int32_t cx, int32_t cy) {
+        const float r = led.radius;
+        if (!(r > 0.0f))
+            return true; // 半径没建立：没有可比的基准 → 放行
+        const float dx = static_cast<float>(cx) - led.cx;
+        const float dy = static_cast<float>(cy) - led.cy;
+        float       lim = cfg.near_k * r;
+        if (lim < cfg.near_min_px)
+            lim = cfg.near_min_px; // 小半径下按"半径倍数"算会被量化噪声判死（见 ArmorConfig）
+        return dx * dx + dy * dy <= lim * lim;
+    }
+
     // 两条灯条中心在"垂直于长轴"方向上的距离 ∝ 灯尺（板上间距是固定的）
     static int32_t pair_span(const Bar &a, const Bar &b) {
         return a.h >= a.w ? abs_i(a.cx() - b.cx()) : abs_i(a.cy() - b.cy());
@@ -289,6 +396,28 @@ private:
     // ---- 灯条判据（尺度自适应）----
     // 近档（长边 ≥ tiny_px）：长宽比 + 填充率可信，照用。
     // 远档：几个像素的"长宽比"是量化噪声 → 改判与尺度无关的圆度（灯条不像圆）。
+    // 只填字段，不做任何判据（track 阶段的"认亲"用它：位置 + 尺寸容差就是全部判据）
+    static void fill_bar(const RoiBlobMeasurer::BlobInfo &b, Bar *out) {
+        const int32_t w = static_cast<int32_t>(b.x1) - b.x0 + 1;
+        const int32_t h = static_cast<int32_t>(b.y1) - b.y0 + 1;
+        out->x = b.x0;
+        out->y = b.y0;
+        out->w = static_cast<int16_t>(w);
+        out->h = static_cast<int16_t>(h);
+        out->px = b.area;
+        out->border = b.border;
+        out->theta = b.theta;
+        if (b.len_major > 0.0f && b.len_minor > 0.0f) {
+            out->len = b.len_major;
+            out->thick = b.len_minor;
+        } else {
+            out->len = static_cast<float>(w > h ? w : h);
+            out->thick = static_cast<float>(w > h ? h : w);
+            out->theta = (h >= w) ? 1.5707963267948966f : 0.0f;
+        }
+    }
+
+    // detect 阶段的形状判据（track 阶段**不进这里**）
     bool as_bar(const RoiBlobMeasurer::BlobInfo &b, int32_t s, Bar *out) const {
         const int32_t w = static_cast<int32_t>(b.x1) - b.x0 + 1;
         const int32_t h = static_cast<int32_t>(b.y1) - b.y0 + 1;
@@ -392,18 +521,16 @@ private:
     // 所以远档形状判据全不可信时，这是唯一还在工作的判据。
     bool prior_ok(const TrackOutput &led, int32_t s, const Bar &a, const Bar &b,
                   int32_t cx, int32_t cy) const {
+        // ① 是不是**同一个整体**：板心到灯心的径向距离 < near_k × 绿灯半径。
+        //    用径向（不是矩形框）：距离与倾角无关，板斜着转也不会把真目标切掉。
+        if (!same_body(cfg_, led, cx, cy))
+            return false;
         if (s <= 0)
-            return true; // 灯尺还没建立：没有可比的基准 → 放行
+            return true; // 灯尺没建立：只剩①可比
+        // ② 板的**尺寸**对不对：两灯条间距 ∝ 灯尺（板上间距是固定的）
         const float fs = static_cast<float>(s);
         const float span = static_cast<float>(pair_span(a, b));
-        const float up = static_cast<float>(led.cy) - static_cast<float>(led.radius) -
-                         static_cast<float>(cy); // 板心在绿灯上沿之上为正
-        const float offx = static_cast<float>(abs_i(cx - static_cast<int32_t>(led.cx + 0.5f)));
         if (span < cfg_.span_lo_k * fs || span > cfg_.span_hi_k * fs)
-            return false;
-        if (up < cfg_.up_lo_k * fs || up > cfg_.up_hi_k * fs)
-            return false;
-        if (offx > cfg_.offx_k * fs)
             return false;
         return true;
     }
@@ -424,9 +551,66 @@ private:
         return clamp_window(x, y, rw, rh, f.width, f.height, cfg_.roi_min_side, win);
     }
 
-    // 跟踪态：只在上一对灯条周围开小窗，并与"绿灯上方整块"取交 ——
-    // 一个错的跟踪状态不能把搜索带到画面别处去。
-    RoiWindow track_window(const RoiWindow &full) const {
+    // margin 统一口径：**按单条灯条长度**给，并封顶。
+    // 原来按"整个对的尺寸 × 0.8"给：近距离一个窗就十几万像素（128880 vs 35280）。
+    int32_t bar_margin(float bar_len_px, int32_t pad) const {
+        float m = cfg_.bar_margin_k * bar_len_px;
+        if (m < cfg_.bar_margin_min)
+            m = cfg_.bar_margin_min;
+        else if (m > cfg_.bar_margin_max)
+            m = cfg_.bar_margin_max;
+        return static_cast<int32_t>(m) + pad;
+    }
+
+    // 尺度增长补偿：工况是**逐渐接近**，30fps 下目标每帧能长 10~35%。
+    // 窗口是按"上次采到的那条灯条"开的，不补偿的话这一帧目标就顶出窗外 → 被切。
+    // 实测（每帧 ×1.35 的接近序列）：量到的灯条长度只有真值的 0.58；补偿后 0.86。
+    int32_t grow_pad(const TrackOutput &led, float bar_len_px) const {
+        if (r_last_ <= 0.0f || !(led.radius > r_last_))
+            return 0;
+        return static_cast<int32_t>(bar_len_px * (led.radius / r_last_ - 1.0f) * 0.5f);
+    }
+
+    // 锚的"够得着"范围：[灯心 ± near_k·r] 的外接方框。
+    // 单条窗**不再**被"绿灯上方整块"裁剪（那正是某些角度包不住装甲板的原因），
+    // 安全性改由这条径向范围提供：窗口可以跟着灯条走，但不许跑出这个范围。
+    bool reach_box(const TrackOutput &led, const GrayFrame &f, RoiWindow *out) const {
+        const float half = cfg_.near_k * led.radius;
+        return clamp_window(led.cx - half, led.cy - half, half * 2.0f, half * 2.0f, f.width,
+                            f.height, 4.0f, out);
+    }
+
+    // 一条灯条自己的小窗：只需盖住它自己 → 板转多少度都不影响这个窗口够不够
+    bool bar_window(const Bar &bar, const TrackOutput &led, const RoiWindow &reach,
+                    const GrayFrame &f, RoiWindow *out) const {
+        const int32_t m = bar_margin(bar.len, grow_pad(led, bar.len));
+        const int32_t x = bar.x - m, y = bar.y - m;
+        const int32_t w = bar.w + 2 * m, h = bar.h + 2 * m;
+        // 与"够得着"范围取交（都是闭区间外的开区间表示：x..x+w-1）
+        int32_t rx = x, ry = y, rw = w, rh = h;
+        if (rx < static_cast<int32_t>(reach.x)) {
+            rw -= (static_cast<int32_t>(reach.x) - rx);
+            rx = static_cast<int32_t>(reach.x);
+        }
+        if (ry < static_cast<int32_t>(reach.y)) {
+            rh -= (static_cast<int32_t>(reach.y) - ry);
+            ry = static_cast<int32_t>(reach.y);
+        }
+        const int32_t rx1 = static_cast<int32_t>(reach.right());
+        const int32_t ry1 = static_cast<int32_t>(reach.bottom());
+        if (rx + rw > rx1)
+            rw = rx1 - rx;
+        if (ry + rh > ry1)
+            rh = ry1 - ry;
+        if (rw < 8 || rh < 8)
+            return false;
+        return clamp_window(static_cast<float>(rx), static_cast<float>(ry),
+                            static_cast<float>(rw), static_cast<float>(rh), f.width, f.height,
+                            8.0f, out);
+    }
+
+    // 合窗（远距离 / 首次 / 单条窗没建起来）：一个窗罩住上一对灯条，与整块取交。
+    RoiWindow union_window(const RoiWindow &full, const TrackOutput &led) const {
         if (!have_pair_)
             return full;
         const int32_t x0 = a_.x < b_.x ? a_.x : b_.x;
@@ -435,8 +619,8 @@ private:
         const int32_t ay1 = a_.y + a_.h, by1 = b_.y + b_.h;
         const int32_t x1 = ax1 > bx1 ? ax1 : bx1;
         const int32_t y1 = ay1 > by1 ? ay1 : by1;
-        const int32_t side = (x1 - x0) > (y1 - y0) ? (x1 - x0) : (y1 - y0);
-        const int32_t m = static_cast<int32_t>(cfg_.track_k * static_cast<float>(side));
+        const float   side = a_.len > b_.len ? a_.len : b_.len;
+        const int32_t m = bar_margin(side, grow_pad(led, side));
         int32_t       sx = x0 - m, sy = y0 - m;
         int32_t       sw = (x1 - x0) + 2 * m, sh = (y1 - y0) + 2 * m;
         if (sx < static_cast<int32_t>(full.x)) {
@@ -462,6 +646,35 @@ private:
         w.h = static_cast<uint32_t>(sh);
         w.full_frame = false;
         return w;
+    }
+
+    // 本帧扫哪 1~2 个窗（detail 见 ArmorConfig 里那段说明）
+    uint32_t search_windows(const RoiWindow &full, const TrackOutput &led, const GrayFrame &f,
+                            RoiWindow *out) const {
+        out[0] = full;
+        if (!have_pair_)
+            return 1;
+        if (!(led.radius >= cfg_.per_bar_r)) { // 远距离：合窗（单条窗太小不可靠）
+            out[0] = union_window(full, led);
+            return 1;
+        }
+        RoiWindow reach{};
+        if (!reach_box(led, f, &reach)) {
+            out[0] = union_window(full, led);
+            return 1;
+        }
+        uint32_t n = 0;
+        const Bar *bars[2] = {&a_, &b_};
+        for (int i = 0; i < 2; ++i) {
+            RoiWindow w{};
+            if (bar_window(*bars[i], led, reach, f, &w))
+                out[n++] = w;
+        }
+        if (n < 2) { // 有窗建不起来 → 整帧退回合窗（宁可多扫，不可漏）
+            out[0] = union_window(full, led);
+            return 1;
+        }
+        return n;
     }
 
     static bool clamp_window(float x, float y, float w, float h, uint32_t fw, uint32_t fh,
@@ -492,6 +705,72 @@ private:
         return true;
     }
 
+    // ---- track：只认亲（不做形状判据）。返回 true = 本帧已经给出结果 ----
+    bool track_step(const GrayFrame &bin, const RoiWindow *wins, uint32_t nwin,
+                    const TrackOutput &led, uint32_t pxmin, ArmorTarget *out) {
+        Bar  na{}, nb{};
+        bool ok = false;
+        if (nwin == 2) { // 单条窗：每个窗里只认自己那条
+            bool a_ok = false, b_ok = false;
+            for (uint32_t k = 0; k < 2; ++k) {
+                trace_.window_px += static_cast<uint32_t>(wins[k].pixels());
+                const uint32_t n = meas_.collect(bin, wins[k], pxmin, blobs_, kArmorMaxBars);
+                trace_.blobs += n;
+                const Bar &ref = (k == 0) ? a_ : b_;
+                Bar        tmp{};
+                if (assoc(blobs_, n, ref, &tmp)) {
+                    if (k == 0) {
+                        na = tmp;
+                        a_ok = true;
+                    } else {
+                        nb = tmp;
+                        b_ok = true;
+                    }
+                }
+            }
+            ok = a_ok && b_ok;
+        } else { // 合窗：两条 incumbent 在同一个池里各认各的
+            trace_.window_px += static_cast<uint32_t>(wins[0].pixels());
+            const uint32_t n = meas_.collect(bin, wins[0], pxmin, blobs_, kArmorMaxBars);
+            trace_.blobs += n;
+            const bool a_ok = assoc(blobs_, n, a_, &na);
+            const bool b_ok = assoc(blobs_, n, b_, &nb);
+            ok = a_ok && b_ok && !(na.x == nb.x && na.y == nb.y && na.w == nb.w && na.h == nb.h);
+        }
+        if (ok) {
+            int32_t cx = 0, cy = 0;
+            if (armor_center(na, nb, cfg_.diag_min_sin, cfg_.flat_deg, &cx, &cy) &&
+                same_body(cfg_, led, cx, cy)) {
+                a_ = na;
+                b_ = nb;
+                c_[0] = cx;
+                c_[1] = cy;
+                age_ = 0;
+                r_last_ = led.radius;
+                trace_.mode = 1;
+                trace_.bars = 2;
+                *out = mk(ArmorTarget::Fresh, 0);
+                fill_window(out, wins, nwin);
+                return true; // cost_us 由 detect() 统一算
+            }
+        }
+        // 认不到（或认到的东西跑出锚的够得着范围）→ 记 miss，而不是静默给一个坏中心；
+        // 连续超过 hold 帧就释放这一对、退回 detect 重捕。
+        ++age_;
+        trace_.assoc_fail = 1;
+        if (age_ <= cfg_.hold) {
+            trace_.mode = 1;
+            *out = mk(ArmorTarget::Held, static_cast<uint8_t>(age_));
+            fill_window(out, wins, nwin);
+            return true;
+        }
+        a_ = Bar{};
+        b_ = Bar{};
+        have_pair_ = false;
+        age_ = 0;
+        return false; // 落回 detect
+    }
+
     // ---- 一帧判决：先关联（上一对还在就不换人），再保持，最后才重选 ----
     // 关联优先是"静止画面下结果乱跳"的正解：每帧从零重选时，两对分数接近就逐帧换人。
     // 保持（Held）只给旧中心、并打标记 —— 不是把旧值冒充成新测量。
@@ -510,6 +789,8 @@ private:
                 c_[0] = cx;
                 c_[1] = cy;
                 age_ = 0;
+                r_last_ = led.radius;   // 记下"这一对是在多大尺度下采到的"
+
                 *out = mk(ArmorTarget::Fresh, 0);
                 ++pair_count_;
                 return true;
@@ -561,8 +842,44 @@ private:
         c_[1] = best_cy;
         have_pair_ = true;
         age_ = 0;
+        r_last_ = led.radius;
+
         *out = mk(ArmorTarget::Fresh, 0);
         return true;
+    }
+
+    // track 阶段的"认亲"：在该窗捞到的块里找 ref 的同一条灯条。
+    // 判据只有位置与尺寸容差 —— 这就是"在它自己的窗里连续变化"这件事的全部内容：
+    //   位置容差挡住"跳到别处"，尺寸容差挡住"换了个大小的东西"。
+    // 形状判据（长度/长宽比/填充率/圆度）一个都不做：那是 detect 阶段
+    // "从零判断这是不是一条灯条"才需要的，track 阶段它只会让跟踪更容易掉。
+    bool assoc(const RoiBlobMeasurer::BlobInfo *blobs, uint32_t n, const Bar &ref,
+               Bar *out) const {
+        const float tx = cfg_.assoc_k * static_cast<float>(ref.w) > cfg_.assoc_min
+                             ? cfg_.assoc_k * static_cast<float>(ref.w)
+                             : cfg_.assoc_min;
+        const float ty = cfg_.assoc_k * static_cast<float>(ref.h) > cfg_.assoc_min
+                             ? cfg_.assoc_k * static_cast<float>(ref.h)
+                             : cfg_.assoc_min;
+        bool    found = false;
+        int64_t best = 0;
+        for (uint32_t i = 0; i < n; ++i) {
+            Bar b{};
+            fill_bar(blobs[i], &b);
+            if (static_cast<float>(abs_i(b.cx() - ref.cx())) > tx ||
+                static_cast<float>(abs_i(b.cy() - ref.cy())) > ty ||
+                static_cast<float>(abs_i(b.w - ref.w)) > tx ||
+                static_cast<float>(abs_i(b.h - ref.h)) > ty)
+                continue;
+            const int64_t dx = b.cx() - ref.cx(), dy = b.cy() - ref.cy();
+            const int64_t d2 = dx * dx + dy * dy;
+            if (!found || d2 < best) {
+                best = d2;
+                found = true;
+                *out = b;
+            }
+        }
+        return found;
     }
 
     // 在候选里找 ref 的同一条灯条：位置和尺寸都在容差内，取中心最近的那个。
@@ -605,11 +922,28 @@ private:
         t.b_len = static_cast<uint32_t>(b_.len + 0.5f);
         return t;
     }
-    static void fill_window(ArmorTarget *t, const RoiWindow &w) {
-        t->x0 = w.x;
-        t->y0 = w.y;
-        t->x1 = w.empty() ? w.x : w.right() - 1u;
-        t->y1 = w.empty() ? w.y : w.bottom() - 1u;
+    // 多窗 → 一个并集矩形（日志/CSV/画框用；逐窗明细在 Trace.windows 里）
+    static void fill_window(ArmorTarget *t, const RoiWindow *wins, uint32_t n) {
+        if (n == 0 || wins[0].empty())
+            return;
+        uint32_t x0 = wins[0].x, y0 = wins[0].y, x1 = wins[0].right() - 1u,
+                 y1 = wins[0].bottom() - 1u;
+        for (uint32_t i = 1; i < n; ++i) {
+            if (wins[i].empty())
+                continue;
+            if (wins[i].x < x0)
+                x0 = wins[i].x;
+            if (wins[i].y < y0)
+                y0 = wins[i].y;
+            if (wins[i].right() - 1u > x1)
+                x1 = wins[i].right() - 1u;
+            if (wins[i].bottom() - 1u > y1)
+                y1 = wins[i].bottom() - 1u;
+        }
+        t->x0 = x0;
+        t->y0 = y0;
+        t->x1 = x1;
+        t->y1 = y1;
     }
 
     ArmorConfig        cfg_;
@@ -622,6 +956,7 @@ private:
     uint8_t            age_ = 0;
     int32_t            scale_s_ = 0;
     float              ds_ = 0.0f;
+    float              r_last_ = 0.0f; // 上次采到那一对时的绿灯半径（算尺度增长用）
     uint32_t           pair_count_ = 0;
     uint32_t           prior_reject_ = 0;
     Trace              trace_{};

@@ -58,7 +58,7 @@
 |---|---|---|---|
 | `LightScanner` | `include/detection/light.hpp` + `src/detection/light.cpp` | 二值图 → 最亮 K 块亮斑（质心/面积/等效半径/包围盒） | 跟踪、滤波、日志 |
 | `RoiBlobMeasurer` | `include/detection/blob_measure.hpp` + `.cpp` | ROI 窗口内 → 一个测量 `(cx,cy,r)` + 质量 | 状态机、滤波 |
-| `StartupArmer` | `include/detection/armer.hpp` + `.cpp` | 候选序列 → "这是不是真目标"（3 帧滑窗） | 像素、ROI、滤波 |
+| `StartupArmer` | `include/detection/armor.hpp` §A + `armor.cpp` | 候选序列 → "这是不是真目标"（3 帧滑窗） | 像素、ROI、滤波 |
 | `ScaleAwareKalman` | `include/detection/kalman.hpp` + `.cpp` | 6 维状态估计 + 离群拒收 + 发散保护 | 像素、状态机 |
 | `LinearScaleNoiseModel` | 同上 | `R_scale(s)`：远→大、近→小 | 其它一切 |
 | `RoiPredictor` | `include/detection/roi_prediction.hpp` + `.cpp` | `(预测状态, 丢失帧数) → RoiWindow` | 像素、滤波 |

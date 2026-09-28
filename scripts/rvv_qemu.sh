@@ -42,7 +42,7 @@ set -x
     "${REPO_ROOT}/tests/rvv/rvv_selftest.cpp" \
     "${REPO_ROOT}/src/detection/light.cpp" \
     "${REPO_ROOT}/src/detection/blob_measure.cpp" \
-    "${REPO_ROOT}/src/detection/armer.cpp" \
+    "${REPO_ROOT}/src/detection/armor.cpp" \
     "${REPO_ROOT}/src/detection/kalman.cpp" \
     "${REPO_ROOT}/src/detection/roi_prediction.cpp" \
     "${REPO_ROOT}/src/detection/tracker.cpp" \

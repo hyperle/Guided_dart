@@ -287,10 +287,13 @@ void emit_det_status() {
     // 装甲板那一路（第二路输出）：锚=%d 远档=%d 灯尺=%d 块 %u 条 %u 对 %u 先验否 %u
     // 窗口 %uppx 耗时 %uus；mode: 0 无 / 1 本帧实测 / 2 保持(带年龄)
     const dart::ArmorTarget &at = g_det_armor_last;
-    log_line("装甲板: mode=%u(年龄%u) 板心=(%d,%d) 条长 %u/%u | 锚 %u 远档 %u 灯尺 %d "
-             "块 %u 条 %u 对 %u 先验否 %u 窗口 %u px 耗时 %u us\n",
+    log_line("装甲板: mode=%u(年龄%u) 板心=(%d,%d) 条长 %u/%u | %s 窗%u 认亲失败%u | "
+             "锚 %u 远档 %u 灯尺 %d 块 %u 条 %u 对 %u 先验否 %u 窗口 %u px 耗时 %u us\n",
              static_cast<unsigned>(at.mode), static_cast<unsigned>(at.held), at.cx, at.cy,
              static_cast<unsigned>(at.a_len), static_cast<unsigned>(at.b_len),
+             st.armor_trace.mode ? "track" : "detect",
+             static_cast<unsigned>(st.armor_trace.windows),
+             static_cast<unsigned>(st.armor_trace.assoc_fail),
              st.armor_trace.anchored ? 1u : 0u, st.armor_trace.far ? 1u : 0u,
              st.armor_trace.scale, st.armor_trace.blobs, st.armor_trace.bars,
              st.armor_trace.pairs, st.armor_trace.rejected_prior, st.armor_trace.window_px,

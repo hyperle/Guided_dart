@@ -225,19 +225,22 @@ int main() {
         sc2.rect(300, 100, 305, 159);
         sc2.rect(340, 100, 345, 159);
         const GrayFrame f2 = sc2.view();
-        bool all_fresh = true, shrinking = true;
-        uint32_t prev_px = det.last_trace().window_px;
+        bool     all_fresh = true;
+        bool     two_wins = true;
+        uint32_t prev_px = 0;
         for (int k = 0; k < 5; ++k) {
             const ArmorTarget t = run(det, f2, 323.0f, 260.0f, 30.0f);
             if (!t.found() || t.mode != ArmorTarget::Fresh)
                 all_fresh = false;
-            if (det.last_trace().window_px > prev_px)
-                shrinking = false;
+            if (det.last_trace().windows != 2)
+                two_wins = false;
             prev_px = det.last_trace().window_px;
         }
         check("静止 5 帧 → 全部 Fresh(不丢)", all_fresh);
-        check("跟踪态搜索窗比整块小(省时间)", shrinking && prev_px > 0,
-              "window_px=" + std::to_string(prev_px));
+        // 整块窗 = 3·2r × 2·2r（r=30 → 180×120 = 21600）；单条窗合计必须显著更小。
+        // 不去断言"逐帧单调不增"：跟踪稳定过程中灯条包围盒会小幅变化，窗随之微涨是正常的。
+        check("跟踪(近) → 两条灯条各一个窗，合计像素 < 整块的 1/3", two_wins && prev_px * 3 < 21600,
+              "windows=2 window_px=" + std::to_string(prev_px));
 
         // 灯条全消失 → 先 Held（带年龄），超过 hold 帧后转为 None
         Scene empty;
@@ -291,6 +294,148 @@ int main() {
         const ArmorTarget at3 = run(det, sc3.view(), 320.0f, led_y, r);
         check("厚度判据: 两条粗细差 5 倍 → 不成对", !at3.found(),
               "bars=" + std::to_string(det.last_trace().bars));
+    }
+
+    // ------------------------------------------------------------------
+    // 5c) 单条窗 vs 旧"绿灯上方整块"：旧窗会**切掉灯条**，连带把板心带偏
+    //     （这就是"某些角度搜索框包不住装甲板"的量化证据）
+    // ------------------------------------------------------------------
+    {
+        DetectionConfig cfg;
+        ArmorDetector   det(cfg.armor, cfg.measure);
+        const float     L = 120.0f, t = 10.0f, gap = 60.0f, cy_bar = 150.0f;
+        const float     r = 30.0f, led_y = 260.0f;   // 整块窗 = 180x120，下沿 230
+        Scene           sc;
+        sc.rot_rect(320.0f - gap * 0.5f, cy_bar, L, t, 0.0f);
+        sc.rot_rect(320.0f + gap * 0.5f, cy_bar, L, t, 0.0f);
+        // 第一帧只开"整块"窗：灯条（y 90..210）超出窗顶（y=110）→ 被切
+        const ArmorTarget first = run(det, sc.view(), 320.0f, led_y, r);
+        const uint32_t    len_first = first.a_len;
+        // 第二帧起切单条窗（灯条各一个窗，只受"够得着"范围和画面限制）
+        const ArmorTarget second = run(det, sc.view(), 320.0f, led_y, r);
+        char              extra[160];
+        std::snprintf(extra, sizeof(extra),
+                      "旧窗量到 %u(真值 %d) → 单条窗量到 %u | 窗数 %u→%u 像素 %u",
+                      len_first, static_cast<int>(L), second.a_len, 1u,
+                      static_cast<unsigned>(det.last_trace().windows),
+                      det.last_trace().window_px);
+        check("单条窗: 不再切灯条（旧窗量短、单条窗量到真长）",
+              first.found() && second.found() && len_first < L - 5 &&
+                  second.a_len >= static_cast<uint32_t>(L) - 3,
+              extra);
+        // 像素账（如实）：板（L120）跟整块窗（180x120）差不多大时，单条窗合计只是"不比它贵"
+        // —— 这一场景的收益是**正确**（不切灯条），不是省像素；板比窗口小时才是省像素
+        // （另一条用例：L40 → 3120px vs 21600px，6.9 倍）。
+        check("单条窗: 合计像素不比整块窗贵", det.last_trace().windows == 2 &&
+                                                 det.last_trace().window_px < 21600,
+              "window_px=" + std::to_string(det.last_trace().window_px));
+    }
+
+    // ------------------------------------------------------------------
+    // 5d) "同一个整体"径向判据：与倾角无关，且小半径下有像素地板
+    // ------------------------------------------------------------------
+    {
+        DetectionConfig cfg;
+        TrackOutput     led{};
+        led.found = true;
+        led.cx = 300.0f;
+        led.cy = 200.0f;
+        led.radius = 30.0f; // 限 = 8×30 = 240px
+        check("同一个整体: 板心在灯心旁 100px → 通过",
+              ArmorDetector::same_body(cfg.armor, led, 400, 200));
+        check("同一个整体: 板心在灯心旁 300px → 拒绝",
+              !ArmorDetector::same_body(cfg.armor, led, 600, 200));
+        check("同一个整体: 斜着偏也按距离算(不受方向/倾角影响)",
+              ArmorDetector::same_body(cfg.armor, led, 300 + 100, 200 + 100) &&
+                  !ArmorDetector::same_body(cfg.armor, led, 300 + 200, 200 + 200));
+        led.radius = 2.0f; // 8×2 = 16px < 地板 32px → 用地板
+        check("同一个整体: 小半径走像素地板(16px 的倍数会被量化噪声判死)",
+              ArmorDetector::same_body(cfg.armor, led, 300, 220)); // 20px < 32
+        check("同一个整体: 半径没建立 → 放行",
+              ArmorDetector::same_body(cfg.armor, TrackOutput{}, 600, 200));
+    }
+
+    // ------------------------------------------------------------------
+    // 5e) 尺度增长补偿：工况是"逐渐接近"，窗口要跟着长（不然灯条被切短）
+    // ------------------------------------------------------------------
+    {
+        DetectionConfig cfg;
+        ArmorDetector   det(cfg.armor, cfg.measure);
+        const float     deg = 35.0f, cy_bar = 150.0f;
+        float           r = 25.0f;
+        float           len_measured = 0.0f, len_true = 0.0f;
+        for (int k = 0; k < 6; ++k) {
+            Scene sc;
+            const float L = 0.9f * 2.0f * r; // 灯条长度 ∝ 灯尺（同一个尺度）
+            const float t = 0.1f * 2.0f * r;
+            const float gap = 1.1f * 2.0f * r;
+            sc.rot_rect(320.0f - gap * 0.5f, cy_bar, L, t, deg);
+            sc.rot_rect(320.0f + gap * 0.5f, cy_bar, L, t, deg);
+            const float led_y = cy_bar + 2.2f * 2.0f * r;
+            const ArmorTarget at = run(det, sc.view(), 320.0f, led_y, r);
+            if (at.found()) {
+                len_measured = static_cast<float>(at.a_len);
+                len_true = L;
+            }
+            r *= 1.35f; // 每帧 +35%：末端接近的真实量级（3m 处 20m/s @30fps）
+        }
+        char extra[128];
+        std::snprintf(extra, sizeof(extra), "量到 %.0f / 真值 %.0f = %.2f",
+                      static_cast<double>(len_measured), static_cast<double>(len_true),
+                      static_cast<double>(len_true > 0 ? len_measured / len_true : 0));
+        check("接近序列(每帧x1.35): 末帧灯条没被窗切掉(长度 >= 真值的 0.8)",
+              len_true > 0 && len_measured >= 0.8f * len_true, extra);
+    }
+
+    // ------------------------------------------------------------------
+    // 5f) detect-track 分工：detect 才判门限，track 只认亲（形状判据一个不做）
+    // ------------------------------------------------------------------
+    {
+        DetectionConfig cfg;
+        ArmorDetector   det(cfg.armor, cfg.measure);
+        const float     L = 60.0f, t = 6.0f, gap = 70.0f, cy_bar = 150.0f;
+        const float     r = 30.0f, led_y = 240.0f;
+        Scene           sc;
+        sc.rot_rect(320.0f - gap * 0.5f, cy_bar, L, t, 0.0f);
+        sc.rot_rect(320.0f + gap * 0.5f, cy_bar, L, t, 0.0f);
+        // 窗口里再放一个"形状不合格"的干扰块（as_bar 会否掉它）：
+        // detect 阶段它会被 shape 判据挡掉，track 阶段**根本不做 shape 判据** ——
+        // 用 trace.rejected 就能看出走的是哪条路。
+        sc.rect(300, 175, 339, 214); // 40x40 方块（圆度/长宽比都不像细长灯条）
+        const GrayFrame f = sc.view();
+
+        const ArmorTarget t1 = run(det, f, 320.0f, led_y, r);
+        check("detect: 首帧走全门限（有干扰块 → 被判掉）",
+              t1.found() && t1.mode == ArmorTarget::Fresh && det.last_trace().mode == 0 &&
+                  det.last_trace().rejected > 0,
+              "mode=" + std::to_string(det.last_trace().mode) +
+                  " rejected=" + std::to_string(det.last_trace().rejected));
+
+        int fresh = 0, track_mode = 0, rejected = 0;
+        for (int k = 0; k < 4; ++k) {
+            const ArmorTarget tk = run(det, f, 320.0f, led_y, r);
+            if (tk.found() && tk.mode == ArmorTarget::Fresh)
+                ++fresh;
+            if (det.last_trace().mode == 1)
+                ++track_mode;
+            rejected += static_cast<int>(det.last_trace().rejected);
+        }
+        check("track: 之后每帧都走 track（mode=1）且**形状判据 0 次**",
+              fresh == 4 && track_mode == 4 && rejected == 0,
+              "fresh=" + std::to_string(fresh) + " mode1=" + std::to_string(track_mode) +
+                  " rejected=" + std::to_string(rejected));
+
+        // 认不到 → 记 miss（assoc_fail），连续超过 hold 帧才退回 detect
+        Scene empty;
+        const GrayFrame fe = empty.view();
+        const ArmorTarget h1 = run(det, fe, 320.0f, led_y, r);
+        check("track: 窗里空了 → Held + assoc_fail（不是静默给坏中心）",
+              h1.found() && h1.mode == ArmorTarget::Held && det.last_trace().assoc_fail == 1);
+        ArmorTarget hN = h1;
+        for (uint32_t k = 0; k < cfg.armor.hold + 1; ++k)
+            hN = run(det, fe, 320.0f, led_y, r);
+        check("track: 保持到期 → 退回 detect（那帧 mode=0）", det.last_trace().mode == 0,
+              "mode=" + std::to_string(det.last_trace().mode));
     }
 
     // ------------------------------------------------------------------

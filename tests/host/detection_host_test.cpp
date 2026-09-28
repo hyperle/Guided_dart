@@ -26,7 +26,7 @@
 #include <random>
 #include <vector>
 
-#include "detection/armer.hpp"
+#include "detection/armor.hpp"
 #include "detection/blob_measure.hpp"
 #include "detection/kalman.hpp"
 #include "detection/linalg.hpp"
