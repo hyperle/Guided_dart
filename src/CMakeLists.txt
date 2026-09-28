@@ -28,6 +28,11 @@ add_executable(${APP_NAME}
     detection/roi_prediction.cpp
     detection/tracker.cpp
     detection/pipeline.cpp
+    detection/armor/armor_geometry.cpp
+    detection/armor/armor_scale.cpp
+    detection/armor/armor_rules.cpp
+    detection/armor/armor_windows.cpp
+    detection/armor/armor_detector.cpp
     control/flight_state_machine.cpp
     control/visual_outer_loop.cpp
     control/attitude_inner_loop.cpp

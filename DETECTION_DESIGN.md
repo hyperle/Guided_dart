@@ -58,7 +58,12 @@
 |---|---|---|---|
 | `LightScanner` | `include/detection/light.hpp` + `src/detection/light.cpp` | 二值图 → 最亮 K 块亮斑（质心/面积/等效半径/包围盒） | 跟踪、滤波、日志 |
 | `RoiBlobMeasurer` | `include/detection/blob_measure.hpp` + `.cpp` | ROI 窗口内 → 一个测量 `(cx,cy,r)` + 质量 | 状态机、滤波 |
-| `StartupArmer` | `include/detection/armor.hpp` §A + `armor.cpp` | 候选序列 → "这是不是真目标"（3 帧滑窗） | 像素、ROI、滤波 |
+| `StartupArmer` | `include/detection/armor.hpp` + `armor.cpp` | 候选序列 → "这是不是真目标"（3 帧滑窗） | 像素、ROI、滤波 |
+| `ArmorDetector` | `include/detection/armor/armor_detector.hpp` + `.cpp` | 二值图 + 绿灯锚 → 装甲板板心（detect/track 两路） | 候选序列表、滑窗、卡尔曼 |
+| `armor::` 几何 | `armor/armor_geometry.hpp` + `.cpp` | 灯条值类型 + 端点 / 线段求交 / 板心 / 间距（纯函数） | 像素、配置、状态 |
+| `armor::` 尺度门限 | `armor/armor_scale.hpp` + `.cpp` | 灯尺状态 → 灯条长度/像素门限 | 像素、块 |
+| `armor::` 判据 | `armor/armor_rules.hpp` + `.cpp` | 连通域 → 是不是灯条 / 两条像不像一块板 | 像素内存、状态 |
+| `armor::` 窗口 | `armor/armor_windows.hpp` + `.cpp` | 本帧扫哪 1~2 个矩形（单条窗 / 合窗 / 整块） | 像素、判据 |
 | `ScaleAwareKalman` | `include/detection/kalman.hpp` + `.cpp` | 6 维状态估计 + 离群拒收 + 发散保护 | 像素、状态机 |
 | `LinearScaleNoiseModel` | 同上 | `R_scale(s)`：远→大、近→小 | 其它一切 |
 | `RoiPredictor` | `include/detection/roi_prediction.hpp` + `.cpp` | `(预测状态, 丢失帧数) → RoiWindow` | 像素、滤波 |

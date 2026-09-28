@@ -61,6 +61,11 @@ if [[ "${1:-}" == "" || "${1:-}" == "detection" ]]; then
         "${REPO_ROOT}/src/detection/roi_prediction.cpp" \
         "${REPO_ROOT}/src/detection/tracker.cpp" \
         "${REPO_ROOT}/src/detection/pipeline.cpp" \
+        "${REPO_ROOT}/src/detection/armor/armor_geometry.cpp" \
+        "${REPO_ROOT}/src/detection/armor/armor_scale.cpp" \
+        "${REPO_ROOT}/src/detection/armor/armor_rules.cpp" \
+        "${REPO_ROOT}/src/detection/armor/armor_windows.cpp" \
+        "${REPO_ROOT}/src/detection/armor/armor_detector.cpp" \
         -o "${BUILD}/detection_host_test"
     set +x
 
@@ -85,6 +90,11 @@ if [[ "${1:-}" == "" || "${1:-}" == "armor" ]]; then
         "${REPO_ROOT}/src/detection/roi_prediction.cpp" \
         "${REPO_ROOT}/src/detection/tracker.cpp" \
         "${REPO_ROOT}/src/detection/pipeline.cpp" \
+        "${REPO_ROOT}/src/detection/armor/armor_geometry.cpp" \
+        "${REPO_ROOT}/src/detection/armor/armor_scale.cpp" \
+        "${REPO_ROOT}/src/detection/armor/armor_rules.cpp" \
+        "${REPO_ROOT}/src/detection/armor/armor_windows.cpp" \
+        "${REPO_ROOT}/src/detection/armor/armor_detector.cpp" \
         -o "${BUILD}/armor_host_test"
     set +x
 

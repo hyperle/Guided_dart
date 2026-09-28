@@ -72,7 +72,7 @@ struct DetectResult {
     uint32_t roi_x1 = 0;
     uint32_t roi_y1 = 0;
 
-    // ---- 装甲板（detection/armor.hpp 填；绿灯是锚，装甲板出精确板心）----
+    // ---- 装甲板（detection/armor/armor_detector.hpp 填；绿灯是锚，装甲板出精确板心）----
     // 绿灯那一路给的是"发光点的中心"，装甲板那一路给的是"板面上两片灯条围出的
     // 几何中心"——两者都在 DetectResult 里，谁用哪个由上层决定（外环/撞点选择）。
     ArmorTarget armor;

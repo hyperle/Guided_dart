@@ -1,6 +1,10 @@
 // ============================================================================
-// armor.cpp —— 本文件是 armor.hpp 的实现（两个类都在那一对文件里，见 §0）
-// StartupArmer 实现：滑窗关联 + 三道门（命中数 / 位移平滑性 / 物理性）
+// armor.cpp —— 绿灯启动确认器（StartupArmer，armor.hpp）的实现。
+//
+// 滑窗关联 + 三道门（命中数 / 位移平滑性 / 物理性）。
+// 注意：装甲板那一路**不在**这里，它在 src/detection/armor/ 下
+// （armor_detector.cpp / armor_geometry.cpp / armor_scale.cpp /
+//   armor_rules.cpp / armor_windows.cpp）。
 // ============================================================================
 
 #include "detection/armor.hpp"

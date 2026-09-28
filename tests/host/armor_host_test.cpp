@@ -1,5 +1,5 @@
 // ============================================================================
-// 装甲板识别（detection/armor.hpp）主机侧回归：合成二值图 + 假锚，不需要相机/RVV/SDK。
+// 装甲板识别（detection/armor/）主机侧回归：合成二值图 + 假锚，不需要相机/RVV/SDK。
 //
 //   bash tests/host/run.sh armor
 //
@@ -15,7 +15,8 @@
 #include <vector>
 
 #include "core/frame.hpp"
-#include "detection/armor.hpp"
+#include "detection/armor/armor_detector.hpp"
+#include "detection/armor/armor_rules.hpp"
 #include "detection/config.hpp"
 #include "detection/pipeline.hpp"
 
@@ -26,6 +27,7 @@ namespace {
 
 // ArmorConfig::flat_deg 的默认值：手工构造的 Bar 没有主轴（len=0）时，
 // bar_ends/armor_center 会走包围盒口径 —— 那正是"竖直工况零回归"的路径。
+// 纯几何在 dart::detection::armor 里，与检测器无关，所以下面直接调自由函数。
 constexpr float kFlat = 12.0f;
 
 int g_fail = 0;
@@ -98,41 +100,41 @@ int main() {
     // ------------------------------------------------------------------
     {
         // A(300,100 6x40) B(340,100 6x40)：A上(303,100) B下(343,139) → 交点 (323,119~120)
-        ArmorDetector::Bar a{}, b{};
+        armor::Bar a{}, b{};
         a.x = 300; a.y = 100; a.w = 6; a.h = 40;
         b.x = 340; b.y = 100; b.w = 6; b.h = 40;
         int32_t cx = 0, cy = 0;
-        const bool ok = ArmorDetector::armor_center(a, b, 0.30f, kFlat, &cx, &cy);
+        const bool ok = armor::armor_center(a, b, 0.30f, kFlat, &cx, &cy);
         check("等高竖灯条 → 板心 = 两灯条中点", ok && cx == 323 && (cy == 119 || cy == 120),
               "得到 (" + std::to_string(cx) + "," + std::to_string(cy) + ")");
 
         // 长度不等：交点仍在两段之内（不能跑到延长线上）
-        ArmorDetector::Bar b2{};
+        armor::Bar b2{};
         b2.x = 340; b2.y = 110; b2.w = 6; b2.h = 40;
-        const bool ok2 = ArmorDetector::armor_center(a, b2, 0.30f, kFlat, &cx, &cy);
+        const bool ok2 = armor::armor_center(a, b2, 0.30f, kFlat, &cx, &cy);
         check("长度不等 → 交点仍在两灯条之间", ok2 && cx == 323 && cy > 100 && cy < 150,
               "得到 (" + std::to_string(cx) + "," + std::to_string(cy) + ")");
 
         // 各自长轴求交：永远平行 → 必须没有交点（这条写错过一次）
         int32_t ax0, ay0, ax1, ay1, bx0, by0, bx1, by1;
-        ArmorDetector::bar_ends(a, kFlat, &ax0, &ay0, &ax1, &ay1);
-        ArmorDetector::bar_ends(b, kFlat, &bx0, &by0, &bx1, &by1);
+        armor::bar_ends(a, kFlat, &ax0, &ay0, &ax1, &ay1);
+        armor::bar_ends(b, kFlat, &bx0, &by0, &bx1, &by1);
         check("拿各自长轴求交 → 无交点(平行)",
-              !ArmorDetector::line_intersection(ax0, ay0, ax1, ay1, bx0, by0, bx1, by1, 0.30f,
+              !armor::line_intersection(ax0, ay0, ax1, ay1, bx0, by0, bx1, by1, 0.30f,
                                                 &cx, &cy));
 
         // 共线 / 近平行 → 无交点；交点在延长线上 → 无交点
         check("共线两段 → 无交点",
-              !ArmorDetector::line_intersection(0, 0, 10, 0, 20, 0, 30, 0, 0.30f, &cx, &cy));
+              !armor::line_intersection(0, 0, 10, 0, 20, 0, 30, 0, 0.30f, &cx, &cy));
         check("近平行两段 → 无交点",
-              !ArmorDetector::line_intersection(0, 0, 100, 0, 0, 1, 100, 1, 0.30f, &cx, &cy));
+              !armor::line_intersection(0, 0, 100, 0, 0, 1, 100, 1, 0.30f, &cx, &cy));
         check("交点在段外 → 无交点",
-              !ArmorDetector::line_intersection(0, 0, 10, 0, 20, 0, 20, 10, 0.30f, &cx, &cy));
+              !armor::line_intersection(0, 0, 10, 0, 20, 0, 20, 10, 0.30f, &cx, &cy));
 
         // 横灯条：长轴端点取左右边中点
-        ArmorDetector::Bar hb{};
+        armor::Bar hb{};
         hb.x = 100; hb.y = 50; hb.w = 40; hb.h = 6;
-        ArmorDetector::bar_ends(hb, kFlat, &ax0, &ay0, &ax1, &ay1);
+        armor::bar_ends(hb, kFlat, &ax0, &ay0, &ax1, &ay1);
         check("横灯条端点 = 左右边中点", ax0 == 100 && ay0 == 53 && ax1 == 139 && ay1 == 53);
     }
 
@@ -342,17 +344,17 @@ int main() {
         led.cy = 200.0f;
         led.radius = 30.0f; // 限 = 8×30 = 240px
         check("同一个整体: 板心在灯心旁 100px → 通过",
-              ArmorDetector::same_body(cfg.armor, led, 400, 200));
+              armor::same_body(cfg.armor, led, 400, 200));
         check("同一个整体: 板心在灯心旁 300px → 拒绝",
-              !ArmorDetector::same_body(cfg.armor, led, 600, 200));
+              !armor::same_body(cfg.armor, led, 600, 200));
         check("同一个整体: 斜着偏也按距离算(不受方向/倾角影响)",
-              ArmorDetector::same_body(cfg.armor, led, 300 + 100, 200 + 100) &&
-                  !ArmorDetector::same_body(cfg.armor, led, 300 + 200, 200 + 200));
+              armor::same_body(cfg.armor, led, 300 + 100, 200 + 100) &&
+                  !armor::same_body(cfg.armor, led, 300 + 200, 200 + 200));
         led.radius = 2.0f; // 8×2 = 16px < 地板 32px → 用地板
         check("同一个整体: 小半径走像素地板(16px 的倍数会被量化噪声判死)",
-              ArmorDetector::same_body(cfg.armor, led, 300, 220)); // 20px < 32
+              armor::same_body(cfg.armor, led, 300, 220)); // 20px < 32
         check("同一个整体: 半径没建立 → 放行",
-              ArmorDetector::same_body(cfg.armor, TrackOutput{}, 600, 200));
+              armor::same_body(cfg.armor, TrackOutput{}, 600, 200));
     }
 
     // ------------------------------------------------------------------

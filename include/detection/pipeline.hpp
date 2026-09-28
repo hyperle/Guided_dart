@@ -24,7 +24,7 @@
 #include <vector>
 
 #include "core/frame.hpp"
-#include "detection/armor.hpp"
+#include "detection/armor/armor_detector.hpp"
 #include "detection/blob_measure.hpp"
 #include "detection/config.hpp"
 #include "detection/light.hpp"
