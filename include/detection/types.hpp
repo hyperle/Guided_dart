@@ -5,7 +5,7 @@
 //
 // 数据流向（谁产生 → 谁消费）：
 //
-//   二值图 ──① 全图扫描（RVV）──> LightCandidate[]  ──③ 启动确认 ──┐
+//   二值图 ──① 全图扫描（RVV）──> Blip[]  ──③ 启动确认 ──┐
 //                                                                │ 确认
 //   二值图 ──② ROI 扫描 ────────> TargetMeasurement ──④ 卡尔曼 ──>│
 //                                                                ↓
@@ -77,7 +77,7 @@ struct RoiWindow {
 // 排序取 Top-K 用的就是它。将来若改用原始 Y 平面的灰度和做排序键，
 // 只需要在扫描器里改 score 的填法，下游（Top-K、确认器）都不用动。
 // ---------------------------------------------------------------------------
-struct LightCandidate {
+struct Blip {
     float    cx = 0.0f;      // 质心 x（矩算出，亚像素）
     float    cy = 0.0f;      // 质心 y
     uint32_t area = 0;       // 命中像素数
@@ -113,7 +113,7 @@ struct TargetMeasurement {
     float    radius = 0.0f;
     uint32_t area = 0;
     float    fill = 0.0f;
-    float    circularity = 0.0f; // 圆度（见 LightCandidate::circularity）
+    float    circularity = 0.0f; // 圆度（见 Blip::circularity）
     float    quality = 1.0f;
     RoiState roi = RoiState::NoTargetInRoi;
     uint32_t cost_us = 0;
@@ -124,7 +124,7 @@ struct TargetMeasurement {
 // 跟踪层只认这一个输入，于是它完全不依赖扫描器的实现（假件也喂得进来）。
 // ---------------------------------------------------------------------------
 struct ScanReport {
-    const LightCandidate *cands = nullptr;
+    const Blip *cands = nullptr;
     size_t                count = 0;
     TargetMeasurement     measurement{};
     RoiWindow             window{};
@@ -153,16 +153,16 @@ struct TrackOutput {
 // 不做日志输出 —— 检测层不认识 log（职责分离），谁来打由调用方决定。
 // ---------------------------------------------------------------------------
 struct TrackerCounters {
-    uint64_t arm_gained = 0;      // 启动阶段确认成功次数（→ 跟踪）
+    uint64_t confirm_gained = 0;      // 启动阶段确认成功次数（→ 跟踪）
     uint64_t to_lost = 0;         // 跟踪 → 丢失
     uint64_t to_tracking = 0;     // 丢失 → 跟踪（重捕）
     uint64_t to_startup = 0;      // 丢失 → 启动（硬复位）
     uint64_t kf_reject = 0;       // 马氏门限拒收次数
     uint64_t full_scans = 0;      // 全图扫描帧数
     uint64_t roi_scans = 0;       // ROI 扫描帧数
-    uint64_t arm_frames = 0;      // 参与滑窗确认的帧数
-    uint64_t arm_reject = 0;      // 被平滑性/命中数否掉的候选个数（闪烁坏点计数）
-    uint64_t arm_border_skip = 0; // 被跳过的贴画面边候选个数（不是坏点，是被边界切掉的块）
+    uint64_t confirm_frames = 0;      // 参与滑窗确认的帧数
+    uint64_t confirm_reject = 0;      // 被平滑性/命中数否掉的候选个数（闪烁坏点计数）
+    uint64_t confirm_border_skip = 0; // 被跳过的贴画面边候选个数（不是坏点，是被边界切掉的块）
     uint64_t out_of_roi = 0;      // 目标超框次数
     uint64_t reacquire_soft = 0;  // 丢失→跟踪 的软重捕（沿用滤波器状态）
     uint64_t full_confirm = 0;    // **跟踪态**又走了一次"全图+确认"（ROI 退化成整幅的直接症状）

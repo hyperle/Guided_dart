@@ -185,16 +185,16 @@ bool fit_line(const float *v, const uint64_t *t_us, size_t n, float *slope_per_s
 
 } // namespace
 
-void ScaleAwareKalman::init_from_track(const LightCandidate *chain, const uint64_t *times_us, size_t n) {
+void ScaleAwareKalman::init_from_track(const Blip *chain, const uint64_t *times_us, size_t n) {
     init_from_measurement(chain ? chain[0].cx : 0.0f, chain ? chain[0].cy : 0.0f,
                           chain ? chain[0].radius : cfg_.min_radius);
     if (chain == nullptr || times_us == nullptr || n < 2)
         return;
-    if (n > kArmMaxWindow)
-        n = kArmMaxWindow; // 滑窗样本上限（编译期常数，栈上数组与之同尺寸）
+    if (n > kBlipWindowMax)
+        n = kBlipWindowMax; // 滑窗样本上限（编译期常数，栈上数组与之同尺寸）
 
     float vx = 0.0f, vy = 0.0f, rs = 0.0f, vs = 0.0f;
-    float xs[kArmMaxWindow], ys[kArmMaxWindow], sr[kArmMaxWindow];
+    float xs[kBlipWindowMax], ys[kBlipWindowMax], sr[kBlipWindowMax];
     for (size_t i = 0; i < n; ++i) {
         xs[i] = chain[i].cx;
         ys[i] = chain[i].cy;
@@ -219,7 +219,7 @@ void ScaleAwareKalman::init_from_track(const LightCandidate *chain, const uint64
     init_ = true;
 }
 
-void ScaleAwareKalman::init_from_track_at(const LightCandidate *chain, const uint64_t *times_us,
+void ScaleAwareKalman::init_from_track_at(const Blip *chain, const uint64_t *times_us,
                                           size_t n, uint64_t now_us) {
     init_from_track(chain, times_us, n);
     if (!init_ || n == 0 || times_us == nullptr)

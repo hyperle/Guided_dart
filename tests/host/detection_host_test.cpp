@@ -10,8 +10,8 @@
 //
 // 覆盖面：
 //   1) linalg       矩阵乘/转置/求逆（含奇异）
-//   2) LightScanner 全图粗筛：质心/面积/等效半径解析校验、Top-K 排序、门限、stride
-//   3) RoiBlobMeasurer 窗口连通域：绝对坐标、贴框语义、取最大块、空窗
+//   2) TileScanner 全图粗筛：质心/面积/等效半径解析校验、Top-K 排序、门限、stride
+//   3) RunLengthMeasurer 窗口连通域：绝对坐标、贴框语义、取最大块、空窗
 //   4) BlipConfirmer 3 帧滑窗：平滑目标确认；随机闪烁/随机跳变/锯齿位移全部拒掉
 //   5) ScaleAwareKalman 6 维滤波：初速拟合、匀速收敛、膨胀速率、马氏门限、
 //                    **R_scale 自适应（远=模型主导、近=贴合测量）**
@@ -27,10 +27,10 @@
 #include <vector>
 
 #include "detection/track/blip_confirmer.hpp"
-#include "detection/blob_measure.hpp"
+#include "detection/measure/roi_measure.hpp"
 #include "detection/track/kalman.hpp"
 #include "detection/linalg.hpp"
-#include "detection/light.hpp"
+#include "detection/scanner/tile_scanner.hpp"
 #include "detection/pipeline.hpp"
 #include "detection/track/roi_prediction.hpp"
 #include "detection/track/tracker.hpp"
@@ -185,18 +185,18 @@ void test_linalg() {
 // 2) 全图扫描器
 // ===========================================================================
 void test_scanner() {
-    SECTION("2) LightScanner 全图粗筛");
+    SECTION("2) TileScanner 全图粗筛");
 
     ScannerConfig cfg;
     cfg.min_area = 3;
     cfg.top_k = 4;
-    LightScanner sc(cfg);
+    TileScanner sc(cfg);
 
     // ---- 解析校验：一个圆盘的面积/质心/等效半径必须与逐像素数出来的完全一致 ----
     Scene s(320, 200);
     s.disk(157.0f, 88.0f, 11.0f);
     const Truth t = truth_of(s);
-    LightCandidate out[8]{};
+    Blip out[8]{};
     size_t          n = sc.scan(s.view(), out, 8);
     CHECK(n == 1, "只有一个目标时只能出 1 个候选，实得 %zu", n);
     if (n == 1) {
@@ -228,7 +228,7 @@ void test_scanner() {
     // ---- Top-K 截断 ----
     ScannerConfig cfg1 = cfg;
     cfg1.top_k = 2;
-    LightScanner sc1(cfg1);
+    TileScanner sc1(cfg1);
     n = sc1.scan(m.view(), out, 8);
     CHECK(n == 2, "top_k=2 时只出 2 个候选，实得 %zu", n);
 
@@ -248,7 +248,7 @@ void test_scanner() {
     // ---- stride > width：行填充不能把质心带偏 ----
     Scene pad(200, 120, 256);
     pad.disk(100.0f, 60.0f, 9.0f);
-    LightCandidate pout[4]{};
+    Blip pout[4]{};
     n = sc.scan(pad.view(), pout, 4);
     CHECK(n == 1 && std::fabs(pout[0].cx - 100.0f) < 0.5f && std::fabs(pout[0].cy - 60.0f) < 0.5f,
           "stride>width 时质心仍须正确（实得 n=%zu cx=%.2f cy=%.2f）", n,
@@ -263,7 +263,7 @@ void test_scanner() {
     // ---- 瓦片边长 > 16（一条向量吃不下一个瓦片行）也要精确 ----
     ScannerConfig cfgBig = cfg;
     cfgBig.tile = 32;
-    LightScanner scBig(cfgBig);
+    TileScanner scBig(cfgBig);
     Scene big(320, 200);
     big.disk(157.0f, 88.0f, 11.0f);
     const Truth tb = truth_of(big);
@@ -275,14 +275,14 @@ void test_scanner() {
     {
         // ① 圆度的量级：圆盘≈0.8~1、正方形≈0.785、细长条远小于圆
         ScannerConfig c0;
-        LightScanner  sc0(c0);
+        TileScanner  sc0(c0);
         Scene d2(120, 120);
         d2.disk(60.0f, 60.0f, 18.0f);
         Scene sq2(120, 120);
         sq2.box(40, 40, 30, 30);
         Scene ln2(160, 60);
         ln2.box(20, 30, 40, 3);
-        LightCandidate od[4]{}, os[4]{}, ol[4]{};
+        Blip od[4]{}, os[4]{}, ol[4]{};
         CHECK(sc0.scan(d2.view(), od, 4) == 1, "圆盘应出 1 个候选");
         CHECK(sc0.scan(sq2.view(), os, 4) == 1, "方块应出 1 个候选");
         CHECK(sc0.scan(ln2.view(), ol, 4) == 1, "横条应出 1 个候选");
@@ -296,7 +296,7 @@ void test_scanner() {
         // 尺度无关性：小圆盘不能被判成"不圆"（旧公式 4πA/P² 在小目标上就是这个毛病）
         Scene d_small(60, 60);
         d_small.disk(30.0f, 30.0f, 3.0f); // 启动阶段目标的量级
-        LightCandidate osm[4]{};
+        Blip osm[4]{};
         CHECK(sc0.scan(d_small.view(), osm, 4) == 1, "小圆盘应出 1 个候选");
         const float c_small = osm[0].circularity;
         CHECK(c_small > 0.6f, "r=3px 的小圆盘圆度仍应 >0.6（实得 %.3f）", static_cast<double>(c_small));
@@ -314,8 +314,8 @@ void test_scanner() {
         c_area.circ_weight = 0.0f;       // 旧行为：纯面积
         ScannerConfig c_circ;
         c_circ.circ_weight = 1.0f;       // 新默认：面积 × 圆度
-        LightScanner sa(c_area), sc(c_circ);
-        LightCandidate oa[4]{}, oc[4]{};
+        TileScanner sa(c_area), sc(c_circ);
+        Blip oa[4]{}, oc[4]{};
         const size_t na = sa.scan(mix.view(), oa, 4), nc = sc.scan(mix.view(), oc, 4);
         CHECK(na >= 2 && nc >= 2, "应至少出 2 个候选（实得 %zu / %zu）", na, nc);
         if (na >= 2 && nc >= 2) {
@@ -330,17 +330,17 @@ void test_scanner() {
         // ③ 圆度硬门限：把细长条直接筛掉
         ScannerConfig c_gate = c_area;
         c_gate.min_circularity = 0.5f;
-        LightScanner sg(c_gate);
-        LightCandidate og[4]{};
+        TileScanner sg(c_gate);
+        Blip og[4]{};
         const size_t ng = sg.scan(ln2.view(), og, 4);
         CHECK(ng == 0, "min_circularity=0.5 时细长条应被筛掉（实得 %zu）", ng);
-        LightCandidate og2[4]{};
+        Blip og2[4]{};
         CHECK(sg.scan(d2.view(), og2, 4) == 1, "圆盘不该被圆度门限误伤");
         ok("圆度量级 / 排序权重 / 圆度门限");
     }
 
     // ---- 板端自检函数本身必须通过（RVV 路径与标量参考逐位比对）----
-    CHECK(LightScanner::selftest(), "LightScanner::selftest() 必须通过");
+    CHECK(TileScanner::selftest(), "TileScanner::selftest() 必须通过");
     ok("Top-K 排序 / 门限 / stride / tile>16 / selftest");
 }
 
@@ -348,9 +348,9 @@ void test_scanner() {
 // 3) ROI 测量器
 // ===========================================================================
 void test_measurer() {
-    SECTION("3) RoiBlobMeasurer 窗口连通域");
+    SECTION("3) RunLengthMeasurer 窗口连通域");
     MeasureConfig cfg;
-    RoiBlobMeasurer meas(cfg);
+    RunLengthMeasurer meas(cfg);
 
     Scene s(320, 200);
     s.disk(150.0f, 100.0f, 10.0f);
@@ -410,7 +410,7 @@ void test_measurer() {
         m_area.circ_weight = 0.0f;
         MeasureConfig m_circ;
         m_circ.circ_weight = 1.0f;
-        RoiBlobMeasurer ma(m_area), mc(m_circ);
+        RunLengthMeasurer ma(m_area), mc(m_circ);
         const TargetMeasurement ra = ma.measure(mix.view(), rw);
         const TargetMeasurement rc = mc.measure(mix.view(), rw);
         CHECK(ra.valid && rc.valid, "两种权重下都应测到目标");
@@ -423,7 +423,7 @@ void test_measurer() {
         // 圆度门限
         MeasureConfig m_gate;
         m_gate.min_circularity = 0.5f;
-        RoiBlobMeasurer mg(m_gate);
+        RunLengthMeasurer mg(m_gate);
         Scene band(320, 200);
         band.box(100, 100, 120, 6); // 只有一条光带
         const TargetMeasurement rg = mg.measure(band.view(), rw);
@@ -453,8 +453,8 @@ void test_measurer() {
 // ===========================================================================
 namespace {
 
-LightCandidate mk_cand(float x, float y, float r) {
-    LightCandidate c{};
+Blip mk_cand(float x, float y, float r) {
+    Blip c{};
     c.cx = x;
     c.cy = y;
     c.area = static_cast<uint32_t>(3.14159265f * r * r);
@@ -476,14 +476,14 @@ void test_confirmer() {
 
     // ---- ① 平滑运动的目标：第 3 帧必须确认，continuity=1，整条轨迹时间升序 ----
     {
-        ArmConfig cfg;
-        BlipConfirmer arm(cfg);
-        LightCandidate c{};
+        ConfirmerConfig cfg;
+        BlipConfirmer confirmer(cfg);
+        Blip c{};
         bool confirmed = false;
         uint64_t t = 0;
         for (int k = 0; k < 6; ++k) {
             c = mk_cand(100.0f + 4.0f * k, 80.0f, 3.0f);
-            const BlipConfirmer::Confirmation cf = arm.push(t, &c, 1);
+            const BlipConfirmer::Confirmation cf = confirmer.push(t, &c, 1);
             if (k < 2)
                 CHECK(!cf.ok, "滑窗未满（%d 帧）时不能确认", k + 1);
             if (cf.ok) {
@@ -506,18 +506,18 @@ void test_confirmer() {
 
     // ---- ② 随机闪烁的坏点：一个都不许确认 ----
     {
-        ArmConfig cfg;
-        BlipConfirmer arm(cfg);
+        ConfirmerConfig cfg;
+        BlipConfirmer confirmer(cfg);
         std::mt19937                     rng(1234);
         std::uniform_int_distribution<int> dx(5, 630), dy(5, 350);
         int                               confirms = 0;
         uint64_t                          t = 0;
         for (int k = 0; k < 300; ++k) {
             // 每帧两个随机位置的 2×2 亮斑（面积 4 ≥ min_area，所以能过扫描器）
-            LightCandidate cs[2];
+            Blip cs[2];
             cs[0] = mk_cand(static_cast<float>(dx(rng)), static_cast<float>(dy(rng)), 1.2f);
             cs[1] = mk_cand(static_cast<float>(dx(rng)), static_cast<float>(dy(rng)), 1.2f);
-            if (arm.push(t, cs, 2).ok)
+            if (confirmer.push(t, cs, 2).ok)
                 ++confirms;
             t += dt;
         }
@@ -527,33 +527,33 @@ void test_confirmer() {
 
     // ---- ③ 锯齿位移（能关联上、但加速度爆掉）：必须被平滑性门挡掉 ----
     {
-        ArmConfig cfg;
-        BlipConfirmer arm(cfg);
+        ConfirmerConfig cfg;
+        BlipConfirmer confirmer(cfg);
         int           confirms = 0;
         uint64_t      t = 0;
         for (int k = 0; k < 30; ++k) {
             const float x = (k % 2 == 0) ? 200.0f : 202.0f; // 位移 ±2px 交替 → 帧间加速度 4px
-            const LightCandidate c = mk_cand(x, 150.0f, 3.0f);
-            if (arm.push(t, &c, 1).ok)
+            const Blip c = mk_cand(x, 150.0f, 3.0f);
+            if (confirmer.push(t, &c, 1).ok)
                 ++confirms;
             t += dt;
         }
         CHECK(confirms == 0, "锯齿位移必须被 max_accel_px 挡掉，实得 %d 次确认", confirms);
-        CHECK(arm.last_reject() > 0, "被拒的候选应当被计数（last_reject=%u）", arm.last_reject());
+        CHECK(confirmer.last_reject() > 0, "被拒的候选应当被计数（last_reject=%u）", confirmer.last_reject());
         ok("锯齿位移被平滑性门挡掉");
     }
 
     // ---- ④ 随机跳变（关联门之外）：也不许确认 ----
     {
-        ArmConfig cfg;
-        BlipConfirmer arm(cfg);
+        ConfirmerConfig cfg;
+        BlipConfirmer confirmer(cfg);
         std::mt19937                       rng(99);
         std::uniform_int_distribution<int> jx(20, 600), jy(20, 330);
         int                                confirms = 0;
         uint64_t                           t = 0;
         for (int k = 0; k < 100; ++k) {
-            const LightCandidate c = mk_cand(static_cast<float>(jx(rng)), static_cast<float>(jy(rng)), 4.0f);
-            if (arm.push(t, &c, 1).ok)
+            const Blip c = mk_cand(static_cast<float>(jx(rng)), static_cast<float>(jy(rng)), 4.0f);
+            if (confirmer.push(t, &c, 1).ok)
                 ++confirms;
             t += dt;
         }
@@ -565,29 +565,29 @@ void test_confirmer() {
     // 场景：一个 r=25px 的大亮块贴着画面右边（手/物体从镜头前扫过），
     // 它连续 6 帧平滑移动 —— 没有这条门就会被确认，然后 3 帧内丢失。
     {
-        ArmConfig cfg;
-        BlipConfirmer arm(cfg);
+        ConfirmerConfig cfg;
+        BlipConfirmer confirmer(cfg);
         int confirms = 0;
         uint64_t t = 0;
         for (int k = 0; k < 12; ++k) {
-            LightCandidate c = mk_cand(615.0f, 180.0f + 2.0f * k, 25.0f);
+            Blip c = mk_cand(615.0f, 180.0f + 2.0f * k, 25.0f);
             c.x1 = 640;          // 包围盒顶到右边界 → 被画面切掉
             c.border = true;
-            if (arm.push(t, &c, 1).ok)
+            if (confirmer.push(t, &c, 1).ok)
                 ++confirms;
             t += dt;
         }
         CHECK(confirms == 0, "贴边的候选必须被跳过，实得 %d 次确认", confirms);
-        CHECK(arm.last_border_skip() == 1, "贴边跳过必须单独计数（实得 %u）", arm.last_border_skip());
-        CHECK(arm.last_reject() == 0, "贴边跳过不该混进'拒闪'（实得 %u）", arm.last_reject());
+        CHECK(confirmer.last_border_skip() == 1, "贴边跳过必须单独计数（实得 %u）", confirmer.last_border_skip());
+        CHECK(confirmer.last_reject() == 0, "贴边跳过不该混进'拒闪'（实得 %u）", confirmer.last_reject());
 
         // 同一个块完整进画面（border=false）后必须能确认 —— 门不能把真目标也挡在门外
-        ArmConfig cfg2;
+        ConfirmerConfig cfg2;
         BlipConfirmer arm2(cfg2);
         int confirms2 = 0;
         t = 0;
         for (int k = 0; k < 12; ++k) {
-            LightCandidate c = mk_cand(615.0f, 180.0f + 2.0f * k, 25.0f);
+            Blip c = mk_cand(615.0f, 180.0f + 2.0f * k, 25.0f);
             c.border = false;
             if (arm2.push(t, &c, 1).ok)
                 ++confirms2;
@@ -599,14 +599,14 @@ void test_confirmer() {
 
     // ---- ⑥ 全黑帧（无候选）与 reset 的行为 ----
     {
-        ArmConfig cfg;
-        BlipConfirmer arm(cfg);
-        LightCandidate c = mk_cand(100.0f, 100.0f, 3.0f);
-        arm.push(0, &c, 1);
-        arm.push(dt, &c, 1);
-        CHECK(!arm.push(2 * dt, nullptr, 0).ok, "空候选表不能确认");
-        arm.reset();
-        CHECK(!arm.ready(), "reset 之后滑窗必须重新计数");
+        ConfirmerConfig cfg;
+        BlipConfirmer confirmer(cfg);
+        Blip c = mk_cand(100.0f, 100.0f, 3.0f);
+        confirmer.push(0, &c, 1);
+        confirmer.push(dt, &c, 1);
+        CHECK(!confirmer.push(2 * dt, nullptr, 0).ok, "空候选表不能确认");
+        confirmer.reset();
+        CHECK(!confirmer.ready(), "reset 之后滑窗必须重新计数");
         ok("空帧与 reset");
     }
 }
@@ -648,7 +648,7 @@ void test_kalman() {
         KfConfig          cfg;
         ScaleAwareKalman  kf(cfg);
         const uint64_t    dt = 11111;
-        LightCandidate    chain[3];
+        Blip    chain[3];
         uint64_t          times[3];
         // 目标以 3px/帧向右、1px/帧向下运动，半径 10→11→12（每帧 +1px）
         for (int i = 0; i < 3; ++i) {
@@ -1149,8 +1149,8 @@ void test_chain() {
     }
 
     CHECK(rec.first(TrackState::Tracking) >= 0, "阶段 A 必须进入跟踪态");
-    CHECK(rec.first(TrackState::Tracking) <= static_cast<int>(cfg.arm.window) + 1,
-          "滑窗确认应在 %u 帧内完成，实得第 %d 帧", cfg.arm.window, rec.first(TrackState::Tracking));
+    CHECK(rec.first(TrackState::Tracking) <= static_cast<int>(cfg.confirm.window) + 1,
+          "滑窗确认应在 %u 帧内完成，实得第 %d 帧", cfg.confirm.window, rec.first(TrackState::Tracking));
     CHECK(track_frames >= 140, "150 帧里至少 140 帧应处于跟踪态，实得 %d", track_frames);
     CHECK(roi_frames_at_track >= 140, "跟踪态必须只在 ROI 内扫描（ROI 帧 %d）", roi_frames_at_track);
     // 允许 1 次全幅：**确认成功的那一帧本身就是全图扫描**（那时还不知道目标在哪），
@@ -1224,8 +1224,8 @@ void test_chain() {
         tr += vr;
     }
     CHECK(startup_first > 0, "阶段 D 之后应记录到启动态");
-    CHECK(retrack_frame >= 0 && retrack_frame <= static_cast<int>(cfg.arm.window) + 2,
-          "硬复位后重新确认应在 %u 帧内完成（实得 %d）", cfg.arm.window, retrack_frame);
+    CHECK(retrack_frame >= 0 && retrack_frame <= static_cast<int>(cfg.confirm.window) + 2,
+          "硬复位后重新确认应在 %u 帧内完成（实得 %d）", cfg.confirm.window, retrack_frame);
 
     std::printf("       状态迁移链：");
     for (const auto &t : rec.trans)
@@ -1251,8 +1251,8 @@ void test_chain() {
         if (r.cx >= 0 && found_after < 0)
             found_after = k;
     }
-    CHECK(found_after == static_cast<int>(cfg2.arm.window) - 1,
-          "全图模式应在第 %u 帧给出目标（实得第 %d 帧）", cfg2.arm.window, found_after);
+    CHECK(found_after == static_cast<int>(cfg2.confirm.window) - 1,
+          "全图模式应在第 %u 帧给出目标（实得第 %d 帧）", cfg2.confirm.window, found_after);
     CHECK(sim2.pipe.stats().tracker.roi_scans == 0, "A/B 模式下不该有 ROI 扫描（%llu）",
           static_cast<unsigned long long>(sim2.pipe.stats().tracker.roi_scans));
     ok("A/B 对照模式");

@@ -54,8 +54,8 @@ if [[ "${1:-}" == "" || "${1:-}" == "detection" ]]; then
         -fsanitize=address,undefined -fno-omit-frame-pointer \
         -I"${REPO_ROOT}/include" \
         "${REPO_ROOT}/tests/host/detection_host_test.cpp" \
-        "${REPO_ROOT}/src/detection/light.cpp" \
-        "${REPO_ROOT}/src/detection/blob_measure.cpp" \
+        "${REPO_ROOT}/src/detection/scanner/tile_scanner.cpp" \
+        "${REPO_ROOT}/src/detection/measure/roi_measure.cpp" \
         "${REPO_ROOT}/src/detection/track/blip_confirmer.cpp" \
         "${REPO_ROOT}/src/detection/track/kalman.cpp" \
         "${REPO_ROOT}/src/detection/track/roi_prediction.cpp" \
@@ -83,8 +83,8 @@ if [[ "${1:-}" == "" || "${1:-}" == "armor" ]]; then
         -fsanitize=address,undefined -fno-omit-frame-pointer \
         -I"${REPO_ROOT}/include" \
         "${REPO_ROOT}/tests/host/armor_host_test.cpp" \
-        "${REPO_ROOT}/src/detection/blob_measure.cpp" \
-        "${REPO_ROOT}/src/detection/light.cpp" \
+        "${REPO_ROOT}/src/detection/measure/roi_measure.cpp" \
+        "${REPO_ROOT}/src/detection/scanner/tile_scanner.cpp" \
         "${REPO_ROOT}/src/detection/track/blip_confirmer.cpp" \
         "${REPO_ROOT}/src/detection/track/kalman.cpp" \
         "${REPO_ROOT}/src/detection/track/roi_prediction.cpp" \

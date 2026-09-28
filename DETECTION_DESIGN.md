@@ -31,12 +31,12 @@
 
 ```
         ┌──────────────────────── 启动态 / 丢失重扫 ────────────────────────┐
-二值图 ──┤ LightScanner(RVV 瓦片粗筛) → LightCandidate[Top-K] → BlipConfirmer │
+二值图 ──┤ TileScanner(RVV 瓦片粗筛) → Blip[Top-K] → BlipConfirmer │
         │                                    （3 帧滑窗 + 位移平滑性）      │
         └───────────────────────────────┬──────────────────────────────────┘
                                         │ 确认
         ┌──────────────── 跟踪态 / 丢失 ROI ─────────────────────────────┐  ↓
-        │ RoiBlobMeasurer(游程连通域+形状筛选) → TargetMeasurement       │  │
+        │ RunLengthMeasurer(游程连通域+形状筛选) → TargetMeasurement       │  │
         │                                    → ScaleAwareKalman(6 维)   │  │
         └───────────────────────────────┬───────────────────────────────┘  │
                                         ↓                                  ↓
@@ -56,8 +56,8 @@
 
 | 模块 | 文件 | 职责（只做这一件事） | 不认识 |
 |---|---|---|---|
-| `LightScanner` | `include/detection/light.hpp` + `src/detection/light.cpp` | 二值图 → 最亮 K 块亮斑（质心/面积/等效半径/包围盒） | 跟踪、滤波、日志 |
-| `RoiBlobMeasurer` | `include/detection/blob_measure.hpp` + `.cpp` | ROI 窗口内 → 一个测量 `(cx,cy,r)` + 质量 | 状态机、滤波 |
+| `TileScanner` | `include/detection/scanner/tile_scanner.hpp` + `.cpp` | 二值图 → 最亮 K 块亮斑（质心/面积/等效半径/包围盒） | 跟踪、滤波、日志 |
+| `RunLengthMeasurer` | `include/detection/measure/roi_measure.hpp` + `.cpp` | ROI 窗口内 → 一个测量 `(cx,cy,r)` + 质量 | 状态机、滤波 |
 | `BlipConfirmer` | `include/detection/track/blip_confirmer.hpp` + `.cpp` | 候选序列 → "这是不是真目标"（3 帧滑窗） | 像素、ROI、滤波 |
 | `ArmorDetector` | `include/detection/armor/armor_detector.hpp` + `.cpp` | 二值图 + 绿灯锚 → 装甲板板心（detect/track 两路） | 候选序列表、滑窗、卡尔曼 |
 | `armor::` 几何 | `armor/armor_geometry.hpp` + `.cpp` | 灯条值类型 + 端点 / 线段求交 / 板心 / 间距（纯函数） | 像素、配置、状态 |
@@ -75,14 +75,14 @@
 
 - 板端（`main.cpp`）：只给配置，用三个自带实现 + 真实单调钟。
 - 主机侧测试：注入假时钟与合成图，于是"确认几帧、状态怎么迁移、滤波收不收敛"全部可确定性地复现。
-- 扩展点：换粗筛手段（灰度投影/其它颜色空间）只需实现 `IPointScanner`；换测量器实现 `IRoiMeasurer`；
+- 扩展点：换粗筛手段（灰度投影/其它颜色空间）只需实现 `IBlipScanner`；换测量器实现 `IRoiMeasurer`；
   换 `R_scale` 曲线实现 `IScaleNoiseModel`（例如按"过曝程度"查表）。**下游一行都不用改。**
 
 ---
 
 ## 4. 工况 1：启动阶段（全图 + 3 帧确认）
 
-### 4.1 RVV 瓦片粗筛（`LightScanner`）
+### 4.1 RVV 瓦片粗筛（`TileScanner`）
 
 ```
 ① 瓦片粗筛（RVV）：16×16 瓦片，每个瓦片行一条或多条向量：
@@ -144,7 +144,7 @@ score = 面积 × 圆度^circ_weight      （circ_weight 默认 1.0；0 = 退回
 
 确认成功时把整条轨迹（时间升序）交给卡尔曼：3 帧数据用**最小二乘**估初速/初膨胀率，
 比"两点差分"稳得多 —— 这是"确认"顺带赚到的收益。
-`LightCandidate::continuity = hits/window` 也在这里填上。
+`Blip::continuity = hits/window` 也在这里填上。
 
 > 实测（主机侧合成序列，见 §7）：平滑目标第 3 帧确认；300 帧随机闪烁坏点 **0 次**确认；
 > 锯齿位移（帧间加速度 4px > 2.5）与随机跳变全部被拒。
@@ -267,8 +267,8 @@ bash scripts/build.sh self_guiding_dart
 | 组 | 覆盖内容 |
 |---|---|
 | linalg | 乘法/转置/求逆/奇异矩阵拒绝 |
-| LightScanner | 面积·质心·等效半径**解析校验**、Top-K 排序、面积门限、stride>width、tile>16、开机自检函数 |
-| RoiBlobMeasurer | **窗口绝对坐标**、贴框语义与质量、取最大块、空窗、越界窗口 |
+| TileScanner | 面积·质心·等效半径**解析校验**、Top-K 排序、面积门限、stride>width、tile>16、开机自检函数 |
+| RunLengthMeasurer | **窗口绝对坐标**、贴框语义与质量、取最大块、空窗、越界窗口 |
 | BlipConfirmer | 3 帧确认；随机闪烁 300 帧 0 确认；锯齿位移被加速度门挡掉；随机跳变被关联门挡掉 |
 | ScaleAwareKalman | 最小二乘初速、匀速+匀速膨胀收敛（位置<1px/尺度<0.5px）、马氏门限、**R_scale 远稳近跟**、发散保护 |
 | RoiPredictor | `kσ=0` 时严格等于 `kp·s+B_margin`、贴边平移、丢失放大、整幅回退 |
@@ -325,5 +325,5 @@ bash scripts/build.sh self_guiding_dart
    不更新尺度"取决于实战数据 —— round13 之后再定。
 
 7. **二值化与粗筛目前是两遍**：可以融合成"一遍读、边阈值边累计瓦片矩"（省一次 230KB 读）。
-   融合要把 `LightScanner` 的接口从"读二值图"改成"读 Y 平面 + 阈值"，代价是识别层开始认识灰度 ——
+   融合要把 `TileScanner` 的接口从"读二值图"改成"读 Y 平面 + 阈值"，代价是识别层开始认识灰度 ——
    需要时再评估，现在优先保住"识别层只看二值图"这条清晰边界。

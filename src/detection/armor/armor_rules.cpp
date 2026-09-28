@@ -10,7 +10,7 @@
 
 namespace dart::detection::armor {
 
-void fill_bar(const RoiBlobMeasurer::BlobInfo &b, Bar *out) {
+void fill_bar(const RunLengthMeasurer::BlobInfo &b, Bar *out) {
     const int32_t w = static_cast<int32_t>(b.x1) - b.x0 + 1;
     const int32_t h = static_cast<int32_t>(b.y1) - b.y0 + 1;
     out->x = b.x0;
@@ -30,7 +30,7 @@ void fill_bar(const RoiBlobMeasurer::BlobInfo &b, Bar *out) {
     }
 }
 
-bool as_bar(const ArmorConfig &cfg, const RoiBlobMeasurer::BlobInfo &b, int32_t s, Bar *out) {
+bool as_bar(const ArmorConfig &cfg, const RunLengthMeasurer::BlobInfo &b, int32_t s, Bar *out) {
     const int32_t w = static_cast<int32_t>(b.x1) - b.x0 + 1;
     const int32_t h = static_cast<int32_t>(b.y1) - b.y0 + 1;
     int32_t       lmin, lmax, pxmin;

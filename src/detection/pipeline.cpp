@@ -1,8 +1,8 @@
 // ============================================================================
 // DetectionPipeline 实现：一帧一拍，两个阶段。
 //
-//   启动/丢失重扫帧：LightScanner（RVV 全图粗筛）→ 启动确认器（3 帧滑窗平滑性）
-//   跟踪/丢失 ROI 帧：RoiBlobMeasurer（游程连通域）→ 卡尔曼更新（马氏门限）
+//   启动/丢失重扫帧：TileScanner（RVV 全图粗筛）→ 启动确认器（3 帧滑窗平滑性）
+//   跟踪/丢失 ROI 帧：RunLengthMeasurer（游程连通域）→ 卡尔曼更新（马氏门限）
 //
 // 本文件只做编排 + 计时 + 结果翻译，不含任何算法（算法都在各自的类里）。
 // ============================================================================
@@ -57,7 +57,7 @@ bool measurer_selftest() {
     f.stride = W;
 
     MeasureConfig mcfg;
-    RoiBlobMeasurer meas(mcfg);
+    RunLengthMeasurer meas(mcfg);
     RoiWindow w;
     w.x = 64;
     w.y = 24;
@@ -196,7 +196,7 @@ DetectResult DetectionPipeline::detect(const GrayFrame &frame) {
 }
 
 bool DetectionPipeline::selftest() {
-    if (!LightScanner::selftest())
+    if (!TileScanner::selftest())
         return false;
     if (!measurer_selftest())
         return false;
@@ -207,8 +207,8 @@ void DetectionPipeline::describe(const DetectionConfig &cfg_in, char *buf, size_
     if (buf == nullptr || n == 0)
         return;
     const DetectionConfig cfg = sanitized(cfg_in);
-    const LightScanner    scanner(cfg.scan);
-    const RoiBlobMeasurer measurer(cfg.measure);
+    const TileScanner    scanner(cfg.scan);
+    const RunLengthMeasurer measurer(cfg.measure);
     const LinearScaleNoiseModel noise(cfg.kf);
     std::snprintf(buf, n,
                   "扫描=%s(瓦片%u min_area=%u topk=%u) ROI测量=%s(min_area=%u fill>=%.2f) "
@@ -219,8 +219,8 @@ void DetectionPipeline::describe(const DetectionConfig &cfg_in, char *buf, size_
                   static_cast<double>(cfg.kf.r_scale_far), static_cast<double>(cfg.kf.r_scale_near),
                   static_cast<double>(cfg.kf.s_far), static_cast<double>(cfg.kf.s_near),
                   static_cast<double>(cfg.roi.kp), static_cast<double>(cfg.roi.margin),
-                  static_cast<double>(cfg.roi.k_sigma), cfg.arm.window, cfg.arm.min_hits,
-                  static_cast<double>(cfg.arm.max_accel_px), static_cast<double>(cfg.arm.gate_px),
+                  static_cast<double>(cfg.roi.k_sigma), cfg.confirm.window, cfg.confirm.min_hits,
+                  static_cast<double>(cfg.confirm.max_accel_px), static_cast<double>(cfg.confirm.gate_px),
                   cfg.enable_tracking ? "on" : "off(--no-track)");
     // 装甲板这一路单独接一段：它有自己的门限口径（灯尺倍数 + 地板 + 刚性先验）
     const size_t used = std::strlen(buf);

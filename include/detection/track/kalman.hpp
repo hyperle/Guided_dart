@@ -84,9 +84,9 @@ public:
     // 用启动确认的滑窗样本起滤波（推荐）：位置/尺度取最新一帧，
     // 速度/膨胀率用**最小二乘**拟合（比两点差分抗噪，3 帧数据也能用）。
     // chain/times 按**时间升序**（旧 → 新），n >= 2 才会估速度。
-    void init_from_track(const LightCandidate *chain, const uint64_t *times_us, size_t n);
+    void init_from_track(const Blip *chain, const uint64_t *times_us, size_t n);
     // 同上但带上时间戳，用于把状态直接外推到 now_us（避免"用旧时刻的状态开窗"）
-    void init_from_track_at(const LightCandidate *chain, const uint64_t *times_us, size_t n,
+    void init_from_track_at(const Blip *chain, const uint64_t *times_us, size_t n,
                             uint64_t now_us);
 
     // 状态转移。dt 由调用方给（时钟跳变/掉帧的夹取在 KfConfig.dt_min/dt_max 里）

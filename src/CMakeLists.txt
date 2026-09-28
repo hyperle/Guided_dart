@@ -21,8 +21,8 @@ add_executable(${APP_NAME}
     capture/sensor_source.cpp
     vision/frame_pool.cpp
     recording/recorder.cpp
-    detection/light.cpp
-    detection/blob_measure.cpp
+    detection/scanner/tile_scanner.cpp
+    detection/measure/roi_measure.cpp
     detection/track/blip_confirmer.cpp
     detection/track/kalman.cpp
     detection/track/roi_prediction.cpp

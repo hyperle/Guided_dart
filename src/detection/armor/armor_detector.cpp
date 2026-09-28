@@ -66,7 +66,7 @@ void ArmorDetector::detect(const GrayFrame &bin, const TrackOutput &led, uint64_
         return;
     RoiWindow      wins[2];
     const uint32_t nwin = armor::search_windows(cfg_, pair_view(), full, led, bin, wins);
-    trace_.windows = static_cast<uint8_t>(nwin);
+    trace_.windows = nwin;
 
     const uint32_t pxmin = armor::bar_px_min(cfg_, s);
 
@@ -87,9 +87,9 @@ void ArmorDetector::detect(const GrayFrame &bin, const TrackOutput &led, uint64_
     uint32_t nbar = 0, nblob_total = 0, px_total = 0;
     for (uint32_t k = 0; k < nwin; ++k) {
         px_total += static_cast<uint32_t>(wins[k].pixels());
-        const uint32_t nblob = meas_.collect(bin, wins[k], pxmin, blobs_, kArmorMaxBars);
+        const uint32_t nblob = meas_.collect(bin, wins[k], pxmin, blobs_, kArmorBarMax);
         nblob_total += nblob;
-        for (uint32_t i = 0; i < nblob && nbar < kArmorMaxBars; ++i) {
+        for (uint32_t i = 0; i < nblob && nbar < kArmorBarMax; ++i) {
             Bar bar;
             if (!armor::as_bar(cfg_, blobs_[i], s, &bar)) {
                 ++trace_.rejected;
@@ -112,7 +112,7 @@ void ArmorDetector::detect(const GrayFrame &bin, const TrackOutput &led, uint64_
     trace_.window_px = px_total;
 
     // 4) 检测-跟踪
-    const bool ok = step(bars_, nbar, led, s, out);
+    const bool ok = decide(bars_, nbar, led, s, out);
     trace_.pairs = pair_count_;
     trace_.rejected_prior = prior_reject_;
     trace_.cost_us = static_cast<uint32_t>(now_us - t0);
@@ -128,7 +128,7 @@ bool ArmorDetector::track_step(const GrayFrame &bin, const RoiWindow *wins, uint
         bool a_ok = false, b_ok = false;
         for (uint32_t k = 0; k < 2; ++k) {
             trace_.window_px += static_cast<uint32_t>(wins[k].pixels());
-            const uint32_t n = meas_.collect(bin, wins[k], pxmin, blobs_, kArmorMaxBars);
+            const uint32_t n = meas_.collect(bin, wins[k], pxmin, blobs_, kArmorBarMax);
             trace_.blobs += n;
             const Bar &ref = (k == 0) ? a_ : b_;
             Bar        tmp{};
@@ -145,7 +145,7 @@ bool ArmorDetector::track_step(const GrayFrame &bin, const RoiWindow *wins, uint
         ok = a_ok && b_ok;
     } else { // 合窗：两条 incumbent 在同一个池里各认各的
         trace_.window_px += static_cast<uint32_t>(wins[0].pixels());
-        const uint32_t n = meas_.collect(bin, wins[0], pxmin, blobs_, kArmorMaxBars);
+        const uint32_t n = meas_.collect(bin, wins[0], pxmin, blobs_, kArmorBarMax);
         trace_.blobs += n;
         const bool a_ok = assoc(blobs_, n, a_, &na);
         const bool b_ok = assoc(blobs_, n, b_, &nb);
@@ -163,7 +163,7 @@ bool ArmorDetector::track_step(const GrayFrame &bin, const RoiWindow *wins, uint
             r_last_ = led.radius;
             trace_.mode = 1;
             trace_.bars = 2;
-            *out = mk(ArmorTarget::Fresh, 0);
+            *out = make_target(ArmorTarget::Fresh, 0);
             fill_window(out, wins, nwin);
             return true; // cost_us 由 detect() 统一算
         }
@@ -174,7 +174,7 @@ bool ArmorDetector::track_step(const GrayFrame &bin, const RoiWindow *wins, uint
     trace_.assoc_fail = 1;
     if (age_ <= cfg_.hold) {
         trace_.mode = 1;
-        *out = mk(ArmorTarget::Held, static_cast<uint8_t>(age_));
+        *out = make_target(ArmorTarget::Held, static_cast<uint8_t>(age_));
         fill_window(out, wins, nwin);
         return true;
     }
@@ -185,7 +185,7 @@ bool ArmorDetector::track_step(const GrayFrame &bin, const RoiWindow *wins, uint
     return false; // 落回 detect
 }
 
-bool ArmorDetector::step(const Bar *bars, uint32_t n, const TrackOutput &led, int32_t s,
+bool ArmorDetector::decide(const Bar *bars, uint32_t n, const TrackOutput &led, int32_t s,
                          ArmorTarget *out) {
     pair_count_ = 0;
     prior_reject_ = 0;
@@ -203,13 +203,13 @@ bool ArmorDetector::step(const Bar *bars, uint32_t n, const TrackOutput &led, in
             age_ = 0;
             r_last_ = led.radius; // 记下"这一对是在多大尺度下采到的"
 
-            *out = mk(ArmorTarget::Fresh, 0);
+            *out = make_target(ArmorTarget::Fresh, 0);
             ++pair_count_;
             return true;
         }
         ++age_;
         if (age_ <= cfg_.hold) {
-            *out = mk(ArmorTarget::Held, static_cast<uint8_t>(age_));
+            *out = make_target(ArmorTarget::Held, static_cast<uint8_t>(age_));
             return true; // 短暂丢失：先保持（旧中心 + Held 标记）
         }
         have_pair_ = false; // 保持到期 → 放弃这一对，重新 detect
@@ -256,11 +256,11 @@ bool ArmorDetector::step(const Bar *bars, uint32_t n, const TrackOutput &led, in
     age_ = 0;
     r_last_ = led.radius;
 
-    *out = mk(ArmorTarget::Fresh, 0);
+    *out = make_target(ArmorTarget::Fresh, 0);
     return true;
 }
 
-bool ArmorDetector::assoc(const RoiBlobMeasurer::BlobInfo *blobs, uint32_t n, const Bar &ref,
+bool ArmorDetector::assoc(const RunLengthMeasurer::BlobInfo *blobs, uint32_t n, const Bar &ref,
                           Bar *out) const {
     const float tx = cfg_.assoc_k * static_cast<float>(ref.w) > cfg_.assoc_min
                          ? cfg_.assoc_k * static_cast<float>(ref.w)
@@ -315,7 +315,7 @@ const ArmorDetector::Bar *ArmorDetector::assoc(const Bar *bars, uint32_t n, cons
     return found;
 }
 
-ArmorTarget ArmorDetector::mk(uint8_t mode, uint8_t held) const {
+ArmorTarget ArmorDetector::make_target(uint8_t mode, uint8_t held) const {
     ArmorTarget t{};
     t.cx = c_[0];
     t.cy = c_[1];

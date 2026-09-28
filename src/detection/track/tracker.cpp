@@ -10,7 +10,7 @@
 namespace dart::detection {
 
 TargetTracker::TargetTracker(const DetectionConfig &cfg, const IScaleNoiseModel *noise)
-    : cfg_(cfg), kf_(cfg.kf, noise), confirmer_(cfg.arm), roi_(cfg.roi) {}
+    : cfg_(cfg), kf_(cfg.kf, noise), confirmer_(cfg.confirm), roi_(cfg.roi) {}
 
 void TargetTracker::reset() {
     state_ = TrackState::Startup;
@@ -30,7 +30,7 @@ void TargetTracker::enter(TrackState s) {
         return;
     if (s == TrackState::Tracking) {
         if (state_ == TrackState::Startup)
-            ++cnt_.arm_gained;
+            ++cnt_.confirm_gained;
         else
             ++cnt_.to_tracking;
     } else if (s == TrackState::Lost) {
@@ -151,10 +151,10 @@ TrackOutput TargetTracker::end_frame(const ScanReport &report) {
     // ================= 全图扫描帧：走启动确认逻辑（启动态与丢失重扫共用）=================
     if (report.full_scan()) {
         const BlipConfirmer::Confirmation a = confirmer_.push(last_us_, report.cands, report.count);
-        ++cnt_.arm_frames;
+        ++cnt_.confirm_frames;
         last_reject_ = confirmer_.last_reject();
-        cnt_.arm_reject += last_reject_;
-        cnt_.arm_border_skip += confirmer_.last_border_skip();
+        cnt_.confirm_reject += last_reject_;
+        cnt_.confirm_border_skip += confirmer_.last_border_skip();
 
         if (!a.ok) {
             // 全图扫描没确认出目标，也算"这一帧没测到"。**这一句不能省**：

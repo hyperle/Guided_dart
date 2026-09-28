@@ -170,8 +170,8 @@ self_guiding_dart: 识别/跟踪参数 扫描=rvv-tile(瓦片16 …) ROI: W=kp*s
 
 | 现象 | 含义 / 动作 |
 |---|---|
-| `识别自检 FAIL` | RVV 粗筛的向量路径与标量参考不一致（或 ROI 测量解析错）→ **别继续**，先查 `src/detection/light.cpp` 的 RVV 段 |
-| 状态一直在「启动」 | 没确认出目标：看 `全图候选`（0 = 阈值/曝光/`--det-min-area` 的问题）；有候选但 `拒闪` 持续涨 = 平滑性门太严（`--arm-accel`）或目标真的在乱跳 |
+| `识别自检 FAIL` | RVV 粗筛的向量路径与标量参考不一致（或 ROI 测量解析错）→ **别继续**，先查 `src/detection/scanner/tile_scanner.cpp` 的 RVV 段 |
+| 状态一直在「启动」 | 没确认出目标：看 `全图候选`（0 = 阈值/曝光/`--det-min-area` 的问题）；有候选但 `拒闪` 持续涨 = 平滑性门太严（`--confirm-accel`）或目标真的在乱跳 |
 | 状态在「跟踪/丢失」间反复跳 | ROI 太小或测量不稳定：看 `超框` 计数（>0 说明目标贴着窗口边）、`KF拒`（>0 说明被马氏门限拒收） |
 | `KF拒` 持续增长 | `R_scale` 配得比真实测量噪声小，或目标真的在急机动（发散保护会兜住，但属"正在挣扎"） |
 | `贴边跳` 持续增长而没目标 | 正常：镜头前有东西扫过（手/反光）被贴边门挡住了 —— 它**不是**坏点，所以单列不混进 `拒闪` |
@@ -201,7 +201,7 @@ bash scripts/build.sh self_guiding_dart   # ③ 上板：只剩"真 RVV 时序 +
 ```
 
 ① 用的是标量参考路径；② 用 `-cpu rv64,v=true,vlen=128`（对应 C908 的 VLEN=128）把**向量路径**
-按板端同一个自检函数跑一遍（`LightScanner::selftest()` 逐位比对 + 解析校验 + 整链 ROI 门控）；
+按板端同一个自检函数跑一遍（`TileScanner::selftest()` 逐位比对 + 解析校验 + 整链 ROI 门控）；
 ③ 才需要拔卡/上电。装 qemu：`sudo apt install -y qemu-user`（脚本没找到 qemu 会明确提示，
 `--build-only` 可只做编译检查）。qemu 的耗时不是板端耗时，性能判据永远看板端日志的
 `识别: 状态=… 扫描 avg/max=…us`。
@@ -402,7 +402,7 @@ python3 scripts/detect_review.py /media/$USER/<卡>/dart      # 识别/跟踪判
 | `--no-track` | 关掉 ROI/滤波，只跑"全图粗筛 + 3 帧滑窗确认"（回归对照：现象是否由 ROI 门控引起） |
 | `--thr N` | 二值化阈值（默认 128） |
 | `--det-topk N` / `--det-min-area N` / `--det-tile N` | 启动态粗筛：Top-K 个数 / 最小面积 / 瓦片边长 |
-| `--arm-window N` / `--arm-hits N` / `--arm-accel F` / `--arm-gate F` | 启动确认：滑窗帧数 / 最少命中 / 位移平滑性门(px) / 关联门(px) |
+| `--confirm-window N` / `--confirm-hits N` / `--confirm-accel F` / `--confirm-gate F` | 启动确认：滑窗帧数 / 最少命中 / 位移平滑性门(px) / 关联门(px) |
 | `--roi-kp F` / `--roi-margin F` / `--roi-ksigma F` | 动态 ROI：`W=kp·ŝ+margin+kσ·σ_pred`（`--roi-ksigma 0` = 严格规格公式） |
 | `--kf-rfar F` / `--kf-rnear F` / `--kf-sfar F` / `--kf-snear F` | 尺度自适应噪声：远/近档 R_scale 与分界尺度（px） |
 | `--lost-after N` / `--rescan-after N` | 状态机：几帧无测量算丢失 / 丢失几帧后回头全图重扫 |

@@ -475,7 +475,7 @@ int main() {
     // ------------------------------------------------------------------
     {
         MeasureConfig    mcfg;
-        RoiBlobMeasurer  meas(mcfg);
+        RunLengthMeasurer  meas(mcfg);
         Scene            sc;
         sc.rect(300, 100, 305, 159);   // 6x60
         sc.rect(340, 100, 345, 159);   // 6x60
@@ -483,7 +483,7 @@ int main() {
         GrayFrame   f = sc.view();
         RoiWindow   win{};
         win.x = 100; win.y = 50; win.w = 400; win.h = 300; win.full_frame = false;
-        RoiBlobMeasurer::BlobInfo out[8];
+        RunLengthMeasurer::BlobInfo out[8];
         const uint32_t n = meas.collect(f, win, 2, out, 8);
         check("collect(): 三块都带出来（不是只带最好的那块）", n == 3,
               "n=" + std::to_string(n));
@@ -495,7 +495,7 @@ int main() {
         const TargetMeasurement m = meas.measure(f, win);
         // measure() 取的是"面积 × 圆度^circ_weight"最大者（既有行为，不是最大块）：
         // 10x10 方块(100×0.9) 压过 6x60 长条(360×0.15) —— 圆斑优先，长条让位。
-        // 我这次重构 blob_measure 只动了"多一个出口"，这个语义必须原样不变。
+        // 我这次重构 roi_measure 只动了"多一个出口"，这个语义必须原样不变。
         check("measure(): 既有语义不变（圆度加权取优 → 方块胜长条）", m.valid && m.area == 100,
               "area=" + std::to_string(m.area));
     }

@@ -59,8 +59,8 @@
 #     --no-track                只跑"全图 + 3 帧确认"，判断现象是否由 ROI/滤波引起
 #     --det off                 换回占位识别器（恒无目标），量识别链路本身的开销基线
 #     --det-min-area N          启动态候选最小面积（默认 3；目标确实很小可试 2）
-#     --arm-window N --arm-hits N    滑窗帧数 / 最少命中（默认 3 / 3）
-#     --arm-accel F             位移平滑性门（px/帧，默认 2.5；坏点漏网就调小）
+#     --confirm-window N --confirm-hits N    滑窗帧数 / 最少命中（默认 3 / 3）
+#     --confirm-accel F             位移平滑性门（px/帧，默认 2.5；坏点漏网就调小）
 #     --roi-kp F --roi-margin F 动态 ROI 大小（默认 5 / 24px；目标出框就调大）
 #     --kf-rnear F --kf-rfar F  尺度噪声远近两档（默认 0.6 / 25 px²）
 #     --circ-weight F           圆度权重：排序键 = 面积 × 圆度^F（默认 1.0；0=纯面积做对照）

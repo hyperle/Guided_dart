@@ -247,11 +247,11 @@ void note_det_result(const dart::Frame *f) {
              static_cast<unsigned>(r.roi_y0), static_cast<unsigned>(r.roi_x1),
              static_cast<unsigned>(r.roi_y1), static_cast<unsigned long long>(st.cands_last),
              g_det_pipe->tracker().lost_frames(),
-             static_cast<unsigned long long>(st.tracker.arm_gained),
+             static_cast<unsigned long long>(st.tracker.confirm_gained),
              static_cast<unsigned long long>(st.tracker.to_lost),
              static_cast<unsigned long long>(st.tracker.to_tracking),
              static_cast<unsigned long long>(st.tracker.to_startup),
-             static_cast<unsigned long long>(st.tracker.arm_reject),
+             static_cast<unsigned long long>(st.tracker.confirm_reject),
              static_cast<unsigned long long>(st.tracker.kf_reject),
              static_cast<unsigned long long>(st.tracker.out_of_roi));
     g_det_state_prev = r.state;
@@ -273,17 +273,17 @@ void emit_det_status() {
              static_cast<unsigned long long>(g_det_scan_max),
              static_cast<unsigned long long>(g_det_total_max),
              static_cast<unsigned long long>(g_det_transitions),
-             static_cast<unsigned long long>(st.tracker.arm_gained),
+             static_cast<unsigned long long>(st.tracker.confirm_gained),
              static_cast<unsigned long long>(st.tracker.to_lost),
              static_cast<unsigned long long>(st.tracker.reacquire_soft),
              static_cast<unsigned long long>(st.tracker.reacquire_hard),
              static_cast<unsigned long long>(st.tracker.to_startup),
-             static_cast<unsigned long long>(st.tracker.arm_reject),
-             static_cast<unsigned long long>(st.tracker.arm_border_skip),
+             static_cast<unsigned long long>(st.tracker.confirm_reject),
+             static_cast<unsigned long long>(st.tracker.confirm_border_skip),
              static_cast<unsigned long long>(st.tracker.full_confirm),
              static_cast<unsigned long long>(st.tracker.kf_reject),
              static_cast<unsigned long long>(st.tracker.out_of_roi),
-             static_cast<unsigned>(st.tracker.arm_frames), g_det_pipe->config().arm.window);
+             static_cast<unsigned>(st.tracker.confirm_frames), g_det_pipe->config().confirm.window);
     // 装甲板那一路（第二路输出）：锚=%d 远档=%d 灯尺=%d 块 %u 条 %u 对 %u 先验否 %u
     // 窗口 %uppx 耗时 %uus；mode: 0 无 / 1 本帧实测 / 2 保持(带年龄)
     const dart::ArmorTarget &at = g_det_armor_last;
@@ -425,14 +425,14 @@ void parse_args(int argc, char **argv, dart::Config &cfg, dart::detection::Detec
             const float mc = static_cast<float>(std::atof(argv[++i]));
             dcfg.scan.min_circularity = mc;
             dcfg.measure.min_circularity = mc;
-        } else if (!std::strcmp(argv[i], "--arm-window") && i + 1 < argc) {
-            dcfg.arm.window = static_cast<uint32_t>(std::atoi(argv[++i]));
-        } else if (!std::strcmp(argv[i], "--arm-hits") && i + 1 < argc) {
-            dcfg.arm.min_hits = static_cast<uint32_t>(std::atoi(argv[++i]));
-        } else if (!std::strcmp(argv[i], "--arm-accel") && i + 1 < argc) {
-            dcfg.arm.max_accel_px = static_cast<float>(std::atof(argv[++i]));
-        } else if (!std::strcmp(argv[i], "--arm-gate") && i + 1 < argc) {
-            dcfg.arm.gate_px = static_cast<float>(std::atof(argv[++i]));
+        } else if (!std::strcmp(argv[i], "--confirm-window") && i + 1 < argc) {
+            dcfg.confirm.window = static_cast<uint32_t>(std::atoi(argv[++i]));
+        } else if (!std::strcmp(argv[i], "--confirm-hits") && i + 1 < argc) {
+            dcfg.confirm.min_hits = static_cast<uint32_t>(std::atoi(argv[++i]));
+        } else if (!std::strcmp(argv[i], "--confirm-accel") && i + 1 < argc) {
+            dcfg.confirm.max_accel_px = static_cast<float>(std::atof(argv[++i]));
+        } else if (!std::strcmp(argv[i], "--confirm-gate") && i + 1 < argc) {
+            dcfg.confirm.gate_px = static_cast<float>(std::atof(argv[++i]));
         } else if (!std::strcmp(argv[i], "--roi-kp") && i + 1 < argc) {
             dcfg.roi.kp = static_cast<float>(std::atof(argv[++i]));
         } else if (!std::strcmp(argv[i], "--roi-margin") && i + 1 < argc) {
@@ -727,13 +727,13 @@ int main(int argc, char **argv) {
                  static_cast<unsigned long long>(st.misses),
                  static_cast<unsigned long long>(st.tracker.full_scans),
                  static_cast<unsigned long long>(st.tracker.roi_scans),
-                 static_cast<unsigned long long>(st.tracker.arm_gained),
+                 static_cast<unsigned long long>(st.tracker.confirm_gained),
                  static_cast<unsigned long long>(st.tracker.to_lost),
                  static_cast<unsigned long long>(st.tracker.reacquire_soft),
                  static_cast<unsigned long long>(st.tracker.reacquire_hard),
                  static_cast<unsigned long long>(st.tracker.to_startup),
-                 static_cast<unsigned long long>(st.tracker.arm_reject),
-                 static_cast<unsigned long long>(st.tracker.arm_border_skip),
+                 static_cast<unsigned long long>(st.tracker.confirm_reject),
+                 static_cast<unsigned long long>(st.tracker.confirm_border_skip),
                  static_cast<unsigned long long>(st.tracker.full_confirm),
                  static_cast<unsigned long long>(st.tracker.kf_reject),
                  static_cast<unsigned long long>(st.tracker.out_of_roi),

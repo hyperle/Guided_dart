@@ -1,12 +1,12 @@
 // ============================================================================
-// LightScanner 实现：瓦片粗筛（RVV）+ 瓦片并块 + 只对最亮几块做精修。
+// TileScanner 实现：瓦片粗筛（RVV）+ 瓦片并块 + 只对最亮几块做精修。
 //
 // 二值图的极性约定（与 GraphicsUtils::save_pbm 一致）：>=128 即亮（255），<128 即暗（0）。
 // 阈值化本身在 main.cpp 里由 GraphicsUtils::binarize 完成（RVV，写进池帧供录像/取证），
 // 本文件**只读**二值图，不再碰原始 Y 平面 —— 这是"所有视觉处理都在二值图上"的边界。
 // ============================================================================
 
-#include "detection/light.hpp"
+#include "detection/scanner/tile_scanner.hpp"
 
 #include <algorithm>
 #include <cstring>
@@ -27,11 +27,11 @@ inline uint32_t min_u32(uint32_t a, uint32_t b) { return a < b ? a : b; }
 
 } // namespace
 
-LightScanner::LightScanner(const ScannerConfig &cfg) : cfg_(cfg) {
+TileScanner::TileScanner(const ScannerConfig &cfg) : cfg_(cfg) {
     tile_ = cfg_.tile ? cfg_.tile : 16;
 }
 
-const char *LightScanner::name() const {
+const char *TileScanner::name() const {
 #if defined(DART_HAVE_RVV)
     return "rvv-tile";
 #else
@@ -39,7 +39,7 @@ const char *LightScanner::name() const {
 #endif
 }
 
-void LightScanner::ensure_grid(uint32_t w, uint32_t h) {
+void TileScanner::ensure_grid(uint32_t w, uint32_t h) {
     const uint32_t gw = (w + tile_ - 1) / tile_;
     const uint32_t gh = (h + tile_ - 1) / tile_;
     if (gw == gw_ && gh == gh_ && !count_.empty())
@@ -71,7 +71,7 @@ void LightScanner::ensure_grid(uint32_t w, uint32_t h) {
 //      这也正是把每条向量限制在 16 个像素的原因：Σ(0..15)=120 < 256，绝不会回绕。
 // ---------------------------------------------------------------------------
 #if defined(DART_HAVE_RVV)
-uint32_t LightScanner::tile_pass_rvv(const GrayFrame &f) {
+uint32_t TileScanner::tile_pass_rvv(const GrayFrame &f) {
     uint32_t tiles = 0;
 
     for (uint32_t ty = 0; ty < gh_; ++ty) {
@@ -132,7 +132,7 @@ uint32_t LightScanner::tile_pass_rvv(const GrayFrame &f) {
 // 粗筛（标量参考路径）：宿主机（无 RVV）走这条；板端用它做开机自检的对照。
 // 两条路径必须产出逐字段一致的瓦片累加结果。
 // ---------------------------------------------------------------------------
-uint32_t LightScanner::tile_pass_scalar(const GrayFrame &f) {
+uint32_t TileScanner::tile_pass_scalar(const GrayFrame &f) {
     uint32_t tiles = 0;
     for (uint32_t ty = 0; ty < gh_; ++ty) {
         const uint32_t y0 = ty * tile_;
@@ -172,7 +172,7 @@ uint32_t LightScanner::tile_pass_scalar(const GrayFrame &f) {
 // 瓦片并块：8 邻域 BFS。面积/Σx/Σy 直接累加瓦片值 —— 因为"所有有亮像素的瓦片"
 // 都在图里，所以这部分是**精确**的（不是估计），r = sqrt(A/π) 也就精确。
 // ---------------------------------------------------------------------------
-uint32_t LightScanner::merge_components() {
+uint32_t TileScanner::merge_components() {
     comps_.clear();
     const uint32_t n = gw_ * gh_;
     const size_t   max_comp = cfg_.max_components ? cfg_.max_components : n;
@@ -233,7 +233,7 @@ uint32_t LightScanner::merge_components() {
 // 面积/质心本来就已经精确（粗筛的矩），这里只是把包围盒从瓦片粒度收紧到像素粒度 ——
 // fill = area/包围盒 必须用紧致包围盒才有意义（瓦片粒度的包围盒会让小目标 fill 假性很低）。
 // ---------------------------------------------------------------------------
-bool LightScanner::refine(const GrayFrame &f, uint32_t ci, const Component &c, LightCandidate *out) const {
+bool TileScanner::refine(const GrayFrame &f, uint32_t ci, const Component &c, Blip *out) const {
     // 像素预算：组件占用的瓦片面积。超过就放弃精修（整片过曝时保住时间预算）。
     const uint64_t tiles_px = static_cast<uint64_t>(c.tiles) * tile_ * tile_;
     if (tiles_px > cfg_.refine_max_px)
@@ -290,7 +290,7 @@ bool LightScanner::refine(const GrayFrame &f, uint32_t ci, const Component &c, L
                                static_cast<double>(sxx), static_cast<double>(syy),
                                static_cast<double>(sxy), static_cast<double>(bw), static_cast<double>(bh));
     out->score = static_cast<float>(area); // 排序键在 run() 里按 circ_weight 统一算
-    // 贴边标记：面积是下界、质心偏，启动确认器据此跳过（见 LightCandidate::border）
+    // 贴边标记：面积是下界、质心偏，启动确认器据此跳过（见 Blip::border）
     out->border = (x0 == 0) || (y0 == 0) || (x1 + 1u >= f.width) || (y1 + 1u >= f.height);
     return true;
 }
@@ -298,7 +298,7 @@ bool LightScanner::refine(const GrayFrame &f, uint32_t ci, const Component &c, L
 // ---------------------------------------------------------------------------
 // 一帧全图扫描的主流程
 // ---------------------------------------------------------------------------
-size_t LightScanner::run(const GrayFrame &f, LightCandidate *out, size_t cap, bool use_rvv) {
+size_t TileScanner::run(const GrayFrame &f, Blip *out, size_t cap, bool use_rvv) {
     trace_ = Trace{};
     trace_.rvv = use_rvv;
     if (out == nullptr || cap == 0 || f.pixels == nullptr || f.width == 0 || f.height == 0)
@@ -358,7 +358,7 @@ size_t LightScanner::run(const GrayFrame &f, LightCandidate *out, size_t cap, bo
     for (size_t k = 0; k < refine_n && n < cap; ++k) {
         const uint32_t ci = order_[k];
         const Component &c = comps_[ci];
-        LightCandidate cand{};
+        Blip cand{};
 
         if (refine(f, ci, c, &cand)) {
             ++trace_.refined;
@@ -400,7 +400,7 @@ size_t LightScanner::run(const GrayFrame &f, LightCandidate *out, size_t cap, bo
 
     // 排序键 = 面积 × 圆度^w（见 ScannerConfig::circ_weight）：发光体是圆斑，
     // 反光/拖影是长条 —— 纯按面积排会让"更长更亮的光带"压过真正又小又圆的目标。
-    std::sort(out, out + n, [](const LightCandidate &a, const LightCandidate &b) {
+    std::sort(out, out + n, [](const Blip &a, const Blip &b) {
         if (a.score != b.score)
             return a.score > b.score;
         if (a.cy != b.cy)
@@ -412,7 +412,7 @@ size_t LightScanner::run(const GrayFrame &f, LightCandidate *out, size_t cap, bo
     return n;
 }
 
-size_t LightScanner::scan(const GrayFrame &frame, LightCandidate *out, size_t cap) {
+size_t TileScanner::scan(const GrayFrame &frame, Blip *out, size_t cap) {
 #if defined(DART_HAVE_RVV)
     return run(frame, out, cap, true);
 #else
@@ -449,7 +449,7 @@ void fill_disk(std::vector<uint8_t> &px, uint32_t w, uint32_t h, int cx, int cy,
 
 } // namespace
 
-bool LightScanner::selftest() {
+bool TileScanner::selftest() {
     const uint32_t W = 128, H = 64;
     std::vector<uint8_t> px(static_cast<size_t>(W) * H, 0);
     fill_disk(px, W, H, 40, 30, 7);   // 最大：跨瓦片边界
@@ -467,8 +467,8 @@ bool LightScanner::selftest() {
     cfg.min_area = 3;
     cfg.top_k = 4;
 
-    LightScanner va(cfg), vs(cfg);
-    LightCandidate ca[8]{}, cs[8]{};
+    TileScanner va(cfg), vs(cfg);
+    Blip ca[8]{}, cs[8]{};
     const size_t na = va.run(f, ca, 8, true);
     const size_t ns = vs.run(f, cs, 8, false);
     if (na != ns)

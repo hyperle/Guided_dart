@@ -3,7 +3,7 @@
 // ============================================================================
 // 绿灯（工况 1）的**启动确认器**：光斑候选 → "这是不是一个真目标"。
 //
-//   吃：全图扫描出来的候选序列（每帧一批 LightCandidate）
+//   吃：全图扫描出来的候选序列（每帧一批 Blip）
 //   做：3 帧滑窗反向关联 + 三道门（命中数 / 位移平滑性 / 物理性）
 //   出：确认成功则把整条轨迹交给卡尔曼初始化（Confirmation::chain）
 //
@@ -24,31 +24,31 @@
 namespace dart::detection {
 
 // 每帧最多缓存多少个候选参与关联（扫描器 Top-K 上限 64，但滑窗里没必要全留）
-constexpr uint32_t kArmMaxPerFrame = 16;
+constexpr uint32_t kBlipPerFrameMax = 16;
 
 class BlipConfirmer {
 public:
     struct Confirmation {
         bool           ok = false;
-        LightCandidate cand{};   // 确认后的目标（位置/尺度取最新一帧，continuity 已填）
+        Blip cand{};   // 确认后的目标（位置/尺度取最新一帧，continuity 已填）
         uint32_t       hits = 0; // 滑窗内关联上的帧数
         float          travel_px = 0.0f;    // 首末帧直线距离
         float          max_accel_px = 0.0f; // 帧间位移差的最大模（平滑性指标）
         float          radius_rate = 0.0f;  // 尺度变化率（px/s）
 
         // 整条轨迹（时间升序：旧 → 新），交给 ScaleAwareKalman::init_from_track
-        LightCandidate chain[kArmMaxWindow]{};
-        uint64_t       times_us[kArmMaxWindow]{};
+        Blip chain[kBlipWindowMax]{};
+        uint64_t       times_us[kBlipWindowMax]{};
         size_t         n = 0;
     };
 
-    explicit BlipConfirmer(const ArmConfig &cfg);
+    explicit BlipConfirmer(const ConfirmerConfig &cfg);
 
     void reset();
 
     // 推入本帧全图候选（按 score 降序最好，内部会再排一次保证确定性），
     // 返回本帧的确认结果。窗口没填满时 ok 恒为 false。
-    Confirmation push(uint64_t mono_us, const LightCandidate *cands, size_t n);
+    Confirmation push(uint64_t mono_us, const Blip *cands, size_t n);
 
     uint32_t window() const { return cfg_.window; }
 
@@ -64,13 +64,13 @@ private:
     struct Slot {
         uint64_t       mono_us = 0;
         uint32_t       n = 0;
-        LightCandidate cands[kArmMaxPerFrame]{};
+        Blip cands[kBlipPerFrameMax]{};
     };
 
     const Slot &at_lag(uint32_t lag) const; // lag=0 最新
 
-    ArmConfig cfg_;
-    Slot      ring_[kArmMaxWindow];
+    ConfirmerConfig cfg_;
+    Slot      ring_[kBlipWindowMax];
     uint32_t  head_ = 0;   // 最新一帧所在下标
     uint32_t  filled_ = 0; // 已填入的帧数（<= window）
     uint32_t  last_reject_ = 0;

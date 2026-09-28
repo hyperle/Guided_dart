@@ -35,20 +35,20 @@ namespace dart::detection {
 //   "给定一张二值图，最亮的 K 块亮斑在哪、多大。"
 // 做成接口是为了：① 换粗筛手段（如灰度投影）时下游不用动；② 宿主机测试注入假件；
 // ③ 将来 KPU 出候选也能直接接进来。
-class IPointScanner {
+class IBlipScanner {
 public:
-    virtual ~IPointScanner() = default;
+    virtual ~IBlipScanner() = default;
 
     // 把候选按 score 降序写入 out（最多 cap 个），返回实际写入个数。
-    virtual size_t scan(const GrayFrame &frame, LightCandidate *out, size_t cap) = 0;
+    virtual size_t scan(const GrayFrame &frame, Blip *out, size_t cap) = 0;
     virtual const char *name() const = 0;
 };
 
-class LightScanner final : public IPointScanner {
+class TileScanner final : public IBlipScanner {
 public:
-    explicit LightScanner(const ScannerConfig &cfg);
+    explicit TileScanner(const ScannerConfig &cfg);
 
-    size_t       scan(const GrayFrame &frame, LightCandidate *out, size_t cap) override;
+    size_t       scan(const GrayFrame &frame, Blip *out, size_t cap) override;
     const char  *name() const override;
 
     // 开机自检：同一张合成图上把**向量路径**与**标量参考路径**各跑一遍，
@@ -77,11 +77,11 @@ private:
     };
 
     void   ensure_grid(uint32_t w, uint32_t h);
-    size_t run(const GrayFrame &frame, LightCandidate *out, size_t cap, bool use_rvv);
+    size_t run(const GrayFrame &frame, Blip *out, size_t cap, bool use_rvv);
     uint32_t tile_pass_rvv(const GrayFrame &frame);
     uint32_t tile_pass_scalar(const GrayFrame &frame);
     uint32_t merge_components();
-    bool     refine(const GrayFrame &f, uint32_t comp_index, const Component &c, LightCandidate *out) const;
+    bool     refine(const GrayFrame &f, uint32_t comp_index, const Component &c, Blip *out) const;
 
     ScannerConfig cfg_;
     uint32_t      tile_ = 16;

@@ -1,5 +1,5 @@
 // ============================================================================
-// RoiBlobMeasurer 实现：窗口内"游程 + 并查集"连通域，再按形状筛选取最大块。
+// RunLengthMeasurer 实现：窗口内"游程 + 并查集"连通域，再按形状筛选取最大块。
 //
 // 为什么不用"整窗掩码 + BFS"（C 版 detect_color 的写法）：那需要一块 w×h 的
 // 中间掩码，而跟踪态的窗口最大可以到整幅的一半 —— 板端用户堆只有 16MB，
@@ -12,7 +12,7 @@
 //                面积下限由调用方给（它的门限随尺度变，塞不进静态配置）
 // ============================================================================
 
-#include "detection/blob_measure.hpp"
+#include "detection/measure/roi_measure.hpp"
 
 #include <algorithm>
 
@@ -29,9 +29,9 @@ inline bool runs_touch(uint32_t a0, uint32_t a1, uint32_t b0, uint32_t b1) {
 
 } // namespace
 
-RoiBlobMeasurer::RoiBlobMeasurer(const MeasureConfig &cfg) : cfg_(cfg) {}
+RunLengthMeasurer::RunLengthMeasurer(const MeasureConfig &cfg) : cfg_(cfg) {}
 
-int32_t RoiBlobMeasurer::find_root(int32_t i) {
+int32_t RunLengthMeasurer::find_root(int32_t i) {
     // 路径减半：游程数最多几千，递归/全路径压缩都不必要，减半已足够平坦
     while (parent_[static_cast<size_t>(i)] != i) {
         parent_[static_cast<size_t>(i)] = parent_[static_cast<size_t>(parent_[static_cast<size_t>(i)])];
@@ -40,7 +40,7 @@ int32_t RoiBlobMeasurer::find_root(int32_t i) {
     return i;
 }
 
-bool RoiBlobMeasurer::build_blobs(const GrayFrame &f, const RoiWindow &w) {
+bool RunLengthMeasurer::build_blobs(const GrayFrame &f, const RoiWindow &w) {
     trace_ = Trace{};
 
     // 非法窗口/非法 stride：返回"没测到"。调用方（状态机）会把它当成一次 miss ——
@@ -180,7 +180,7 @@ bool RoiBlobMeasurer::build_blobs(const GrayFrame &f, const RoiWindow &w) {
     return !blobs_.empty();
 }
 
-TargetMeasurement RoiBlobMeasurer::measure(const GrayFrame &f, const RoiWindow &w) {
+TargetMeasurement RunLengthMeasurer::measure(const GrayFrame &f, const RoiWindow &w) {
     TargetMeasurement m{};
     if (!build_blobs(f, w))
         return m;
@@ -240,7 +240,7 @@ TargetMeasurement RoiBlobMeasurer::measure(const GrayFrame &f, const RoiWindow &
     return m;
 }
 
-uint32_t RoiBlobMeasurer::collect(const GrayFrame &f, const RoiWindow &w, uint32_t min_area,
+uint32_t RunLengthMeasurer::collect(const GrayFrame &f, const RoiWindow &w, uint32_t min_area,
                                   BlobInfo *out, uint32_t cap) {
     if (out == nullptr || cap == 0)
         return 0;

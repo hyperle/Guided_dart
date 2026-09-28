@@ -35,9 +35,9 @@ public:
     virtual const char *name() const = 0;
 };
 
-class RoiBlobMeasurer final : public IRoiMeasurer {
+class RunLengthMeasurer final : public IRoiMeasurer {
 public:
-    explicit RoiBlobMeasurer(const MeasureConfig &cfg);
+    explicit RunLengthMeasurer(const MeasureConfig &cfg);
 
     TargetMeasurement measure(const GrayFrame &frame, const RoiWindow &window) override;
     const char       *name() const override { return "roi-rle-cc"; }

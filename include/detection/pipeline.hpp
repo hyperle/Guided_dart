@@ -4,8 +4,8 @@
 // 识别层门面：把"看哪里、怎么看、看到之后怎么跟"编成一个 dart::IDetector。
 //
 // 依赖注入（构造函数 Deps）：
-//   IPointScanner           全图扫描器（默认 LightScanner：RVV 瓦片粗筛）
-//   IRoiMeasurer            ROI 测量器（默认 RoiBlobMeasurer：游程连通域）
+//   IBlipScanner           全图扫描器（默认 TileScanner：RVV 瓦片粗筛）
+//   IRoiMeasurer            ROI 测量器（默认 RunLengthMeasurer：游程连通域）
 //   const IScaleNoiseModel  尺度噪声 R_scale(s)（默认 LinearScaleNoiseModel）
 //   std::function now_us    时钟（默认 CLOCK_MONOTONIC；测试注入假时钟即可完全确定性地跑）
 //
@@ -25,9 +25,9 @@
 
 #include "core/frame.hpp"
 #include "detection/armor/armor_detector.hpp"
-#include "detection/blob_measure.hpp"
+#include "detection/measure/roi_measure.hpp"
 #include "detection/config.hpp"
-#include "detection/light.hpp"
+#include "detection/scanner/tile_scanner.hpp"
 #include "detection/track/tracker.hpp"
 #include "detection/types.hpp"
 #include "vision/detector.hpp"
@@ -45,8 +45,8 @@ struct DetectionStats {
     TrackState     state = TrackState::Startup;
     RoiWindow      last_window{};
     TrackerCounters tracker{};
-    LightScanner::Trace   scan_trace{};
-    RoiBlobMeasurer::Trace measure_trace{};
+    TileScanner::Trace   scan_trace{};
+    RunLengthMeasurer::Trace measure_trace{};
     // 装甲板这一路（第二路输出）的明细：条数/对数/远档/窗口像素/耗时
     ArmorDetector::Trace  armor_trace{};
 };
@@ -54,7 +54,7 @@ struct DetectionStats {
 class DetectionPipeline final : public IDetector {
 public:
     struct Deps {
-        IPointScanner          *scanner = nullptr;
+        IBlipScanner          *scanner = nullptr;
         IRoiMeasurer           *measurer = nullptr;
         const IScaleNoiseModel *noise = nullptr;
         std::function<uint64_t()> now_us; // 空 = CLOCK_MONOTONIC
@@ -91,16 +91,16 @@ private:
     uint64_t now_us() const;
 
     DetectionConfig    cfg_;
-    LightScanner       owned_scanner_;
-    RoiBlobMeasurer    owned_measurer_;
-    IPointScanner     *scanner_ = nullptr;
+    TileScanner       owned_scanner_;
+    RunLengthMeasurer    owned_measurer_;
+    IBlipScanner     *scanner_ = nullptr;
     IRoiMeasurer      *measurer_ = nullptr;
     std::function<uint64_t()> now_fn_; // 空 = 真实单调钟
     TargetTracker      tracker_;
     // 装甲板那一路：绿灯当锚，在同一张二值图上再扫一小块（它自带一个测量器实例，
     // 免得和绿灯这个抢 last_trace；缓冲按帧复用，运行期不分配）
     ArmorDetector      armor_;
-    std::vector<LightCandidate> cands_;
+    std::vector<Blip> cands_;
     DetectionStats     stats_{};
 };
 

@@ -68,8 +68,8 @@ struct ScannerConfig {
 // 滑窗长度 window 帧：默认 3 帧。板端 90fps 下一帧 11ms，3 帧 ≈ 33ms 的确认延迟，
 // 换来"随机闪烁坏点几乎不可能凑出连续轨迹"。窗口拉长更稳但确认更慢（对逼近目标不利）。
 // ---------------------------------------------------------------------------
-struct ArmConfig {
-    uint32_t window = 3;   // 滑窗帧数（上限 kArmMaxWindow=8）
+struct ConfirmerConfig {
+    uint32_t window = 3;   // 滑窗帧数（上限 kBlipWindowMax=8）
     uint32_t min_hits = 3; // 窗口内至少命中几帧才算确认（=window 即要求连续命中）
 
     // 位置关联门（像素）：把上一帧的候选与"按上一帧位移外推的位置"比对。
@@ -106,7 +106,7 @@ struct ArmConfig {
     bool skip_border = true;
 };
 
-constexpr uint32_t kArmMaxWindow = 8; // 滑窗环形缓冲的编译期上限
+constexpr uint32_t kBlipWindowMax = 8; // 滑窗环形缓冲的编译期上限
 
 // ---------------------------------------------------------------------------
 // 尺度自适应卡尔曼（工况 2：跟踪阶段）
@@ -324,7 +324,7 @@ struct ArmorConfig {
 };
 
 // 同一帧里最多带出多少片候选灯条（定长数组，运行期零分配）
-constexpr uint32_t kArmorMaxBars = 32;
+constexpr uint32_t kArmorBarMax = 32;
 
 // ---------------------------------------------------------------------------
 // 状态机时序
@@ -342,13 +342,13 @@ struct TrackerConfig {
 // 一整套配置
 // ---------------------------------------------------------------------------
 struct DetectionConfig {
-    ScannerConfig scan;
-    MeasureConfig measure;
-    ArmConfig     arm;
-    KfConfig      kf;
-    RoiConfig     roi;
-    TrackerConfig tracker;
-    ArmorConfig   armor;
+    ScannerConfig   scan;
+    MeasureConfig   measure;
+    ConfirmerConfig confirm;
+    KfConfig        kf;
+    RoiConfig       roi;
+    TrackerConfig   tracker;
+    ArmorConfig     armor;
 
     // 关掉跟踪（永远走"全图扫描 + 滑窗确认"）：用来做 A/B 对照 ——
     // 怀疑 ROI 门控或滤波带来问题时，先关掉它看现象是否消失。
@@ -357,14 +357,14 @@ struct DetectionConfig {
     // 把明显的非法组合夹到可用范围（命令行手输的数字不做校验会直接算坏窗口）。
     // 只改数值、不打日志：检测层不认识日志，谁调谁负责报告。
     void sanitize() {
-        if (arm.window < 1)
-            arm.window = 1;
-        if (arm.window > kArmMaxWindow)
-            arm.window = kArmMaxWindow;
-        if (arm.min_hits < 1)
-            arm.min_hits = 1;
-        if (arm.min_hits > arm.window)
-            arm.min_hits = arm.window;
+        if (confirm.window < 1)
+            confirm.window = 1;
+        if (confirm.window > kBlipWindowMax)
+            confirm.window = kBlipWindowMax;
+        if (confirm.min_hits < 1)
+            confirm.min_hits = 1;
+        if (confirm.min_hits > confirm.window)
+            confirm.min_hits = confirm.window;
         if (scan.top_k < 1)
             scan.top_k = 1;
         if (scan.top_k > 64)

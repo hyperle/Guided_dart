@@ -19,7 +19,7 @@ inline float hypot_f(float dx, float dy) { return std::sqrt(dx * dx + dy * dy); 
 
 // 候选排序：亮（面积大）在前；面积相同按 y/cx 排 —— 让同一批输入永远给出同一结果，
 // 否则"确认了哪一个"会随排序稳定性变化，板端复盘时对不上。
-bool cand_before(const LightCandidate &a, const LightCandidate &b) {
+bool cand_before(const Blip &a, const Blip &b) {
     if (a.score != b.score)
         return a.score > b.score;
     if (a.cy != b.cy)
@@ -29,13 +29,13 @@ bool cand_before(const LightCandidate &a, const LightCandidate &b) {
 
 } // namespace
 
-BlipConfirmer::BlipConfirmer(const ArmConfig &cfg) : cfg_(cfg) { reset(); }
+BlipConfirmer::BlipConfirmer(const ConfirmerConfig &cfg) : cfg_(cfg) { reset(); }
 
 void BlipConfirmer::reset() {
     head_ = 0;
     filled_ = 0;
     last_reject_ = 0;
-    for (uint32_t i = 0; i < kArmMaxWindow; ++i) {
+    for (uint32_t i = 0; i < kBlipWindowMax; ++i) {
         ring_[i].mono_us = 0;
         ring_[i].n = 0;
     }
@@ -47,7 +47,7 @@ const BlipConfirmer::Slot &BlipConfirmer::at_lag(uint32_t lag) const {
     return ring_[idx];
 }
 
-BlipConfirmer::Confirmation BlipConfirmer::push(uint64_t mono_us, const LightCandidate *cands, size_t n) {
+BlipConfirmer::Confirmation BlipConfirmer::push(uint64_t mono_us, const Blip *cands, size_t n) {
     Confirmation out{};
     last_reject_ = 0;
     last_border_skip_ = 0;
@@ -60,7 +60,7 @@ BlipConfirmer::Confirmation BlipConfirmer::push(uint64_t mono_us, const LightCan
     s.mono_us = mono_us;
     s.n = 0;
     if (cands != nullptr) {
-        const size_t take = std::min<size_t>(n, kArmMaxPerFrame);
+        const size_t take = std::min<size_t>(n, kBlipPerFrameMax);
         for (size_t i = 0; i < take; ++i)
             s.cands[i] = cands[i];
         std::sort(s.cands, s.cands + take, cand_before);
@@ -96,8 +96,8 @@ BlipConfirmer::Confirmation BlipConfirmer::push(uint64_t mono_us, const LightCan
             float gate = cfg_.gate_px;
             float px, py;
             if (hits >= 2) {
-                const LightCandidate &a = cand.chain[hits - 1]; // 较新
-                const LightCandidate &b = cand.chain[hits - 2]; // 更旧
+                const Blip &a = cand.chain[hits - 1]; // 较新
+                const Blip &b = cand.chain[hits - 2]; // 更旧
                 const float vx = a.cx - b.cx;
                 const float vy = a.cy - b.cy;
                 px = a.cx + vx; // 往回外推一帧
@@ -112,7 +112,7 @@ BlipConfirmer::Confirmation BlipConfirmer::push(uint64_t mono_us, const LightCan
             int32_t best = -1;
             float   best_d2 = gate * gate;
             for (uint32_t j = 0; j < prev.n; ++j) {
-                const LightCandidate &c = prev.cands[j];
+                const Blip &c = prev.cands[j];
                 const float r_ref = cand.chain[hits - 1].radius;
                 const float dt = static_cast<float>(static_cast<double>(cand.times_us[hits - 1] -
                                                                         prev.mono_us) *

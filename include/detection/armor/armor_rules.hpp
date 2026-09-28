@@ -14,7 +14,7 @@
 #include <cstdint>
 
 #include "detection/armor/armor_geometry.hpp"
-#include "detection/blob_measure.hpp"
+#include "detection/measure/roi_measure.hpp"
 #include "detection/config.hpp"
 #include "detection/types.hpp"
 
@@ -26,7 +26,7 @@ namespace dart::detection::armor {
 //
 // 主轴可用就用主轴（与旋转无关）；退化（1~2px 或病态矩）时退回包围盒口径。
 // ---------------------------------------------------------------------------
-void fill_bar(const RoiBlobMeasurer::BlobInfo &b, Bar *out);
+void fill_bar(const RunLengthMeasurer::BlobInfo &b, Bar *out);
 
 // ---------------------------------------------------------------------------
 // detect 阶段的灯条判据（track 阶段**不进这里**）。
@@ -34,7 +34,7 @@ void fill_bar(const RoiBlobMeasurer::BlobInfo &b, Bar *out);
 // 近档（包围盒长边 ≥ tiny_px）：长宽比 + 填充率可信，照用。
 // 远档：几个像素的"长宽比"是量化噪声 → 改判与尺度无关的圆度（灯条不像圆）。
 // ---------------------------------------------------------------------------
-bool as_bar(const ArmorConfig &cfg, const RoiBlobMeasurer::BlobInfo &b, int32_t s, Bar *out);
+bool as_bar(const ArmorConfig &cfg, const RunLengthMeasurer::BlobInfo &b, int32_t s, Bar *out);
 
 // ---------------------------------------------------------------------------
 // 配对：两条灯条像不像同一块装甲板（全部是必要条件）

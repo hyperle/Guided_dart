@@ -25,7 +25,7 @@
 #include "detection/armor/armor_geometry.hpp"
 #include "detection/armor/armor_scale.hpp"
 #include "detection/armor/armor_windows.hpp"
-#include "detection/blob_measure.hpp"
+#include "detection/measure/roi_measure.hpp"
 #include "detection/config.hpp"
 #include "detection/types.hpp"
 
@@ -42,7 +42,7 @@ public:
     // now_us 是调用方给的时钟：主机测试注入假钟即可完全确定性。
     void detect(const GrayFrame &bin, const TrackOutput &led, uint64_t now_us, ArmorTarget *out);
 
-    // 板端调参用（对齐 DetectionStats / LightScanner::Trace 的口径）
+    // 板端调参用（对齐 DetectionStats / TileScanner::Trace 的口径）
     struct Trace {
         bool     anchored = false; // 本帧有绿灯锚
         bool     far = false;      // 处在远档（形状判据换成圆度）
@@ -53,7 +53,7 @@ public:
         uint32_t rejected = 0;     // 被灯条判据否掉的块数
         uint32_t rejected_prior = 0; // 被刚性几何先验否掉的对数
         uint32_t window_px = 0;    // 本帧实际扫的**合计**窗口像素数（ROI 效率：单条窗是 2 个之和）
-        uint8_t  windows = 0;      // 本帧开了几个窗（1 = 合窗，2 = 每条灯条各一个）
+        uint32_t windows = 0;      // 本帧开了几个窗（1 = 合窗，2 = 每条灯条各一个）
         uint8_t  mode = 0;         // 0 = detect（全门限；首次/重捕），1 = track（只认亲）
         uint8_t  assoc_fail = 0;   // 1 = 本帧认亲失败（没认到 / 跑出锚的够得着范围）
         uint32_t cost_us = 0;
@@ -73,24 +73,24 @@ private:
     // ---- 一帧判决：先关联（上一对还在就不换人），再保持，最后才重选 ----
     // 关联优先是"静止画面下结果乱跳"的正解：每帧从零重选时，两对分数接近就逐帧换人。
     // 保持（Held）只给旧中心、并打标记 —— 不是把旧值冒充成新测量。
-    bool step(const Bar *bars, uint32_t n, const TrackOutput &led, int32_t s, ArmorTarget *out);
+    bool decide(const Bar *bars, uint32_t n, const TrackOutput &led, int32_t s, ArmorTarget *out);
 
     // track 阶段的"认亲"：在该窗捞到的块里找 ref 的同一条灯条，判据只有位置与尺寸容差。
-    bool assoc(const RoiBlobMeasurer::BlobInfo *blobs, uint32_t n, const Bar &ref, Bar *out) const;
+    bool assoc(const RunLengthMeasurer::BlobInfo *blobs, uint32_t n, const Bar &ref, Bar *out) const;
 
     // 在候选里找 ref 的同一条灯条：位置和尺寸都在容差内，取中心最近的那个。
     // 容差按灯条尺寸给（远处 3px 的灯条和近处 100px 的灯条，容差不可能是同一个数）。
     const Bar *assoc(const Bar *bars, uint32_t n, const Bar &ref) const;
 
-    ArmorTarget mk(uint8_t mode, uint8_t held) const;
+    ArmorTarget make_target(uint8_t mode, uint8_t held) const;
 
     // 多窗 → 一个并集矩形（日志/CSV/画框用；逐窗明细在 Trace.windows 里）
     static void fill_window(ArmorTarget *t, const RoiWindow *wins, uint32_t n);
 
     ArmorConfig               cfg_;
-    RoiBlobMeasurer           meas_; // 自己的实例：不与绿灯那一路抢 trace
-    RoiBlobMeasurer::BlobInfo blobs_[kArmorMaxBars]; // 定长，运行期零分配
-    Bar                       bars_[kArmorMaxBars];
+    RunLengthMeasurer           meas_; // 自己的实例：不与绿灯那一路抢 trace
+    RunLengthMeasurer::BlobInfo blobs_[kArmorBarMax]; // 定长，运行期零分配
+    Bar                       bars_[kArmorBarMax];
     Bar                       a_{}, b_{};
     int32_t                   c_[2] = {0, 0};
     bool                      have_pair_ = false;

@@ -6,7 +6,7 @@
 // 就要浪费一轮上板。有了 qemu-riscv64（带 RVV 1.0），这一段可以在宿主机上先跑：
 //
 //   ① VLEN 核对：vsetvlmax_e8m1() 必须是 16（板端 C908 的 VLEN=128）
-//   ② LightScanner::selftest()：**向量路径 vs 标量参考逐位比对**（和板端同一个函数）
+//   ② TileScanner::selftest()：**向量路径 vs 标量参考逐位比对**（和板端同一个函数）
 //   ③ 解析校验：合成图上 RVV 扫出来的面积/质心/等效半径 vs 逐像素真值
 //   ④ 整链：DetectionPipeline 在合成序列上跑 启动→跟踪，确认 ROI 门控/滤波在 riscv 上也对
 //   ⑤ 数量级：RVV 全图扫描单帧耗时（**qemu 的时间不是板端的时间**，只看数量级）
@@ -20,7 +20,7 @@
 #include <cstdio>
 #include <vector>
 
-#include "detection/light.hpp"
+#include "detection/scanner/tile_scanner.hpp"
 #include "detection/pipeline.hpp"
 
 #if defined(__riscv_vector)
@@ -105,9 +105,9 @@ int main() {
 #endif
 
     // ② 与板端同一个自检函数：向量路径 vs 标量参考逐字段比对
-    const bool light_ok = LightScanner::selftest();
-    CHECK(light_ok, "LightScanner::selftest()（RVV vs 标量逐位比对）必须通过");
-    std::printf("  LightScanner::selftest() = %s\n", light_ok ? "PASS" : "FAIL");
+    const bool light_ok = TileScanner::selftest();
+    CHECK(light_ok, "TileScanner::selftest()（RVV vs 标量逐位比对）必须通过");
+    std::printf("  TileScanner::selftest() = %s\n", light_ok ? "PASS" : "FAIL");
 
     const bool pipe_ok = DetectionPipeline::selftest();
     CHECK(pipe_ok, "DetectionPipeline::selftest()（含 ROI 测量解析校验）必须通过");
@@ -131,8 +131,8 @@ int main() {
         f.stride = W;
 
         ScannerConfig cfg;
-        LightScanner  sc(cfg);
-        LightCandidate out[8]{};
+        TileScanner  sc(cfg);
+        Blip out[8]{};
         const size_t   n = sc.scan(f, out, 8);
         CHECK(n == 3, "三个目标必须出 3 个候选（单像素坏点被 min_area 丢掉），实得 %zu", n);
         if (n == 3) {
@@ -224,8 +224,8 @@ int main() {
         f.stride = W;
 
         ScannerConfig cfg;
-        LightScanner  sc(cfg);
-        LightCandidate out[8]{};
+        TileScanner  sc(cfg);
+        Blip out[8]{};
         for (int i = 0; i < 5; ++i)
             sc.scan(f, out, 8); // 预热
         const int    N = 50;

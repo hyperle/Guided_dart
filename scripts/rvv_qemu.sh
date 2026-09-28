@@ -40,8 +40,8 @@ set -x
 "${CXX}" "${ARCH_FLAGS[@]}" -Wall -Wextra \
     -I"${REPO_ROOT}/include" \
     "${REPO_ROOT}/tests/rvv/rvv_selftest.cpp" \
-    "${REPO_ROOT}/src/detection/light.cpp" \
-    "${REPO_ROOT}/src/detection/blob_measure.cpp" \
+    "${REPO_ROOT}/src/detection/scanner/tile_scanner.cpp" \
+    "${REPO_ROOT}/src/detection/measure/roi_measure.cpp" \
     "${REPO_ROOT}/src/detection/track/blip_confirmer.cpp" \
     "${REPO_ROOT}/src/detection/track/kalman.cpp" \
     "${REPO_ROOT}/src/detection/track/roi_prediction.cpp" \
