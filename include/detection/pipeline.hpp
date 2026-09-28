@@ -28,7 +28,7 @@
 #include "detection/blob_measure.hpp"
 #include "detection/config.hpp"
 #include "detection/light.hpp"
-#include "detection/tracker.hpp"
+#include "detection/track/tracker.hpp"
 #include "detection/types.hpp"
 #include "vision/detector.hpp"
 

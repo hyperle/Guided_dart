@@ -1,13 +1,12 @@
 // ============================================================================
-// armor.cpp —— 绿灯启动确认器（StartupArmer，armor.hpp）的实现。
+// blip_confirmer.cpp —— BlipConfirmer 的实现：滑窗关联 + 三道门
+// （命中数 / 位移平滑性 / 物理性）。
 //
-// 滑窗关联 + 三道门（命中数 / 位移平滑性 / 物理性）。
-// 注意：装甲板那一路**不在**这里，它在 src/detection/armor/ 下
-// （armor_detector.cpp / armor_geometry.cpp / armor_scale.cpp /
-//   armor_rules.cpp / armor_windows.cpp）。
+// 为什么这样判、每个门限管什么现象，写在 blip_confirmer.hpp 与 config.hpp 里，
+// 这里只留实现要点。
 // ============================================================================
 
-#include "detection/armor.hpp"
+#include "detection/track/blip_confirmer.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -30,9 +29,9 @@ bool cand_before(const LightCandidate &a, const LightCandidate &b) {
 
 } // namespace
 
-StartupArmer::StartupArmer(const ArmConfig &cfg) : cfg_(cfg) { reset(); }
+BlipConfirmer::BlipConfirmer(const ArmConfig &cfg) : cfg_(cfg) { reset(); }
 
-void StartupArmer::reset() {
+void BlipConfirmer::reset() {
     head_ = 0;
     filled_ = 0;
     last_reject_ = 0;
@@ -42,13 +41,13 @@ void StartupArmer::reset() {
     }
 }
 
-const StartupArmer::Slot &StartupArmer::at_lag(uint32_t lag) const {
+const BlipConfirmer::Slot &BlipConfirmer::at_lag(uint32_t lag) const {
     const uint32_t w = cfg_.window ? cfg_.window : 1;
     const uint32_t idx = (head_ + w - (lag % w)) % w;
     return ring_[idx];
 }
 
-StartupArmer::Confirmation StartupArmer::push(uint64_t mono_us, const LightCandidate *cands, size_t n) {
+BlipConfirmer::Confirmation BlipConfirmer::push(uint64_t mono_us, const LightCandidate *cands, size_t n) {
     Confirmation out{};
     last_reject_ = 0;
     last_border_skip_ = 0;

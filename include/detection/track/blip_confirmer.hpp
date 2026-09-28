@@ -1,17 +1,18 @@
 #pragma once
 
 // ============================================================================
-// 绿灯（工况 1）的**启动确认器**。
+// 绿灯（工况 1）的**启动确认器**：光斑候选 → "这是不是一个真目标"。
 //
 //   吃：全图扫描出来的候选序列（每帧一批 LightCandidate）
 //   做：3 帧滑窗反向关联 + 三道门（命中数 / 位移平滑性 / 物理性）
-//   出：确认成功则把整条轨迹交给卡尔曼初始化
+//   出：确认成功则把整条轨迹交给卡尔曼初始化（Confirmation::chain）
 //
-// 它**不认识**像素、不认识窗口、不认识装甲板 —— 只认候选表。
+// 它**不认识**像素、不认识窗口、不认识滤波 —— 只认候选表，所以主机侧
+// 可以直接喂合成候选序列逐条单测（tests/host/detection_host_test.cpp §4）。
 // 使用者：TargetTracker（tracker.hpp），它每帧全图扫描时喂候选。
 //
-// 与装甲板那一路的关系：无。装甲板的识别在 detection/armor/ 下
-// （armor_detector.hpp 等），两者除了都属于"识别层第二路输出"之外没有任何耦合。
+// 命名：本类确认的是二值图上的**光斑（blip）**，不是装甲板。
+// 仓库里另有 detection/armor/ 下的装甲板识别，两者没有任何耦合。
 // ============================================================================
 
 #include <cstddef>
@@ -25,7 +26,7 @@ namespace dart::detection {
 // 每帧最多缓存多少个候选参与关联（扫描器 Top-K 上限 64，但滑窗里没必要全留）
 constexpr uint32_t kArmMaxPerFrame = 16;
 
-class StartupArmer {
+class BlipConfirmer {
 public:
     struct Confirmation {
         bool           ok = false;
@@ -41,7 +42,7 @@ public:
         size_t         n = 0;
     };
 
-    explicit StartupArmer(const ArmConfig &cfg);
+    explicit BlipConfirmer(const ArmConfig &cfg);
 
     void reset();
 

@@ -42,11 +42,16 @@ set -x
     "${REPO_ROOT}/tests/rvv/rvv_selftest.cpp" \
     "${REPO_ROOT}/src/detection/light.cpp" \
     "${REPO_ROOT}/src/detection/blob_measure.cpp" \
-    "${REPO_ROOT}/src/detection/armor.cpp" \
-    "${REPO_ROOT}/src/detection/kalman.cpp" \
-    "${REPO_ROOT}/src/detection/roi_prediction.cpp" \
-    "${REPO_ROOT}/src/detection/tracker.cpp" \
+    "${REPO_ROOT}/src/detection/track/blip_confirmer.cpp" \
+    "${REPO_ROOT}/src/detection/track/kalman.cpp" \
+    "${REPO_ROOT}/src/detection/track/roi_prediction.cpp" \
+    "${REPO_ROOT}/src/detection/track/tracker.cpp" \
     "${REPO_ROOT}/src/detection/pipeline.cpp" \
+    "${REPO_ROOT}/src/detection/armor/armor_geometry.cpp" \
+    "${REPO_ROOT}/src/detection/armor/armor_scale.cpp" \
+    "${REPO_ROOT}/src/detection/armor/armor_rules.cpp" \
+    "${REPO_ROOT}/src/detection/armor/armor_windows.cpp" \
+    "${REPO_ROOT}/src/detection/armor/armor_detector.cpp" \
     -o "${OUT}"
 set +x
 echo "产物: ${OUT}"

@@ -31,7 +31,7 @@
 
 ```
         ┌──────────────────────── 启动态 / 丢失重扫 ────────────────────────┐
-二值图 ──┤ LightScanner(RVV 瓦片粗筛) → LightCandidate[Top-K] → StartupArmer │
+二值图 ──┤ LightScanner(RVV 瓦片粗筛) → LightCandidate[Top-K] → BlipConfirmer │
         │                                    （3 帧滑窗 + 位移平滑性）      │
         └───────────────────────────────┬──────────────────────────────────┘
                                         │ 确认
@@ -58,16 +58,16 @@
 |---|---|---|---|
 | `LightScanner` | `include/detection/light.hpp` + `src/detection/light.cpp` | 二值图 → 最亮 K 块亮斑（质心/面积/等效半径/包围盒） | 跟踪、滤波、日志 |
 | `RoiBlobMeasurer` | `include/detection/blob_measure.hpp` + `.cpp` | ROI 窗口内 → 一个测量 `(cx,cy,r)` + 质量 | 状态机、滤波 |
-| `StartupArmer` | `include/detection/armor.hpp` + `armor.cpp` | 候选序列 → "这是不是真目标"（3 帧滑窗） | 像素、ROI、滤波 |
+| `BlipConfirmer` | `include/detection/track/blip_confirmer.hpp` + `.cpp` | 候选序列 → "这是不是真目标"（3 帧滑窗） | 像素、ROI、滤波 |
 | `ArmorDetector` | `include/detection/armor/armor_detector.hpp` + `.cpp` | 二值图 + 绿灯锚 → 装甲板板心（detect/track 两路） | 候选序列表、滑窗、卡尔曼 |
 | `armor::` 几何 | `armor/armor_geometry.hpp` + `.cpp` | 灯条值类型 + 端点 / 线段求交 / 板心 / 间距（纯函数） | 像素、配置、状态 |
 | `armor::` 尺度门限 | `armor/armor_scale.hpp` + `.cpp` | 灯尺状态 → 灯条长度/像素门限 | 像素、块 |
 | `armor::` 判据 | `armor/armor_rules.hpp` + `.cpp` | 连通域 → 是不是灯条 / 两条像不像一块板 | 像素内存、状态 |
 | `armor::` 窗口 | `armor/armor_windows.hpp` + `.cpp` | 本帧扫哪 1~2 个矩形（单条窗 / 合窗 / 整块） | 像素、判据 |
-| `ScaleAwareKalman` | `include/detection/kalman.hpp` + `.cpp` | 6 维状态估计 + 离群拒收 + 发散保护 | 像素、状态机 |
+| `ScaleAwareKalman` | `include/detection/track/kalman.hpp` + `.cpp` | 6 维状态估计 + 离群拒收 + 发散保护 | 像素、状态机 |
 | `LinearScaleNoiseModel` | 同上 | `R_scale(s)`：远→大、近→小 | 其它一切 |
-| `RoiPredictor` | `include/detection/roi_prediction.hpp` + `.cpp` | `(预测状态, 丢失帧数) → RoiWindow` | 像素、滤波 |
-| `TargetTracker` | `include/detection/tracker.hpp` + `.cpp` | 三态迁移 + 把上面几个缝在一起 | 像素、扫描器、日志 |
+| `RoiPredictor` | `include/detection/track/roi_prediction.hpp` + `.cpp` | `(预测状态, 丢失帧数) → RoiWindow` | 像素、滤波 |
+| `TargetTracker` | `include/detection/track/tracker.hpp` + `.cpp` | 三态迁移 + 把上面几个缝在一起 | 像素、扫描器、日志 |
 | `DetectionPipeline` | `include/detection/pipeline.hpp` + `.cpp` | 编排一帧两拍 + 计时 + 翻译成 `DetectResult` | 具体实现（可注入） |
 | `linalg` | `include/detection/linalg.hpp` | 固定尺寸矩阵（只服务 6×6/3×3） | 其它一切 |
 
@@ -130,7 +130,7 @@ score = 面积 × 圆度^circ_weight      （circ_weight 默认 1.0；0 = 退回
 > 阈值怎么定：先跑一轮，看 `frames.csv` 的 `circ` 列（`detect_review.py` 会给出中位数与建议值），
 > 再把 `--min-circ` 定在"目标圆度中位 × 0.6"附近。默认 **不筛**（0），避免误杀。
 
-### 4.2 3 帧滑窗确认（`StartupArmer`）
+### 4.2 3 帧滑窗确认（`BlipConfirmer`）
 
 启动阶段目标只有几个像素，二值图上**闪烁的传感器坏点与真目标单帧完全不可分**。区分它们的是时间一致性：
 
@@ -269,7 +269,7 @@ bash scripts/build.sh self_guiding_dart
 | linalg | 乘法/转置/求逆/奇异矩阵拒绝 |
 | LightScanner | 面积·质心·等效半径**解析校验**、Top-K 排序、面积门限、stride>width、tile>16、开机自检函数 |
 | RoiBlobMeasurer | **窗口绝对坐标**、贴框语义与质量、取最大块、空窗、越界窗口 |
-| StartupArmer | 3 帧确认；随机闪烁 300 帧 0 确认；锯齿位移被加速度门挡掉；随机跳变被关联门挡掉 |
+| BlipConfirmer | 3 帧确认；随机闪烁 300 帧 0 确认；锯齿位移被加速度门挡掉；随机跳变被关联门挡掉 |
 | ScaleAwareKalman | 最小二乘初速、匀速+匀速膨胀收敛（位置<1px/尺度<0.5px）、马氏门限、**R_scale 远稳近跟**、发散保护 |
 | RoiPredictor | `kσ=0` 时严格等于 `kp·s+B_margin`、贴边平移、丢失放大、整幅回退 |
 | 整链 | 启动→跟踪→丢失→重捕→硬复位→再跟踪的状态迁移链、跟踪态只在 ROI 内扫描、ROI 随目标变大、A/B(`--no-track`) 对照 |

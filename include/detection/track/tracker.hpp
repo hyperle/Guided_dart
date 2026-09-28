@@ -24,10 +24,10 @@
 
 #include <cstdint>
 
-#include "detection/armor.hpp"   
+#include "detection/track/blip_confirmer.hpp"
 #include "detection/config.hpp"
-#include "detection/kalman.hpp"
-#include "detection/roi_prediction.hpp"
+#include "detection/track/kalman.hpp"
+#include "detection/track/roi_prediction.hpp"
 #include "detection/types.hpp"
 
 namespace dart::detection {
@@ -58,12 +58,12 @@ public:
     float                   dt_last() const { return dt_last_; }
     const TrackerCounters  &counters() const { return cnt_; }
     const ScaleAwareKalman &kf() const { return kf_; }
-    const StartupArmer     &armer() const { return armer_; }
+    const BlipConfirmer     &confirmer() const { return confirmer_; }
     const DetectionConfig  &config() const { return cfg_; }
     const RoiPredictor     &predictor() const { return roi_; }
 
     // 上一帧因平滑性被否掉的候选数（闪烁坏点计数，供状态行取证）
-    uint32_t last_reject() const { return armer_last_reject_; }
+    uint32_t last_reject() const { return last_reject_; }
 
 private:
     void        enter(TrackState s);
@@ -73,7 +73,7 @@ private:
 
     DetectionConfig    cfg_;
     ScaleAwareKalman   kf_;
-    StartupArmer       armer_;
+    BlipConfirmer       confirmer_;
     RoiPredictor       roi_;
     // 噪声模型由 KF 持有（noise 为空时 KF 用内置实现），这里不再存第二份引用 ——
     // 两份引用迟早会有一份忘了更新。要看模型名字走 kf().noise_name()。
@@ -89,7 +89,7 @@ private:
     Plan               plan_{};
     bool               prev_full_ = true; // 上一帧是否全图扫描（模式切换时重置滑窗）
     bool               out_of_roi_last_ = false;
-    uint32_t           armer_last_reject_ = 0;
+    uint32_t           last_reject_ = 0;
 
     TrackerCounters    cnt_{};
 };

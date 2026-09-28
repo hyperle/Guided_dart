@@ -3,14 +3,14 @@
 // 所有"为什么这么判"的理由都写在头文件与 config.hpp 里，这里只留实现要点。
 // ============================================================================
 
-#include "detection/tracker.hpp"
+#include "detection/track/tracker.hpp"
 
 #include <cmath>
 
 namespace dart::detection {
 
 TargetTracker::TargetTracker(const DetectionConfig &cfg, const IScaleNoiseModel *noise)
-    : cfg_(cfg), kf_(cfg.kf, noise), armer_(cfg.arm), roi_(cfg.roi) {}
+    : cfg_(cfg), kf_(cfg.kf, noise), confirmer_(cfg.arm), roi_(cfg.roi) {}
 
 void TargetTracker::reset() {
     state_ = TrackState::Startup;
@@ -18,11 +18,11 @@ void TargetTracker::reset() {
     last_us_ = 0;
     dt_last_ = 0.0f;
     out_of_roi_last_ = false;
-    armer_last_reject_ = 0;
+    last_reject_ = 0;
     prev_full_ = true;
     plan_ = Plan{};
     kf_.reset();
-    armer_.reset();
+    confirmer_.reset();
 }
 
 void TargetTracker::enter(TrackState s) {
@@ -99,7 +99,7 @@ TargetTracker::Plan TargetTracker::begin_frame(uint64_t mono_us, uint32_t frame_
     // 的位置，跟现在的场景早就对不上了；不清就会出现"用旧位置确认了新目标"的假确认。
     // 清掉的代价是重新确认要多花 window 帧，这正是重捕该有的代价。
     if (plan_.full_scan && !prev_full_)
-        armer_.reset();
+        confirmer_.reset();
     prev_full_ = plan_.full_scan;
 
     if (plan_.full_scan)
@@ -120,7 +120,7 @@ void TargetTracker::note_miss() {
         // 连续丢失这么久还没找回来：清空滤波器与滑窗，当成"一个新目标"重新确认。
         // 保留旧状态只会让预测越来越离谱，还会把真正的新位置当离群点拒掉。
         kf_.reset();
-        armer_.reset();
+        confirmer_.reset();
         enter(TrackState::Startup);
     }
 }
@@ -150,11 +150,11 @@ TrackOutput TargetTracker::end_frame(const ScanReport &report) {
 
     // ================= 全图扫描帧：走启动确认逻辑（启动态与丢失重扫共用）=================
     if (report.full_scan()) {
-        const StartupArmer::Confirmation a = armer_.push(last_us_, report.cands, report.count);
+        const BlipConfirmer::Confirmation a = confirmer_.push(last_us_, report.cands, report.count);
         ++cnt_.arm_frames;
-        armer_last_reject_ = armer_.last_reject();
-        cnt_.arm_reject += armer_last_reject_;
-        cnt_.arm_border_skip += armer_.last_border_skip();
+        last_reject_ = confirmer_.last_reject();
+        cnt_.arm_reject += last_reject_;
+        cnt_.arm_border_skip += confirmer_.last_border_skip();
 
         if (!a.ok) {
             // 全图扫描没确认出目标，也算"这一帧没测到"。**这一句不能省**：

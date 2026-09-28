@@ -23,10 +23,10 @@ add_executable(${APP_NAME}
     recording/recorder.cpp
     detection/light.cpp
     detection/blob_measure.cpp
-    detection/armor.cpp
-    detection/kalman.cpp
-    detection/roi_prediction.cpp
-    detection/tracker.cpp
+    detection/track/blip_confirmer.cpp
+    detection/track/kalman.cpp
+    detection/track/roi_prediction.cpp
+    detection/track/tracker.cpp
     detection/pipeline.cpp
     detection/armor/armor_geometry.cpp
     detection/armor/armor_scale.cpp

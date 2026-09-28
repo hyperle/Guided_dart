@@ -56,10 +56,10 @@ if [[ "${1:-}" == "" || "${1:-}" == "detection" ]]; then
         "${REPO_ROOT}/tests/host/detection_host_test.cpp" \
         "${REPO_ROOT}/src/detection/light.cpp" \
         "${REPO_ROOT}/src/detection/blob_measure.cpp" \
-        "${REPO_ROOT}/src/detection/armor.cpp" \
-        "${REPO_ROOT}/src/detection/kalman.cpp" \
-        "${REPO_ROOT}/src/detection/roi_prediction.cpp" \
-        "${REPO_ROOT}/src/detection/tracker.cpp" \
+        "${REPO_ROOT}/src/detection/track/blip_confirmer.cpp" \
+        "${REPO_ROOT}/src/detection/track/kalman.cpp" \
+        "${REPO_ROOT}/src/detection/track/roi_prediction.cpp" \
+        "${REPO_ROOT}/src/detection/track/tracker.cpp" \
         "${REPO_ROOT}/src/detection/pipeline.cpp" \
         "${REPO_ROOT}/src/detection/armor/armor_geometry.cpp" \
         "${REPO_ROOT}/src/detection/armor/armor_scale.cpp" \
@@ -85,10 +85,10 @@ if [[ "${1:-}" == "" || "${1:-}" == "armor" ]]; then
         "${REPO_ROOT}/tests/host/armor_host_test.cpp" \
         "${REPO_ROOT}/src/detection/blob_measure.cpp" \
         "${REPO_ROOT}/src/detection/light.cpp" \
-        "${REPO_ROOT}/src/detection/armor.cpp" \
-        "${REPO_ROOT}/src/detection/kalman.cpp" \
-        "${REPO_ROOT}/src/detection/roi_prediction.cpp" \
-        "${REPO_ROOT}/src/detection/tracker.cpp" \
+        "${REPO_ROOT}/src/detection/track/blip_confirmer.cpp" \
+        "${REPO_ROOT}/src/detection/track/kalman.cpp" \
+        "${REPO_ROOT}/src/detection/track/roi_prediction.cpp" \
+        "${REPO_ROOT}/src/detection/track/tracker.cpp" \
         "${REPO_ROOT}/src/detection/pipeline.cpp" \
         "${REPO_ROOT}/src/detection/armor/armor_geometry.cpp" \
         "${REPO_ROOT}/src/detection/armor/armor_scale.cpp" \

@@ -12,7 +12,7 @@
 //   1) linalg       矩阵乘/转置/求逆（含奇异）
 //   2) LightScanner 全图粗筛：质心/面积/等效半径解析校验、Top-K 排序、门限、stride
 //   3) RoiBlobMeasurer 窗口连通域：绝对坐标、贴框语义、取最大块、空窗
-//   4) StartupArmer 3 帧滑窗：平滑目标确认；随机闪烁/随机跳变/锯齿位移全部拒掉
+//   4) BlipConfirmer 3 帧滑窗：平滑目标确认；随机闪烁/随机跳变/锯齿位移全部拒掉
 //   5) ScaleAwareKalman 6 维滤波：初速拟合、匀速收敛、膨胀速率、马氏门限、
 //                    **R_scale 自适应（远=模型主导、近=贴合测量）**
 //   6) TargetTracker / DetectionPipeline 整链：启动→跟踪→丢失→重捕→硬复位，
@@ -26,14 +26,14 @@
 #include <random>
 #include <vector>
 
-#include "detection/armor.hpp"
+#include "detection/track/blip_confirmer.hpp"
 #include "detection/blob_measure.hpp"
-#include "detection/kalman.hpp"
+#include "detection/track/kalman.hpp"
 #include "detection/linalg.hpp"
 #include "detection/light.hpp"
 #include "detection/pipeline.hpp"
-#include "detection/roi_prediction.hpp"
-#include "detection/tracker.hpp"
+#include "detection/track/roi_prediction.hpp"
+#include "detection/track/tracker.hpp"
 
 using namespace dart::detection;
 using dart::DetectResult; // dart::DetectResult（核心层的结果类型，不是 detection:: 里的）
@@ -470,20 +470,20 @@ LightCandidate mk_cand(float x, float y, float r) {
 
 } // namespace
 
-void test_armer() {
-    SECTION("4) StartupArmer 3 帧滑窗确认");
+void test_confirmer() {
+    SECTION("4) BlipConfirmer 3 帧滑窗确认");
     const uint64_t dt = 11111; // 90fps ≈ 11.1ms
 
     // ---- ① 平滑运动的目标：第 3 帧必须确认，continuity=1，整条轨迹时间升序 ----
     {
         ArmConfig cfg;
-        StartupArmer arm(cfg);
+        BlipConfirmer arm(cfg);
         LightCandidate c{};
         bool confirmed = false;
         uint64_t t = 0;
         for (int k = 0; k < 6; ++k) {
             c = mk_cand(100.0f + 4.0f * k, 80.0f, 3.0f);
-            const StartupArmer::Confirmation cf = arm.push(t, &c, 1);
+            const BlipConfirmer::Confirmation cf = arm.push(t, &c, 1);
             if (k < 2)
                 CHECK(!cf.ok, "滑窗未满（%d 帧）时不能确认", k + 1);
             if (cf.ok) {
@@ -507,7 +507,7 @@ void test_armer() {
     // ---- ② 随机闪烁的坏点：一个都不许确认 ----
     {
         ArmConfig cfg;
-        StartupArmer arm(cfg);
+        BlipConfirmer arm(cfg);
         std::mt19937                     rng(1234);
         std::uniform_int_distribution<int> dx(5, 630), dy(5, 350);
         int                               confirms = 0;
@@ -528,7 +528,7 @@ void test_armer() {
     // ---- ③ 锯齿位移（能关联上、但加速度爆掉）：必须被平滑性门挡掉 ----
     {
         ArmConfig cfg;
-        StartupArmer arm(cfg);
+        BlipConfirmer arm(cfg);
         int           confirms = 0;
         uint64_t      t = 0;
         for (int k = 0; k < 30; ++k) {
@@ -546,7 +546,7 @@ void test_armer() {
     // ---- ④ 随机跳变（关联门之外）：也不许确认 ----
     {
         ArmConfig cfg;
-        StartupArmer arm(cfg);
+        BlipConfirmer arm(cfg);
         std::mt19937                       rng(99);
         std::uniform_int_distribution<int> jx(20, 600), jy(20, 330);
         int                                confirms = 0;
@@ -566,7 +566,7 @@ void test_armer() {
     // 它连续 6 帧平滑移动 —— 没有这条门就会被确认，然后 3 帧内丢失。
     {
         ArmConfig cfg;
-        StartupArmer arm(cfg);
+        BlipConfirmer arm(cfg);
         int confirms = 0;
         uint64_t t = 0;
         for (int k = 0; k < 12; ++k) {
@@ -583,7 +583,7 @@ void test_armer() {
 
         // 同一个块完整进画面（border=false）后必须能确认 —— 门不能把真目标也挡在门外
         ArmConfig cfg2;
-        StartupArmer arm2(cfg2);
+        BlipConfirmer arm2(cfg2);
         int confirms2 = 0;
         t = 0;
         for (int k = 0; k < 12; ++k) {
@@ -600,7 +600,7 @@ void test_armer() {
     // ---- ⑥ 全黑帧（无候选）与 reset 的行为 ----
     {
         ArmConfig cfg;
-        StartupArmer arm(cfg);
+        BlipConfirmer arm(cfg);
         LightCandidate c = mk_cand(100.0f, 100.0f, 3.0f);
         arm.push(0, &c, 1);
         arm.push(dt, &c, 1);
@@ -1263,7 +1263,7 @@ int main() {
     test_linalg();
     test_scanner();
     test_measurer();
-    test_armer();
+    test_confirmer();
     test_kalman();
     test_roi();
     test_chain();
