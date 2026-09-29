@@ -17,3 +17,6 @@ compile_commands.json
 # 录屏
 records/img/
 records/logs/
+
+# 数据
+*.csv

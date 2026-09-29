@@ -10,16 +10,14 @@ struct BodyRate {
 
 // ---------------------------------------------------------------------------
 // 数据源接口：IMU/姿态解算模块（另一个文件里的另一个类）实现它。
-// 不直接 include 那个模块，是为了让 ESO 不依赖任何具体传感器。
 // ---------------------------------------------------------------------------
 class IBodyRateSource {
 public:
     virtual ~IBodyRateSource() = default;
 
-    // 取一帧角速度。
     virtual void read_body_rate(BodyRate &out);
 
-    virtual const char *name() const = 0; // 日志/取证
+    virtual const char *name() const = 0; 
 };
 
 class ExtendedState {
@@ -81,18 +79,11 @@ inline void ExtendedState::state_update(const BodyRate &rate) {
 }
 
 inline void ExtendedState::apply_body_rate(const BodyRate &rate) {
-    // 逐步施工：这一步只做"忠实搬运"，不做任何滤波/限幅/符号修正。（非本类职责）
+    // 这一步只做"忠实搬运"，不做任何滤波/限幅/符号修正。（非本类职责）
     roll_velocity_  = rate.roll;
     pitch_velocity_ = rate.pitch;
     yaw_velocity_   = rate.yaw;
     has_state_      = true;
 }
-
-
-class IMU_calculation_operator {
-public:
-
-private:
-};
 
 } // namespace dart::control
