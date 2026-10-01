@@ -15,8 +15,8 @@
 
 #include "detection/armor/armor_geometry.hpp"
 #include "detection/measure/roi_measure.hpp"
-#include "detection/config.hpp"
-#include "detection/types.hpp"
+#include "detection/config/armor.hpp"
+#include "detection/domain/tracking.hpp"
 
 namespace dart::detection::armor {
 

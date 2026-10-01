@@ -25,10 +25,13 @@
 #include <cstdint>
 
 #include "detection/track/blip_confirmer.hpp"
-#include "detection/config.hpp"
+#include "detection/config/detection.hpp"
 #include "detection/track/kalman.hpp"
 #include "detection/track/roi_prediction.hpp"
-#include "detection/types.hpp"
+#include "detection/domain/geometry.hpp"
+#include "detection/domain/observations.hpp"
+#include "detection/domain/tracking.hpp"
+#include "detection/track/session.hpp"
 
 namespace dart::detection {
 
@@ -52,6 +55,33 @@ public:
 
     Plan       begin_frame(uint64_t mono_us, uint32_t frame_w, uint32_t frame_h);
     TrackOutput end_frame(const ScanReport &report);
+
+    // 新协议：把时钟、扫描模式和观察结果显式传递，避免调用方依赖内部 plan_。
+    ScanPlan plan(const FrameContext &ctx) {
+        const Plan p = begin_frame(ctx.mono_us, ctx.width, ctx.height);
+        ScanPlan out;
+        out.state = p.state;
+        out.mode = p.full_scan ? ScanMode::FullFrame : ScanMode::Roi;
+        out.window = p.window;
+        out.kf_ready = p.kf_ready;
+        out.pred_x = p.pred_x;
+        out.pred_y = p.pred_y;
+        out.pred_s = p.pred_s;
+        return out;
+    }
+
+    TrackOutput accept(const ScanPlan &plan, const ScanObservation &observation) {
+        ScanReport report;
+        report.window = plan.window;
+        report.scan_us = observation.scan_us;
+        if (plan.mode == ScanMode::FullFrame) {
+            report.cands = observation.cands;
+            report.count = observation.count;
+        } else {
+            report.measurement = observation.measurement;
+        }
+        return end_frame(report);
+    }
 
     TrackState              state() const { return state_; }
     uint32_t                lost_frames() const { return lost_frames_; }

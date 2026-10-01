@@ -127,31 +127,32 @@ DetectResult DetectionPipeline::detect(const GrayFrame &frame) {
     const uint64_t t0 = now_us();
 
     // 1) 本帧怎么扫（含 KF 预测与动态 ROI）
-    const TargetTracker::Plan plan = tracker_.begin_frame(t0, frame.width, frame.height);
+    const FrameContext frame_ctx{t0, frame.width, frame.height};
+    const ScanPlan plan = tracker_.plan(frame_ctx);
 
     // 2) 按计划扫
-    ScanReport rep{};
-    rep.window = plan.window;
+    ScanObservation observation{};
+    observation.mode = plan.mode;
     const uint64_t t_scan = now_us();
-    if (plan.full_scan) {
+    if (plan.full_scan()) {
         const size_t n = scanner_->scan(frame, cands_.data(), cands_.size());
-        rep.cands = cands_.data();
-        rep.count = n;
+        observation.cands = cands_.data();
+        observation.count = n;
         stats_.cands_last = n;
         if (scanner_ == &owned_scanner_)
             stats_.scan_trace = owned_scanner_.last_trace();
     } else {
         TargetMeasurement m = measurer_->measure(frame, plan.window);
         m.cost_us = static_cast<uint32_t>(now_us() - t_scan);
-        rep.measurement = m;
+        observation.measurement = m;
         stats_.cands_last = 0;
         if (measurer_ == &owned_measurer_)
             stats_.measure_trace = owned_measurer_.last_trace();
     }
-    rep.scan_us = static_cast<uint32_t>(now_us() - t_scan);
+    observation.scan_us = static_cast<uint32_t>(now_us() - t_scan);
 
     // 3) 状态机 + 滤波
-    const TrackOutput out = tracker_.end_frame(rep);
+    const TrackOutput out = tracker_.accept(plan, observation);
 
     // 3.5) 装甲板（第二路输出）：绿灯当锚 → 它上方那块窗口里找两片灯条 → 对角线交点。
     // 用的是**同一张二值图**（所以装甲板天然就是"黑白口径、不看颜色"），
@@ -188,10 +189,19 @@ DetectResult DetectionPipeline::detect(const GrayFrame &frame) {
         ++stats_.misses;
     stats_.state = out.state;
     stats_.last_window = out.window;
-    stats_.last_scan_us = rep.scan_us;
+    stats_.last_scan_us = observation.scan_us;
     stats_.tracker = tracker_.counters();
     r.cost_us = static_cast<uint32_t>(now_us() - t0);
     stats_.last_total_us = r.cost_us;
+    stats_.telemetry.frames = stats_.frames;
+    stats_.telemetry.hits = stats_.hits;
+    stats_.telemetry.misses = stats_.misses;
+    stats_.telemetry.candidates_last = stats_.cands_last;
+    stats_.telemetry.scan_us_last = stats_.last_scan_us;
+    stats_.telemetry.total_us_last = stats_.last_total_us;
+    stats_.telemetry.state = stats_.state;
+    stats_.telemetry.window = stats_.last_window;
+    stats_.telemetry.tracker = stats_.tracker;
     return r;
 }
 

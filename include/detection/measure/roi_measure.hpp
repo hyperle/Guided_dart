@@ -21,8 +21,9 @@
 #include <vector>
 
 #include "core/frame.hpp"
-#include "detection/config.hpp"
-#include "detection/types.hpp"
+#include "detection/config/measure.hpp"
+#include "detection/domain/observations.hpp"
+#include "detection/math/shape_metrics.hpp"
 
 namespace dart::detection {
 

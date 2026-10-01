@@ -25,9 +25,10 @@
 //   * 每次更新后对称化 P：长跑几十万帧后 P 丢掉对称性会出现"负方差"
 // ============================================================================
 
-#include "detection/config.hpp"
+#include "detection/config/kalman.hpp"
+#include "detection/config/confirmer.hpp"
 #include "detection/linalg.hpp"
-#include "detection/types.hpp"
+#include "detection/domain/observations.hpp"
 
 namespace dart::detection {
 

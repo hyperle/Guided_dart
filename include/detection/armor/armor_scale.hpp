@@ -12,7 +12,7 @@
 
 #include <cstdint>
 
-#include "detection/config.hpp"
+#include "detection/config/armor.hpp"
 
 namespace dart::detection::armor {
 

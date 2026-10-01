@@ -26,14 +26,18 @@
 #include "detection/armor/armor_scale.hpp"
 #include "detection/armor/armor_windows.hpp"
 #include "detection/measure/roi_measure.hpp"
-#include "detection/config.hpp"
-#include "detection/types.hpp"
+#include "detection/measure/blob_source.hpp"
+#include "detection/config/armor.hpp"
+#include "detection/config/measure.hpp"
+#include "detection/domain/geometry.hpp"
+#include "detection/domain/tracking.hpp"
 
 namespace dart::detection {
 
 class ArmorDetector {
 public:
     explicit ArmorDetector(const ArmorConfig &cfg, const MeasureConfig &meas_cfg);
+    ArmorDetector(const ArmorConfig &cfg, IBlobSource &blob_source);
 
     void reset();
 
@@ -82,13 +86,16 @@ private:
     // 容差按灯条尺寸给（远处 3px 的灯条和近处 100px 的灯条，容差不可能是同一个数）。
     const Bar *assoc(const Bar *bars, uint32_t n, const Bar &ref) const;
 
+    uint32_t collect_blobs(const GrayFrame &bin, const RoiWindow &window, uint32_t min_area,
+                          RunLengthMeasurer::BlobInfo *out, uint32_t cap);
     ArmorTarget make_target(uint8_t mode, uint8_t held) const;
 
     // 多窗 → 一个并集矩形（日志/CSV/画框用；逐窗明细在 Trace.windows 里）
     static void fill_window(ArmorTarget *t, const RoiWindow *wins, uint32_t n);
 
     ArmorConfig               cfg_;
-    RunLengthMeasurer           meas_; // 自己的实例：不与绿灯那一路抢 trace
+    RunLengthMeasurer           meas_; // 默认实现：不与绿灯那一路抢 trace
+    IBlobSource                *blob_source_ = nullptr;
     RunLengthMeasurer::BlobInfo blobs_[kArmorBarMax]; // 定长，运行期零分配
     Bar                       bars_[kArmorBarMax];
     Bar                       a_{}, b_{};

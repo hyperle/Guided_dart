@@ -20,6 +20,15 @@ using armor::Bar;
 
 ArmorDetector::ArmorDetector(const ArmorConfig &cfg, const MeasureConfig &meas_cfg)
     : cfg_(cfg), meas_(meas_cfg) {}
+ArmorDetector::ArmorDetector(const ArmorConfig &cfg, IBlobSource &blob_source)
+    : cfg_(cfg), meas_(MeasureConfig{}), blob_source_(&blob_source) {}
+
+uint32_t ArmorDetector::collect_blobs(const GrayFrame &bin, const RoiWindow &window, uint32_t min_area,
+                                      RunLengthMeasurer::BlobInfo *out, uint32_t cap) {
+    return blob_source_ ? blob_source_->collect(bin, window, min_area, out, cap)
+                        : meas_.collect(bin, window, min_area, out, cap);
+}
+
 
 void ArmorDetector::reset() {
     a_ = Bar{};
@@ -87,7 +96,7 @@ void ArmorDetector::detect(const GrayFrame &bin, const TrackOutput &led, uint64_
     uint32_t nbar = 0, nblob_total = 0, px_total = 0;
     for (uint32_t k = 0; k < nwin; ++k) {
         px_total += static_cast<uint32_t>(wins[k].pixels());
-        const uint32_t nblob = meas_.collect(bin, wins[k], pxmin, blobs_, kArmorBarMax);
+        const uint32_t nblob = collect_blobs(bin, wins[k], pxmin, blobs_, kArmorBarMax);
         nblob_total += nblob;
         for (uint32_t i = 0; i < nblob && nbar < kArmorBarMax; ++i) {
             Bar bar;
@@ -128,7 +137,7 @@ bool ArmorDetector::track_step(const GrayFrame &bin, const RoiWindow *wins, uint
         bool a_ok = false, b_ok = false;
         for (uint32_t k = 0; k < 2; ++k) {
             trace_.window_px += static_cast<uint32_t>(wins[k].pixels());
-            const uint32_t n = meas_.collect(bin, wins[k], pxmin, blobs_, kArmorBarMax);
+            const uint32_t n = collect_blobs(bin, wins[k], pxmin, blobs_, kArmorBarMax);
             trace_.blobs += n;
             const Bar &ref = (k == 0) ? a_ : b_;
             Bar        tmp{};
@@ -145,7 +154,7 @@ bool ArmorDetector::track_step(const GrayFrame &bin, const RoiWindow *wins, uint
         ok = a_ok && b_ok;
     } else { // 合窗：两条 incumbent 在同一个池里各认各的
         trace_.window_px += static_cast<uint32_t>(wins[0].pixels());
-        const uint32_t n = meas_.collect(bin, wins[0], pxmin, blobs_, kArmorBarMax);
+        const uint32_t n = collect_blobs(bin, wins[0], pxmin, blobs_, kArmorBarMax);
         trace_.blobs += n;
         const bool a_ok = assoc(blobs_, n, a_, &na);
         const bool b_ok = assoc(blobs_, n, b_, &nb);

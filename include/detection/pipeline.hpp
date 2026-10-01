@@ -26,10 +26,14 @@
 #include "core/frame.hpp"
 #include "detection/armor/armor_detector.hpp"
 #include "detection/measure/roi_measure.hpp"
-#include "detection/config.hpp"
+#include "detection/config/detection.hpp"
 #include "detection/scanner/tile_scanner.hpp"
 #include "detection/track/tracker.hpp"
-#include "detection/types.hpp"
+#include "detection/domain/geometry.hpp"
+#include "detection/domain/observations.hpp"
+#include "detection/domain/tracking.hpp"
+#include "detection/runtime/result_adapter.hpp"
+#include "detection/runtime/telemetry.hpp"
 #include "vision/detector.hpp"
 
 namespace dart::detection {
@@ -49,6 +53,7 @@ struct DetectionStats {
     RunLengthMeasurer::Trace measure_trace{};
     // 装甲板这一路（第二路输出）的明细：条数/对数/远档/窗口像素/耗时
     ArmorDetector::Trace  armor_trace{};
+    DetectionTelemetry     telemetry{};
 };
 
 class DetectionPipeline final : public IDetector {

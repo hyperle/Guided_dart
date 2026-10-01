@@ -19,8 +19,9 @@
 
 #include "core/frame.hpp"
 #include "detection/armor/armor_geometry.hpp"
-#include "detection/config.hpp"
-#include "detection/types.hpp"
+#include "detection/config/armor.hpp"
+#include "detection/domain/geometry.hpp"
+#include "detection/domain/tracking.hpp"
 
 namespace dart::detection::armor {
 

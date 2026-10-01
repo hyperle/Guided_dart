@@ -18,8 +18,8 @@
 
 #include <cstdint>
 
-#include "detection/config.hpp"
-#include "detection/types.hpp"
+#include "detection/config/roi.hpp"
+#include "detection/domain/geometry.hpp"
 
 namespace dart::detection {
 

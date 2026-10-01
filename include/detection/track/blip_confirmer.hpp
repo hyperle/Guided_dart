@@ -18,8 +18,8 @@
 #include <cstddef>
 #include <cstdint>
 
-#include "detection/config.hpp"
-#include "detection/types.hpp"
+#include "detection/config/confirmer.hpp"
+#include "detection/domain/observations.hpp"
 
 namespace dart::detection {
 
