@@ -29,6 +29,18 @@ public:
         assert(parsed->record_fps == 60 && parsed->record_keep == 0);
         assert(parsed->record_format == recorder::ImageFormat::kPgm && parsed->threshold == 50);
         assert(parsed->min_contrast == 12);
+        assert(!parsed->log_console && std::string_view{parsed->log_path} == app::kDefaultLog);
+        assert(parse({"--log-console", "on"})->log_console);
+        assert(parse({"--log-console", "1"})->log_console);
+        assert(!parse({"--log-console", "off"})->log_console);
+        assert(!parse({"--log-console", "0"})->log_console);
+        assert(!parse({"--log-console", "maybe"}));
+        assert(!parse({"--log-console"}));
+        assert(!parse({"--log"}));
+        assert(parse({"--log", "off"})->log_path[0] == '\0');
+        assert(std::string_view{parse({"--log", "/tmp/x.log"})->log_path} == "/tmp/x.log");
+        const auto both = parse({"--log", "off", "--log-console", "on"});
+        assert(both && both->log_path[0] == '\0' && both->log_console);
         assert(parse({"--min-contrast", "0"})->min_contrast == 0);
         assert(parse({"--min-contrast", "255"})->min_contrast == 255);
         assert(parse({"--min-contrast", "12.5"})->min_contrast == 12.5F);

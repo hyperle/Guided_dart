@@ -28,6 +28,7 @@ inline int run_capture(
         args.record_duration_ms};
     logging::Logger log{&writes};
     (void)log.open(args.log_path);
+    log.set_console(args.log_console);
     const platform::ImuOptions options{
         args.imu_on, args.imu_bus, args.imu_cs, args.imu_log, args.imu_ignore_id, &writes,
         args.record_auto ? &RecordingTrigger::observe : nullptr, &trigger};

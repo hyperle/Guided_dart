@@ -40,7 +40,8 @@ public:
     camera::Raw10Layout raw10_layout = camera::Raw10Layout::kPackedLsb;
     char rec_dir[512] = "/data/app/records";
     char det_csv[512] = "";    /* 空 = 关闭 */
-    char log_path[512] = "/data/app/logs/dart_app.log";
+    char log_path[512] = "/data/app/logs/dart_app.log"; /* 空 = 只输出控制台 */
+    bool log_console = false;
     bool imu_on = false;
     bool imu_ignore_id = false;
     int imu_bus = -1;
@@ -147,8 +148,9 @@ inline void usage(const char* argv0) {
     std::printf("  --threshold N    灰度候选阈值 0..255（默认 50），不改变相机灰度图\n");
     std::printf("  --min-contrast N 候选与背景最小灰度差 0..255，可小数（默认 12，0 关闭）\n");
     std::printf(
-        "  --log PATH       结构化日志（默认 %.*s）\n", static_cast<int>(kDefaultLog.size()),
-        kDefaultLog.data());
+        "  --log PATH       结构化日志；off 只关文件日志（默认 %.*s）\n",
+        static_cast<int>(kDefaultLog.size()), kDefaultLog.data());
+    std::printf("  --log-console on|off  日志同时写 stderr，前台串口调试用（默认 off）\n");
     std::printf("  --status-ms N    状态行间隔（默认 1000）\n");
     std::printf("  --imu on|off     IMU 独立采样与日志（默认 off）\n");
     std::printf("  --imu-bus N      SPI 总线 0..2，启用 IMU 时必填\n");
@@ -355,7 +357,8 @@ inline std::expected<Arguments, int> parse_args(int argc, char* argv[]) {
             }
             continue;
         }
-        if (a == "--rec-dir" || a == "--det-csv" || a == "--log" || a == "--imu-log") {
+        if (a == "--rec-dir" || a == "--det-csv" || a == "--log" || a == "--imu-log" ||
+            a == "--log-console") {
             if (!need_value(value)) {
                 std::fprintf(
                     stderr, "%s: %.*s 缺少参数\n", argv[0], static_cast<int>(a.size()), a.data());
@@ -378,8 +381,15 @@ inline std::expected<Arguments, int> parse_args(int argc, char* argv[]) {
                     std::fprintf(stderr, "%s: --det-csv 路径过长\n", argv[0]);
                     return std::unexpected<int>(2);
                 }
-            } else if (!copy_path(args.log_path, sizeof(args.log_path), value)) {
-                std::fprintf(stderr, "%s: --log 路径过长\n", argv[0]);
+            } else if (a == "--log") {
+                if (value == "off") {
+                    args.log_path[0] = '\0';
+                } else if (!copy_path(args.log_path, sizeof(args.log_path), value)) {
+                    std::fprintf(stderr, "%s: --log 路径过长\n", argv[0]);
+                    return std::unexpected<int>(2);
+                }
+            } else if (!parse_on_off(value, args.log_console)) {
+                std::fprintf(stderr, "%s: --log-console 需要 on|off\n", argv[0]);
                 return std::unexpected<int>(2);
             }
             continue;
