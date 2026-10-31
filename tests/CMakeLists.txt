@@ -38,6 +38,12 @@ target_compile_options(recorder_storage_test PRIVATE -Werror -UNDEBUG)
 target_link_options(recorder_storage_test PRIVATE -Wl,--wrap=statvfs -Wl,--wrap=fsync)
 add_test(NAME recorder_storage COMMAND recorder_storage_test)
 
+# Console mirror: rate limit, drop summary on exit and pause consistency.
+add_executable(logger_console_test logger_console_test.cpp)
+target_link_libraries(logger_console_test PRIVATE dart_platform Threads::Threads)
+target_compile_options(logger_console_test PRIVATE -Werror -UNDEBUG)
+add_test(NAME logger_console COMMAND logger_console_test)
+
 find_package(PNG REQUIRED)
 add_executable(recorder_png_test recorder_png_test.cpp)
 target_link_libraries(recorder_png_test PRIVATE dart_recording PNG::PNG)

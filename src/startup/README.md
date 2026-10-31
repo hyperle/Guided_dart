@@ -88,7 +88,8 @@ dart_app [选项]
   --det-csv PATH   识别结果 CSV；off 关闭（默认关闭）
   --threshold N    灰度候选阈值 0..255（默认 50），不改变相机灰度图
   --min-contrast N 候选与背景最小灰度差 0..255（默认 12，0 关闭）
-  --log PATH       结构化日志（默认 /data/app/logs/dart_app.log）
+  --log PATH       结构化日志；off 只关文件日志（默认 /data/app/logs/dart_app.log）
+  --log-console on|off  日志同时写 stderr，前台串口调试用（默认 off）
   --imu on|off     IMU 独立采样与日志（默认 off）
   --imu-bus N      SPI 总线 0..2，启用 IMU 时必填
   --imu-cs N       片选引脚 0..63，-1 使用 HAL 默认，启用 IMU 时必填

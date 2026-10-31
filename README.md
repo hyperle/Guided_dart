@@ -234,7 +234,12 @@ bash .script/deploy-rtos
 msh> /sdcard/app/launcher -t                            # 只校验清单，不启动进程
 msh> /sdcard/app/dart_app --seconds 10 --record off      # 采集 + 识别
 msh> /sdcard/app/dart_app --seconds 10                   # 加上录像
+msh> /sdcard/app/dart_app --seconds 60 --record off --log-console on   # 日志实时刷串口
 ```
+
+`--log-console on` 只在**前台手动运行**时有意义：日志同时写 stderr，可直接在 115200
+串口上观察（限速 30 行/秒）；`--log off` 可关掉文件日志，两者可组合成纯控制台模式。
+详见 [`docs/DEBUG_GUIDE.md`](docs/DEBUG_GUIDE.md) §3.1。
 
 ```bash
 make menuconfig

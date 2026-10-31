@@ -71,6 +71,33 @@ ts_ms level module op code native detail action count msg="..."
 
 启动日志应依次证明：应用版本/参数 → SDK/设备探针 → 帧池和工作区 → 线程/队列 → 第一帧时间戳。任何一步停住，先定位最后一个成功边界。
 
+### 3.1 实时查看日志
+
+默认日志只写文件；通过串口实时观察需要显式打开控制台镜像，并且**必须前台运行**
+（走 launcher 时子进程的 stderr 会被收进 `<app>.console.log`，串口上看不到）：
+
+```text
+msh> /sdcard/app/dart_app --seconds 60 --record off --pwm off \
+        --log-console on --log /data/app/logs/live.log
+```
+
+- `--log-console on` 把每行同时写到 stderr，内容与文件日志一致；
+- `--log off` 只关文件日志（`--log off --log-console on` 即纯控制台模式）；
+- 控制台镜像限速 30 行/秒（115200 串口约 6.6 KB/s）。正常工况每秒只有 6 行左右，
+  不受影响；逐帧失败路径会触发限速并输出 `op=console_dropped count=N`；
+- `write-rtos off` 暂停时，文件与控制台一起停；板端先确认 `/sdcard/app/control/write.pause`
+  不存在（`write-rtos on`），否则看不到任何输出。
+
+控制台镜像写到应用的 stderr，由 **msh 的控制台设备 `uart0`** 输出，也就是你敲 msh 的那个
+串口终端：UART0，IO38 TX / IO39 RX / GND，115200。USB 直连板子时枚举出的 CDC
+（板端 `/dev/ttyGS0`、主机 `ttyACM0`）是**独立串口，不是控制台**，`--log-console` 的
+输出不会出现在上面。要让日志走 USB 线，改为直接写该设备：
+
+```text
+msh> echo "probe" /dev/ttyGS0     # 主机 cat /dev/ttyACM0 应看到 probe
+msh> /sdcard/app/dart_app --seconds 20 --record off --log /dev/ttyGS0
+```
+
 ## 4. 采集和帧池
 
 验证项目：

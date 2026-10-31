@@ -1,3 +1,5 @@
+/sdcard/app/dart_app --exp 400 --vision on --pwm on --record on --rec-fps 60 --rec-keep 0 --rec-format pgm --raw-layout packed10-lsb --threshold 50 --rec-dir /data/app/records --det-csv /data/app/records/detection.csv --log /data/app/logs/dart_app.log &
+
 # ============================================================================
 # launcher 开机自启动清单 —— 本文件是**源码母版**（runtime/launcher/startup.list）
 #
@@ -72,12 +74,15 @@
 #   /data 分区总占用上限为 2 GB（2,000,000,000 字节），计入旧录像、日志及分配开销；
 #   在总量上限及物理剩余空间内均预留 64 MiB，不足时停录，保留已有录像。
 #   --det-csv .../detection.csv  识别结果 CSV；= off 关闭。板端复盘识别必须留它。
+#   --log /data/app/logs/dart_app.log  结构化日志；off 只关文件日志。
+#   --log-console on|off       日志同时写 stderr，仅前台手动运行有意义（限速 30 行/秒）。
+#                              经 launcher 启动时 stderr 被收进 dart_app.console.log，
+#                              串口看不到实时输出，所以本清单不要加这个参数。
 #   不设 --seconds，不自动重启；退出时：
 #                              关闭 PWM → 录像线程收尾取净 → 排空租约 → camera.stop →
 #                              销毁相机 → 摘要行 "step=summary"。一轮上电即可同时
 #                              回答：有没有拉起来 / 采集通不通 / 识别有没有目标 /
 #                              录像落没落盘 / 收尾干不干净。
-/sdcard/app/dart_app --exp 400 --vision on --pwm on --record on --rec-fps 60 --rec-keep 0 --rec-format pgm --raw-layout packed10-lsb --threshold 50 --rec-dir /data/app/records --det-csv /data/app/records/detection.csv --log /data/app/logs/dart_app.log &
 
 # 纯视觉控制不依赖 IMU。需要独立 IMU 日志时，可追加 --imu on --imu-bus 1 --imu-cs 14，
 # 同时删去其它默认参数以满足清单 token 上限。IMU 不参与 PWM 计算。
