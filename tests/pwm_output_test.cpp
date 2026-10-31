@@ -3,8 +3,12 @@
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include "drv_fpioa.h"
+#include "drv_pwm.h"
 
-#include "pwm/k230/output.cpp"
+import dart.pwm.k230.output;
+
+import dart.pwm.interface;
 
 namespace dart::tests {
 

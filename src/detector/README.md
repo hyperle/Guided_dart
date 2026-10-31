@@ -1,9 +1,8 @@
 # 检测与 ROI
 
-纯 C++23 的 L4 算法。`.cpp` 按职责组织并带包含保护；相关值类型可以同文件，
-跟踪历史等仅在对象内部使用的状态定义为私有类型。消费者包含所需文件，并链接
-`dart_detection` INTERFACE 目标以取得编译要求。`dart_detection_checks` 在主机和
-交叉构建中逐文件编译，校验独立依赖。
+纯 C++23 的 L4 算法，使用 C++20 命名模块。`.cpp` 按职责组织并独立编译；相关值类型可以同文件，
+跟踪历史等状态保留为私有类型。消费者导入所需模块，并链接 `dart_detection` 静态库。
+CMake 原生扫描模块依赖，主机回归与交叉应用完成最终链接。
 
 | 文件 | 类 / 职责 |
 |---|---|
@@ -22,7 +21,7 @@
 `Prepare(max_width, max_height)`。在现有采集线程拿到 `AcquireStatus::kFrame` 后调用：
 
 ```cpp
-#include "src/detector/roi.cpp"   // target_link_libraries(... dart_detection)
+import dart.detection.roi;   // target_link_libraries(... dart_detection)
 
 auto result = detector.Detect(acquired.lease.view());
 if (result && result->target.valid) {

@@ -1,20 +1,20 @@
-#ifndef DART_TOOLS_VIDEO_PLAYER_BINARY_STREAM_CPP
-#define DART_TOOLS_VIDEO_PLAYER_BINARY_STREAM_CPP
-
+module;
 #include <QDateTime>
 #include <QFile>
 #include <QFileInfo>
 #include <QImage>
 #include <QString>
-
 #include <cstddef>
 #include <cstdint>
 #include <span>
 
-#include "recorder/encoding/binary_decoder.cpp"
-#include "recording_types.cpp"
+export module dart.tools.video_player.binary_stream;
 
-namespace dart::tools::video_player {
+import dart.recorder.encoding.binary_decoder;
+import dart.recorder.encoding.binary_format;
+import dart.tools.video_player.recording_types;
+
+export namespace dart::tools::video_player {
 
 struct BinaryStream final {
     static std::span<const std::byte> bytes(const QByteArray& data) {
@@ -109,5 +109,3 @@ private:
 };
 
 } // namespace dart::tools::video_player
-
-#endif // DART_TOOLS_VIDEO_PLAYER_BINARY_STREAM_CPP

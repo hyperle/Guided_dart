@@ -1,6 +1,8 @@
-#ifndef DART_TESTS_RECORDER_SESSION_TEST_CPP
-# define DART_TESTS_RECORDER_SESSION_TEST_CPP
-
+#include <cstdint>
+#include <cstddef>
+#include <expected>
+#include <chrono>
+#include <utility>
 # include <algorithm>
 # include <array>
 # include <atomic>
@@ -15,8 +17,8 @@
 # include <thread>
 # include <unistd.h>
 
-# include "camera/frame_lease.cpp"
-# include "recorder/recorder.cpp"
+import dart.camera.frame_lease;
+import dart.recorder.recorder;
 
 namespace dart::tests {
 
@@ -330,7 +332,5 @@ private:
 };
 
 } // namespace dart::tests
-
-#endif // DART_TESTS_RECORDER_SESSION_TEST_CPP
 
 int main() { dart::tests::RecorderSessionTest::run(); }

@@ -1,29 +1,33 @@
-cmake_minimum_required(VERSION 3.20)
+cmake_minimum_required(VERSION 3.28)
+include("${CMAKE_CURRENT_LIST_DIR}/../../cmake/select-host-compiler.cmake")
 project(dart_video_player LANGUAGES CXX)
-
-# Standalone host project: never pulled into the board's CMake/deployment graph.
+set(CMAKE_CXX_STANDARD 23)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+include("${CMAKE_CURRENT_LIST_DIR}/../../cmake/modules.cmake")
 if(CMAKE_CROSSCOMPILING)
-    message(FATAL_ERROR "video_player is a host tool; configure it with a host compiler")
+    message(FATAL_ERROR "video_player is a host tool")
 endif()
-
 find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Widgets)
 find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Widgets)
 find_package(ZLIB REQUIRED)
-
-add_library(dart_video_player INTERFACE)
-target_compile_features(dart_video_player INTERFACE cxx_std_23)
-target_compile_options(dart_video_player INTERFACE -Wall -Wextra -Wpedantic)
-target_link_libraries(dart_video_player INTERFACE Qt${QT_VERSION_MAJOR}::Widgets ZLIB::ZLIB)
-target_include_directories(dart_video_player INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/../../include/firmware/src")
-
+get_filename_component(_firmware "${CMAKE_CURRENT_LIST_DIR}/../../include/firmware/src" ABSOLUTE)
+add_library(dart_binary_codec STATIC)
+target_sources(dart_binary_codec PUBLIC FILE_SET CXX_MODULES BASE_DIRS "${_firmware}" FILES
+    "${_firmware}/recorder/encoding/binary_format.cpp"
+    "${_firmware}/recorder/encoding/binary_decoder.cpp"
+    "${_firmware}/recorder/encoding/binary_encoder.cpp")
+target_compile_features(dart_binary_codec PUBLIC cxx_std_23)
+target_link_libraries(dart_binary_codec PUBLIC ZLIB::ZLIB)
+add_library(dart_video_player STATIC)
+target_sources(dart_video_player PUBLIC FILE_SET CXX_MODULES FILES
+    recording_types.cpp recording_paths.cpp csv.cpp binary_stream.cpp
+    image_reader.cpp recording.cpp image_view.cpp player.cpp)
+target_compile_features(dart_video_player PUBLIC cxx_std_23)
+target_compile_options(dart_video_player PRIVATE -Wall -Wextra -Wpedantic)
+target_link_libraries(dart_video_player PUBLIC Qt${QT_VERSION_MAJOR}::Widgets dart_binary_codec)
 add_executable(video_player main.cpp)
 target_link_libraries(video_player PRIVATE dart_video_player)
-
-foreach(component recording_types recording_paths csv binary_stream image_reader recording image_view player)
-    add_library(video_player_${component}_check OBJECT ${component}.cpp)
-    target_link_libraries(video_player_${component}_check PRIVATE dart_video_player)
-endforeach()
-
 include(CTest)
 if(BUILD_TESTING)
     add_executable(video_player_test player_test.cpp)
@@ -31,5 +35,4 @@ if(BUILD_TESTING)
     add_test(NAME video_player COMMAND video_player_test)
     set_tests_properties(video_player PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 endif()
-
 install(TARGETS video_player RUNTIME DESTINATION bin)

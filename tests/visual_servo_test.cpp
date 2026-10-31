@@ -1,3 +1,5 @@
+#include <cstddef>
+#include <expected>
 #include <cassert>
 #include <chrono>
 #include <limits>
@@ -6,7 +8,15 @@
 #include <thread>
 #include <vector>
 
-#include "src/vision/visual_servo.cpp"
+import dart.app.vision.visual_servo;
+
+import dart.app.startup.argument_parser;
+import dart.pwm.interface;
+
+import dart.logging.logger;
+import dart.system.device_services;
+import dart.system.run_control;
+import dart.control.servo_mapping;
 
 namespace dart::tests {
 

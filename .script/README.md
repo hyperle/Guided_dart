@@ -1,11 +1,13 @@
 # .script/ —— 仓库短命令
 
-日常命令在仓库里任何位置都能跑（脚本自己会定位仓库根）：
+日常命令在仓库里任何位置都能跑（脚本自己会定位仓库根）。C++ 构建要求
+CMake >= 3.28、Ninja >= 1.11，以及 GCC >= 14 或 Clang >= 19 + clang-tools；
+交叉构建可由 Clang 复用现有 GCC musl 工具链。安装与首次更新缓存见 [工具链说明](../README.md#3-工具链与-sdk一次性)。
 
 | 命令 | 作用 | 参数 |
 |---|---|---|
-| `build-rtos` | 交叉编译板端可执行文件 | `-r`（清 build-cross 重编）/ `--host`（host 编译检查）/ `launcher` / `dart_app` / `pwm_swing` |
-| `deploy-rtos` | 把产物上板到 `/sdcard/app/` | `launcher` / `dart_app` / `pwm_swing` / `list`（只推清单）；可加 `--keep-logs` |
+| `build-rtos` | 交叉编译板端可执行文件 | `-r`（清 build-cross 重编）/ `--host`（host 编译检查）/ `launcher` / `dart_app` / `pwm_swing` / `imu_raw_probe` |
+| `deploy-rtos` | 把产物上板到 `/sdcard/app/` | `launcher` / `dart_app` / `pwm_swing` / `imu_raw_probe` / `list`（只推清单）；可加 `--keep-logs` |
 | `clean-rtos-data` | 设置暂停后清除两个分区上的空闲日志与录像，跳过写入中的项 | `--dry-run` / `--keep-paused` / `logs` / `records` |
 | `write-rtos` | 暂停或恢复录像与日志写入，不等待板端应答 | `off` 暂停 / `on` 解除暂停 |
 | `clean-rtos` | 清除板端内容（**保留目录本身**；固件自带的 `examples/` 默认不动） | `launcher` / `dart_app` / `list` / `logs` / `records` / `examples` |
@@ -37,6 +39,17 @@ deploy-rtos pwm_swing
 
 接线、333 Hz / 1420～1620 µs 参数和波形验收见
 [`pwm_swing` 说明](../tools/pwm_swing/README.md)。
+
+当前启动清单为 IMU 示波器直读测试，SPI1 / CS IO14，先唤醒 IMU、等待 50 ms 再读数：
+
+```bash
+build-rtos imu_raw_probe
+deploy-rtos imu_raw_probe
+deploy-rtos list
+# 重启已部署 launcher 的板子后开始循环读数。
+```
+
+读取命令、波形和恢复视觉版本见 [IMU 测试说明](../runtime/imu/README.md)。
 
 需要指定其它板子时，可通过环境变量或 `.script/board.env` 配置：
 
@@ -105,9 +118,9 @@ build-rtos -r                         # 之后直接敲，不再需要任何前�
 
 ```bash
 bash .script/install-rtos --both   # 只做一次：之后下面这些命令直接敲，不带 ./
-build-rtos                  # 增量编译 launcher + dart_app
+build-rtos                  # 增量编译全部目标（含 IMU 直读程序）
 build-rtos -r               # 改了 CMake / 换工具链后全量重编
-deploy-rtos                 # 上板：两个 ELF + startup_final.list
+deploy-rtos --keep-logs     # 上板：launcher + dart_app + imu_raw_probe + startup_final.list
 clean-rtos                  # 清空 /sdcard/app 下全部内容（目录与固件的 examples/ 保留）
 clean-rtos-data --dry-run   # 预览两个分区上的日志、录像及历史归档
 clean-rtos-data             # 清日志与录像，保留程序、清单和进程管理文件

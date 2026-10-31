@@ -1,15 +1,16 @@
-#ifndef DART_TOOLS_VIDEO_PLAYER_RECORDING_TYPES_CPP
-#define DART_TOOLS_VIDEO_PLAYER_RECORDING_TYPES_CPP
-
+module;
 #include <QFileInfo>
 #include <QMap>
 #include <QString>
 #include <QStringList>
 #include <QtGlobal>
-
 #include <optional>
 
-namespace dart::tools::video_player {
+export module dart.tools.video_player.recording_types;
+
+
+
+export namespace dart::tools::video_player {
 
 struct CsvRow {
     QMap<QString, QString> values;
@@ -50,5 +51,3 @@ struct Frame {
 };
 
 } // namespace dart::tools::video_player
-
-#endif // DART_TOOLS_VIDEO_PLAYER_RECORDING_TYPES_CPP

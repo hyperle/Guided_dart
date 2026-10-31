@@ -1,6 +1,4 @@
-#ifndef DART_RECORDER_ASYNC_EVENT_WORKER_CPP
-#define DART_RECORDER_ASYNC_EVENT_WORKER_CPP
-
+module;
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
@@ -9,10 +7,14 @@
 #include <new>
 #include <pthread.h>
 
-#include "recorder/config.cpp"
-#include "recorder/storage/event_writer.cpp"
+export module dart.recorder.async.event_worker;
 
-namespace dart::recorder {
+import dart.recorder.config;
+import dart.recorder.error;
+import dart.recorder.storage.event_writer;
+import dart.recorder.storage.session;
+
+export namespace dart::recorder {
 
 // Bounded metadata queue and its consumer lifetime. Producers never wait for
 // disk or for the queue lock; stop drains accepted rows before closing the CSV.
@@ -105,5 +107,3 @@ private:
 };
 
 } // namespace dart::recorder
-
-#endif // DART_RECORDER_ASYNC_EVENT_WORKER_CPP

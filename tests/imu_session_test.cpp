@@ -1,3 +1,7 @@
+#include <cstdint>
+#include <cstddef>
+#include <expected>
+#include <cstring>
 #include <atomic>
 #include <cassert>
 #include <cerrno>
@@ -14,7 +18,8 @@
 #include <thread>
 #include <vector>
 
-#include "runtime/imu/session.cpp"
+import dart.runtime.imu.session;
+import dart.system.write_control;
 
 namespace dart::tests {
 

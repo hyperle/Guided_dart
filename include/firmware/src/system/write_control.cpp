@@ -1,17 +1,19 @@
-#ifndef DART_SYSTEM_WRITE_CONTROL_CPP
-#define DART_SYSTEM_WRITE_CONTROL_CPP
-
+module;
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
-#include <cstring>
 #include <cstdint>
+#include <cstring>
 #include <mutex>
 #include <pthread.h>
 
 #include "write_pause.h"
 
-namespace dart::platform {
+export module dart.system.write_control;
+
+
+
+export namespace dart::platform {
 
 // File polling stays on this service thread. Runtime callers only publish
 // memory requests; a host pause always takes precedence over both requests.
@@ -81,5 +83,3 @@ private:
 };
 
 } // namespace dart::platform
-
-#endif

@@ -1,11 +1,9 @@
-#ifndef DART_TOOLS_VIDEO_PLAYER_PLAYER_CPP
-#define DART_TOOLS_VIDEO_PLAYER_PLAYER_CPP
-
+module;
 #include <QApplication>
 #include <QCommandLineOption>
 #include <QCommandLineParser>
-#include <QFileInfo>
 #include <QFileDialog>
+#include <QFileInfo>
 #include <QImageReader>
 #include <QLabel>
 #include <QMainWindow>
@@ -18,19 +16,21 @@
 #include <QTextStream>
 #include <QVBoxLayout>
 #include <QWidget>
-
 #include <algorithm>
+#include <cstddef>
 #include <limits>
 #include <memory>
 #include <optional>
 #include <utility>
 
-#include "image_reader.cpp"
-#include "image_view.cpp"
-#include "recording.cpp"
-#include "recording_paths.cpp"
+export module dart.tools.video_player.player;
 
-namespace dart::tools::video_player {
+import dart.tools.video_player.image_reader;
+export import dart.tools.video_player.image_view;
+export import dart.tools.video_player.recording;
+import dart.tools.video_player.recording_paths;
+
+export namespace dart::tools::video_player {
 
 class Player final : public QMainWindow {
 public:
@@ -143,7 +143,7 @@ private:
     QString details_;
 };
 
-inline int run_application(int argc, char** argv) {
+int run_application(int argc, char** argv) {
     // Parse/help/check need no window system. Construct QApplication only for the viewer.
     QCommandLineParser parser;
     parser.setApplicationDescription(QStringLiteral(
@@ -251,5 +251,3 @@ inline int run_application(int argc, char** argv) {
 }
 
 } // namespace dart::tools::video_player
-
-#endif // DART_TOOLS_VIDEO_PLAYER_PLAYER_CPP

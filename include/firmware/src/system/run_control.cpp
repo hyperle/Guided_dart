@@ -1,11 +1,13 @@
-#ifndef DART_SYSTEM_RUN_CONTROL_CPP
-#define DART_SYSTEM_RUN_CONTROL_CPP
-
+module;
 #include <chrono>
 #include <cstdint>
 #include <signal.h>
 
-namespace dart::platform {
+export module dart.system.run_control;
+
+
+
+export namespace dart::platform {
 
 /* Process lifetime is independent of individual device availability. */
 class RunControl final {
@@ -40,5 +42,3 @@ private:
 };
 
 } // namespace dart::platform
-
-#endif // DART_SYSTEM_RUN_CONTROL_CPP

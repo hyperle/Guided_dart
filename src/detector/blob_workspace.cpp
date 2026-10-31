@@ -1,8 +1,7 @@
-#ifndef DART_SRC_DETECTOR_BLOB_WORKSPACE_CPP
-#define DART_SRC_DETECTOR_BLOB_WORKSPACE_CPP
-
+module;
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <expected>
 #include <limits>
@@ -11,11 +10,13 @@
 #include <span>
 #include <utility>
 
-#include "geometry.cpp"
-#include "interface.cpp"
-#include "numeric.cpp"
+export module dart.detection.blob_workspace;
 
-namespace dart::detection {
+import dart.detection.geometry;
+export import dart.detection.interface;
+import dart.detection.numeric;
+
+export namespace dart::detection {
 
 class Blob {
 public:
@@ -128,11 +129,11 @@ private:
     std::uint32_t stability_checks_ = 0;
 };
 
-inline BlobWorkspace::BlobWorkspace() noexcept = default;
+BlobWorkspace::BlobWorkspace() noexcept = default;
 
-inline BlobWorkspace::~BlobWorkspace() = default;
+BlobWorkspace::~BlobWorkspace() = default;
 
-inline std::expected<void, DetectionError> BlobWorkspace::Prepare(
+std::expected<void, DetectionError> BlobWorkspace::Prepare(
     std::uint32_t max_width, std::uint32_t max_height, Config config) noexcept {
     const auto max_runs = config.max_runs;
     const auto max_candidates = config.max_candidates;
@@ -167,7 +168,7 @@ inline std::expected<void, DetectionError> BlobWorkspace::Prepare(
     return {};
 }
 
-inline std::expected<void, DetectionError>
+std::expected<void, DetectionError>
     BlobWorkspace::Validate(const camera::FrameView& frame) const noexcept {
     if (!runs_)
         return std::unexpected(DetectionError::kNotPrepared);
@@ -181,7 +182,7 @@ inline std::expected<void, DetectionError>
     return {};
 }
 
-inline std::expected<std::span<const Blob>, DetectionError> BlobWorkspace::Scan(
+std::expected<std::span<const Blob>, DetectionError> BlobWorkspace::Scan(
     const camera::FrameView& frame, Rect window, std::uint8_t threshold, std::uint32_t min_area,
     std::uint32_t sample_step, bool check_stability) noexcept {
     auto valid = Validate(frame);
@@ -306,7 +307,7 @@ inline std::expected<std::span<const Blob>, DetectionError> BlobWorkspace::Scan(
     return std::span<const Blob>(candidates_.get(), kept);
 }
 
-inline std::expected<bool, DetectionError> BlobWorkspace::ValidateStability(
+std::expected<bool, DetectionError> BlobWorkspace::ValidateStability(
     const camera::FrameView& frame, Blob& blob, std::uint8_t threshold,
     Rect window, std::uint32_t step) noexcept {
     if (stability_delta_ == 0 || min_stability_ == 0.0F) return true;
@@ -320,7 +321,7 @@ inline std::expected<bool, DetectionError> BlobWorkspace::ValidateStability(
     return true;
 }
 
-inline std::expected<void, DetectionError> BlobWorkspace::Extract(
+std::expected<void, DetectionError> BlobWorkspace::Extract(
     const camera::FrameView& frame, Rect window, std::uint8_t threshold,
     std::uint32_t sample_step) noexcept {
     run_count_ = 0;
@@ -387,7 +388,7 @@ inline std::expected<void, DetectionError> BlobWorkspace::Extract(
     return {};
 }
 
-inline std::expected<float, DetectionError> BlobWorkspace::Stability(
+std::expected<float, DetectionError> BlobWorkspace::Stability(
     const camera::FrameView& frame, const Blob& blob, std::uint8_t threshold,
     Rect scan_window, std::uint32_t step) noexcept {
     const auto& b = blob.bounds;
@@ -454,7 +455,7 @@ inline std::expected<float, DetectionError> BlobWorkspace::Stability(
     return stability;
 }
 
-inline std::uint32_t BlobWorkspace::Root(std::uint32_t id) noexcept {
+std::uint32_t BlobWorkspace::Root(std::uint32_t id) noexcept {
     while (runs_[id].parent != id) {
         runs_[id].parent = runs_[runs_[id].parent].parent;
         id = runs_[id].parent;
@@ -462,7 +463,7 @@ inline std::uint32_t BlobWorkspace::Root(std::uint32_t id) noexcept {
     return id;
 }
 
-inline void BlobWorkspace::Unite(std::uint32_t a, std::uint32_t b) noexcept {
+void BlobWorkspace::Unite(std::uint32_t a, std::uint32_t b) noexcept {
     a = Root(a);
     b = Root(b);
     if (a == b)
@@ -475,5 +476,3 @@ inline void BlobWorkspace::Unite(std::uint32_t a, std::uint32_t b) noexcept {
 }
 
 } // namespace dart::detection
-
-#endif // DART_SRC_DETECTOR_BLOB_WORKSPACE_CPP

@@ -1,12 +1,14 @@
-
+#include <expected>
+#include <cstdio>
+#include <string_view>
 
 #include <cassert>
 #include <initializer_list>
 #include <string>
 #include <vector>
 
-#include "src/startup/argument_parser.cpp"
-#include "src/recording/frame_recording.cpp"
+import dart.app.startup.argument_parser;
+import dart.app.recording.frame_recording;
 
 namespace dart::tests {
 

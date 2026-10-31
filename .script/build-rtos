@@ -3,9 +3,9 @@
 # build-rtos —— 编译板端可执行文件（交叉编译，产物 build-cross/<目标>/<目标>）
 #
 # 用法（0 或 1 个参数）:
-#   build-rtos              增量编译全部板端目标（launcher + dart_app）
+#   build-rtos              增量编译全部板端目标（含 imu_raw_probe）
 #   build-rtos -r           清掉 build-cross 后全量重编（rebuild）
-#   build-rtos <目标名>     只编该目标：launcher | dart_app | pwm_swing
+#   build-rtos <目标名>     只编该目标：launcher | dart_app | pwm_swing | imu_raw_probe
 #   build-rtos --host       host 编译检查（不需要工具链，不能上板）
 #   build-rtos -h           本帮助
 #
@@ -49,12 +49,12 @@ case "${ARG}" in
     usage >&2
     die "未知选项: ${ARG}"
     ;;
-launcher | dart_app | pwm_swing)
+launcher | dart_app | pwm_swing | imu_raw_probe)
     TARGET="${ARG}"
     ;;
 *)
     usage >&2
-    die "未知目标: ${ARG}（可选 launcher | dart_app | pwm_swing）"
+    die "未知目标: ${ARG}（可选 launcher | dart_app | pwm_swing | imu_raw_probe）"
     ;;
 esac
 
@@ -103,7 +103,7 @@ cmake --build "${BUILD_DIR}" "${BUILD_ARGS[@]}" --parallel
 
 echo
 info "产物:"
-for name in launcher dart_app pwm_swing; do
+for name in launcher dart_app pwm_swing imu_raw_probe; do
     [[ -z "${TARGET}" || "${TARGET}" == "${name}" ]] || continue
     artifact="${BUILD_DIR}/${name}/${name}"
     if [[ -f "${artifact}" && -x "${artifact}" ]]; then
@@ -112,7 +112,7 @@ for name in launcher dart_app pwm_swing; do
 done
 echo
 case "${ARG}" in
-launcher | dart_app | pwm_swing)
+launcher | dart_app | pwm_swing | imu_raw_probe)
     info "下一步: deploy-rtos ${ARG}"
     ;;
 *)

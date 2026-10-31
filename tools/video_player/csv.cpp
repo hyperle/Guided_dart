@@ -1,21 +1,20 @@
-#ifndef DART_TOOLS_VIDEO_PLAYER_CSV_CPP
-#define DART_TOOLS_VIDEO_PLAYER_CSV_CPP
-
+module;
 #include <QFile>
 #include <QString>
 #include <QStringList>
 #include <QTextStream>
-
 #include <algorithm>
 #include <optional>
 #include <utility>
 #include <vector>
 
-#include "recording_types.cpp"
+export module dart.tools.video_player.csv;
 
-namespace dart::tools::video_player {
+import dart.tools.video_player.recording_types;
 
-inline bool split_csv(const QString& line, QStringList& fields) {
+export namespace dart::tools::video_player {
+
+bool split_csv(const QString& line, QStringList& fields) {
     QString field;
     bool quoted = false;
     bool closed = false;
@@ -49,7 +48,7 @@ inline bool split_csv(const QString& line, QStringList& fields) {
     return !quoted;
 }
 
-inline bool read_csv(
+bool read_csv(
     const QString& path, const QStringList& required, std::vector<CsvRow>& rows, QString& error) {
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
@@ -126,7 +125,7 @@ inline bool read_csv(
     return true;
 }
 
-inline std::optional<quint64> unsigned_value(const QString& text) {
+std::optional<quint64> unsigned_value(const QString& text) {
     if (text.isEmpty()
         || std::any_of(text.cbegin(), text.cend(), [](QChar c) { return c < '0' || c > '9'; }))
         return std::nullopt;
@@ -135,7 +134,7 @@ inline std::optional<quint64> unsigned_value(const QString& text) {
     return ok ? std::optional<quint64>{number} : std::nullopt;
 }
 
-inline std::optional<QString> frame_identity(const CsvRow& row, const QString& sequence) {
+std::optional<QString> frame_identity(const CsvRow& row, const QString& sequence) {
     const auto seq = unsigned_value(row.value(sequence));
     const auto received = unsigned_value(row.value("received_us"));
     const auto pts = unsigned_value(row.value("source_pts"));
@@ -145,5 +144,3 @@ inline std::optional<QString> frame_identity(const CsvRow& row, const QString& s
 }
 
 } // namespace dart::tools::video_player
-
-#endif // DART_TOOLS_VIDEO_PLAYER_CSV_CPP

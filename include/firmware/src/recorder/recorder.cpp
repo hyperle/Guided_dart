@@ -1,6 +1,4 @@
-#ifndef DART_RECORDER_RECORDER_CPP
-#define DART_RECORDER_RECORDER_CPP
-
+module;
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -16,15 +14,18 @@
 #include <string_view>
 #include <utility>
 
-#include "camera/frame_lease.cpp"
-#include "recorder/async/event_worker.cpp"
-#include "recorder/config.cpp"
-#include "recorder/error.cpp"
-#include "recorder/storage/image_writer.cpp"
-#include "recorder/storage/session.cpp"
-#include "system/write_control.cpp"
+export module dart.recorder.recorder;
 
-namespace dart::recorder {
+export import dart.camera.frame_lease;
+import dart.recorder.async.event_worker;
+export import dart.recorder.config;
+export import dart.recorder.error;
+import dart.recorder.storage.event_writer;
+import dart.recorder.storage.image_writer;
+import dart.recorder.storage.session;
+import dart.system.write_control;
+
+export namespace dart::recorder {
 
 enum class Admission : std::uint8_t {
     kAccepted,
@@ -194,10 +195,10 @@ private:
     std::atomic<std::uint32_t> queue_high_water_{0};
 };
 
-inline Recorder::Recorder(Config config) noexcept
+Recorder::Recorder(Config config) noexcept
     : config_(config) {}
 
-inline Recorder::~Recorder() {
+Recorder::~Recorder() {
     stop();
     if (release_slots_) {
         for (std::uint32_t i = 0; i < image_capacity_; ++i)
@@ -205,7 +206,7 @@ inline Recorder::~Recorder() {
     }
 }
 
-inline bool Recorder::validate_config() noexcept {
+bool Recorder::validate_config() noexcept {
     if (!checked_frame_bytes(config_.width, config_.height, frame_bytes_)) {
         set_error(Error::kInvalidConfig);
         return false;
@@ -228,7 +229,7 @@ inline bool Recorder::validate_config() noexcept {
     return true;
 }
 
-inline bool Recorder::allocate_buffers() noexcept {
+bool Recorder::allocate_buffers() noexcept {
     if (buffers_ready_)
         return true;
     image_capacity_ = config_.queue_slots;
@@ -257,7 +258,7 @@ inline bool Recorder::allocate_buffers() noexcept {
     return true;
 }
 
-inline bool Recorder::start() noexcept {
+bool Recorder::start() noexcept {
     std::lock_guard lifecycle(lifecycle_mutex_);
     if (image_thread_started_ || events_.started() || pending_releases() != 0) {
         set_error(Error::kAlreadyStarted);
@@ -300,7 +301,7 @@ inline bool Recorder::start() noexcept {
     return true;
 }
 
-inline void Recorder::rollback_start() noexcept {
+void Recorder::rollback_start() noexcept {
     set_error(Error::kThread);
     {
         std::lock_guard<std::mutex> lock(image_mutex_);
@@ -315,7 +316,7 @@ inline void Recorder::rollback_start() noexcept {
     (void)images_.close();
 }
 
-inline void Recorder::stop() noexcept {
+void Recorder::stop() noexcept {
     {
         std::lock_guard lock(control_mutex_);
         controlling_.store(false);
@@ -328,7 +329,7 @@ inline void Recorder::stop() noexcept {
     stop_session();
 }
 
-inline void Recorder::stop_session() noexcept {
+void Recorder::stop_session() noexcept {
     std::lock_guard lifecycle(lifecycle_mutex_);
     if (!started() && !image_thread_started_ && !events_.started())
         return;
@@ -346,7 +347,7 @@ inline void Recorder::stop_session() noexcept {
     events_.stop();
 }
 
-inline bool Recorder::start_controlled(platform::WriteControl& writes) noexcept {
+bool Recorder::start_controlled(platform::WriteControl& writes) noexcept {
     if (control_started_ || image_thread_started_ || !validate_config() || !allocate_buffers())
         return false;
     writes_ = &writes;
@@ -360,7 +361,7 @@ inline bool Recorder::start_controlled(platform::WriteControl& writes) noexcept 
     return true;
 }
 
-inline void* Recorder::control_entry(void* context) noexcept {
+void* Recorder::control_entry(void* context) noexcept {
     auto& self = *static_cast<Recorder*>(context);
     bool attempted = false;
     while (self.controlling_.load()) {
@@ -383,12 +384,12 @@ inline void* Recorder::control_entry(void* context) noexcept {
     return nullptr;
 }
 
-inline bool Recorder::started() const noexcept {
+bool Recorder::started() const noexcept {
     std::lock_guard<std::mutex> lock(image_mutex_);
     return accepting_;
 }
 
-inline Admission Recorder::try_submit(camera::FrameLease&& lease) noexcept {
+Admission Recorder::try_submit(camera::FrameLease&& lease) noexcept {
     std::unique_lock lifecycle(lifecycle_mutex_, std::try_to_lock);
     if (!lifecycle.owns_lock())
         return Admission::kBusy;
@@ -511,7 +512,7 @@ inline Admission Recorder::try_submit(camera::FrameLease&& lease) noexcept {
     return Admission::kAccepted;
 }
 
-inline std::uint32_t Recorder::drain_releases() noexcept {
+std::uint32_t Recorder::drain_releases() noexcept {
     std::uint32_t drained = 0;
     for (;;) {
         camera::FrameLease lease{};
@@ -534,17 +535,17 @@ inline std::uint32_t Recorder::drain_releases() noexcept {
     return drained;
 }
 
-inline std::uint32_t Recorder::pending_releases() const noexcept {
+std::uint32_t Recorder::pending_releases() const noexcept {
     std::lock_guard<std::mutex> lock(image_mutex_);
     return release_count_;
 }
 
-inline void* Recorder::image_thread_entry(void* context) noexcept {
+void* Recorder::image_thread_entry(void* context) noexcept {
     static_cast<Recorder*>(context)->image_loop();
     return nullptr;
 }
 
-inline void Recorder::image_loop() noexcept {
+void Recorder::image_loop() noexcept {
     bool write_failed = false;
     for (;;) {
         ImageSlot* slot = nullptr;
@@ -615,7 +616,7 @@ inline void Recorder::image_loop() noexcept {
     }
 }
 
-inline std::string_view Recorder::error_text(Error error) noexcept {
+std::string_view Recorder::error_text(Error error) noexcept {
     switch (error) {
     case Error::kNone: return "none";
     case Error::kAlreadyStarted: return "already_started";
@@ -631,7 +632,7 @@ inline std::string_view Recorder::error_text(Error error) noexcept {
     return "unknown";
 }
 
-inline Recorder::Stats Recorder::stats() const noexcept {
+Recorder::Stats Recorder::stats() const noexcept {
     Stats result{};
     result.input = input_.load(std::memory_order_relaxed);
     result.accepted = accepted_.load(std::memory_order_relaxed);
@@ -664,5 +665,3 @@ inline Recorder::Stats Recorder::stats() const noexcept {
 }
 
 } // namespace dart::recorder
-
-#endif // DART_RECORDER_RECORDER_CPP

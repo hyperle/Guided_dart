@@ -1,6 +1,4 @@
-#ifndef DART_RECORDER_SESSION_CPP
-#define DART_RECORDER_SESSION_CPP
-
+module;
 #include <algorithm>
 #include <cerrno>
 #include <cstddef>
@@ -11,12 +9,14 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#include "recorder/config.cpp"
-#include "recorder/error.cpp"
-#include "recorder/storage/storage_space.cpp"
-#include "storage/directories.cpp"
+export module dart.recorder.storage.session;
 
-namespace dart::recorder {
+import dart.recorder.config;
+import dart.recorder.error;
+import dart.recorder.storage.storage_space;
+import dart.storage.directories;
+
+export namespace dart::recorder {
 
 class Session final {
 public:
@@ -107,7 +107,7 @@ private:
     }
 };
 
-inline bool
+bool
     Session::remove_images(const char* path, bool image, unsigned level, bool remove) noexcept {
     struct stat st{};
     if (::lstat(path, &st) != 0) {
@@ -180,7 +180,7 @@ inline bool
     return true;
 }
 
-inline bool Session::scan_sessions(
+bool Session::scan_sessions(
     const char* root, std::uint32_t& count, std::uint32_t& oldest, std::uint32_t& newest) noexcept {
     DIR* dir = ::opendir(root);
     if (dir == nullptr) {
@@ -227,7 +227,7 @@ inline bool Session::scan_sessions(
     return true;
 }
 
-inline bool Session::remove_session(const char* root, std::uint32_t index) noexcept {
+bool Session::remove_session(const char* root, std::uint32_t index) noexcept {
     char path[kMaxPath]{};
     const int n = std::snprintf(path, sizeof(path), "%s/rec_%04u", root, index);
     if (n <= 0 || static_cast<std::size_t>(n) >= sizeof(path)) {
@@ -282,7 +282,7 @@ inline bool Session::remove_session(const char* root, std::uint32_t index) noexc
     return true;
 }
 
-inline bool Session::open() noexcept {
+bool Session::open() noexcept {
     const auto root = config_.output_directory;
     char root_path[kMaxPath]{};
     std::memcpy(root_path, root.data(), root.size());
@@ -360,5 +360,3 @@ inline bool Session::open() noexcept {
 }
 
 } // namespace dart::recorder
-
-#endif // DART_RECORDER_SESSION_CPP

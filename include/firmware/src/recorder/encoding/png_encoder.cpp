@@ -1,6 +1,4 @@
-#ifndef DART_RECORDER_PNG_ENCODER_CPP
-#define DART_RECORDER_PNG_ENCODER_CPP
-
+module;
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -9,7 +7,11 @@
 #include <span>
 #include <zlib.h>
 
-namespace dart::recorder {
+export module dart.recorder.encoding.png_encoder;
+
+
+
+export namespace dart::recorder {
 
 // One grayscale bit per pixel, filter None, fast DEFLATE. All working memory
 // and the compressor state are allocated once, outside the capture loop.
@@ -59,7 +61,7 @@ private:
     std::unique_ptr<std::uint8_t[]> raw_, png_;
 };
 
-inline std::span<const std::byte> PngEncoder::encode(std::span<const std::byte> pixels) noexcept {
+std::span<const std::byte> PngEncoder::encode(std::span<const std::byte> pixels) noexcept {
     if (!raw_ || !png_ || pixels.size() < static_cast<std::size_t>(width_) * height_)
         return {};
     const auto* gray = reinterpret_cast<const std::uint8_t*>(pixels.data());
@@ -103,5 +105,3 @@ inline std::span<const std::byte> PngEncoder::encode(std::span<const std::byte> 
 }
 
 } // namespace dart::recorder
-
-#endif // DART_RECORDER_PNG_ENCODER_CPP

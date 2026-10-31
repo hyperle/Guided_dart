@@ -15,7 +15,7 @@
 | 进程时限与退出 | `startup/run.cpp` 决定调用顺序 | `system/` 管理信号、时钟和 launcher 退出标记 |
 
 业务目标统一在 `src/CMakeLists.txt` 声明，下层库由 `include/CMakeLists.txt` 声明。
-各模块包含带保护的 `.cpp`，不提供 C++ 头文件。
+各功能通过 `import dart.app.*` 使用独立编译的命名模块，不提供 C++ 头文件。
 `runtime/launcher/` 负责进程启动与监督；现有 `runtime/imu/` 采样服务本轮保留。
 单进程可以有多个线程或任务：当前相机调用保持串行，
 IMU 采样独立于相机逐帧循环；PWM 任务每 10 ms 检查视觉指令，输出 333 Hz 波形。
@@ -103,7 +103,8 @@ dart_app [选项]
 曝光/阈值默认值均为 UNVALIDATED，要用真实板端样本标定，见 [`docs/DEBUG_GUIDE.md`](../../docs/DEBUG_GUIDE.md) §5。
 PWM 默认增益为零，目标偏移不会改变脉宽。标定后通过上述参数启用各路修正，
 数值列表不含空格，通道顺序和映射符号见 [舵机控制](../control/README.md)。
-纯视觉控制不依赖 IMU，当前启动清单默认关闭 IMU。
+纯视觉控制不依赖 IMU，`dart_app` 默认关闭 IMU。当前启动清单暂停 `dart_app`，
+改为上电运行独立的 [IMU 硬件直读测试](../../runtime/imu/README.md)，先唤醒传感器、等待 50 ms 再读取。
 
 ## 故障隔离
 
@@ -146,7 +147,7 @@ PWM 初始化或写入失败只停用输出，识别和录像继续；取帧错�
 IMU 需要显式指定硬件接线，例如在确认 SPI0 和 HAL 默认片选适用后追加
 `--imu on --imu-bus 0 --imu-cs -1`；`--imu-log` 可改日志基名，每次启动创建新编号文件，
 例如 `imu_000001.log`、`imu_000002.log`；IMU start/stop 状态行给出实际路径。默认关闭，
-当前纯视觉启动清单不启用 IMU，需要时按新板配置 SPI1 / CS IO14。
+正常采样时按新板配置 SPI1 / CS IO14；当前启动清单使用独立直读测试程序。
 采样为独立线程，启动时等待静止样本建立单位四元数参考系；
 后续重新积分复用同一 Session 的 `seed()` / `reset()`，`current()` 返回日志里的
 同一份 Estimate。原始计数、SI 数据、积分状态、质量位及 generation 都写入日志，

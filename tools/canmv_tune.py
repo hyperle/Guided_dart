@@ -2,7 +2,7 @@
 # 相机使用与 dart_app 相同的 RAW10 C 后端，需要配套解释器，见 canmv_tuning/README.md。
 
 # ---------------- 可调参数（量纲与 RT-Smart C/C++ 一致） ----------------
-CAMERA_ENABLED = True
+CAMERA_ENABLED = False
 EXPOSURE_LINES = 120                 # --exp：整行；0 保留初始化曝光，否则 4..65509
 GRAY_THRESHOLD = 60                  # --threshold：灰度候选下限 0..255；不改变预览/识别图
 MIRROR = 0                           # Controls::mirror：0 无，1 左右，2 上下，3 两者
@@ -93,15 +93,16 @@ PRINT_DETECTOR_CPP_CONFIG = True      # 启动时输出可移植的 C++ 配置�
 
 PWM_ENABLED = True
 # 数组顺序固定为 CH1/PWM1/IO61、CH2/PWM2/IO7、CH3/PWM3/IO8、CH4/PWM5/IO59。
-SERVO_INITIAL_US = (1525.0, 1520.0, 1520.0, 1520.0)  # --servo-initial：机械零点，µs
-SERVO_MIN_US = (1420.0, 1420.0, 1420.0, 1420.0)      # --servo-min：校验下限，µs
-SERVO_MAX_US = (1620.0, 1620.0, 1620.0, 1620.0)      # --servo-max：校验上限，µs
+SERVO_INITIAL_US = (1505.0, 1450.0, 1480.0, 1160.0)  # --servo-initial：机械零点，µs    （3n 2n 1n 4n）
+SERVO_MIN_US = (1000.0, 1000.0, 1000.0, 1000.0)      # --servo-min：校验下限，µs
+SERVO_MAX_US = (2000.0, 2000.0, 2000.0, 2000.0)      # --servo-max：校验上限，µs
 SERVO_ENABLED = (True, True, True, True)              # 可只启用正在标定的一路
 PWM_FREQUENCY_HZ = 333                # 与 dart::pwm::kFrequencyHz 一致
+SERVO_RETURN_MS = 500                # 停止时输出预设零点的时长，至少 20 ms；按实际回位速度调整
 
 PREVIEW_ENABLED = True               # 通过 IDE 帧缓冲窗口预览完整 640x480 灰度图
 ACQUIRE_TIMEOUT_MS = 200             # --acquire-ms；0..1000 ms
-MAX_CONSECUTIVE_TIMEOUTS = 8          # 连续无帧达到此数则停止，并关闭 PWM
+MAX_CONSECUTIVE_TIMEOUTS = 8          # 连续无帧达到此数则停止，舵机回零后关闭 PWM
 STATUS_INTERVAL_MS = 1000            # 控制台输出 FPS / 达到灰度候选阈值的像素比例
 RUN_SECONDS = 0                      # 0 持续运行；IDE 停止或 Ctrl+C 后清理资源
 # ---------------- 以下通常无需修改 ----------------
@@ -129,6 +130,8 @@ def _validate():
         raise ValueError("MIRROR: 0..3")
     if PWM_FREQUENCY_HZ != 333:
         raise ValueError("RT-Smart PWM frequency is fixed at 333 Hz")
+    if not isinstance(SERVO_RETURN_MS, int) or SERVO_RETURN_MS < 20:
+        raise ValueError("SERVO_RETURN_MS: integer >= 20 ms")
     for values in (SERVO_INITIAL_US, SERVO_MIN_US, SERVO_MAX_US, SERVO_ENABLED):
         if len(values) != 4:
             raise ValueError("Servo arrays must contain CH1..CH4 in order")
@@ -144,49 +147,109 @@ def _validate():
         raise ValueError("Invalid timeout count, status interval, or duration")
 
 
+class _PwmPads:
+    # 只用现有固件的公开接口；不映射寄存器，不依赖额外原生模块。
+    # 不创建 Pin 对象，避免其构造/析构在 PWM 运行时重新配置引脚。
+    def __init__(self):
+        from machine import FPIOA
+
+        self._fpioa = FPIOA()
+        self._functions = {}
+
+    def prepare(self, pin, channel):
+        from machine import FPIOA
+
+        function = getattr(FPIOA, "PWM%d" % channel)
+        self._functions[pin] = function
+        # PWM(channel) 构造时要求先找到 PWM 路由；此时尚未设置频率/启动输出。
+        self._fpioa.set_function(pin, function, ie=1, oe=0, pu=0, pd=1)
+        self.check_route(pin)
+
+    def connect(self, pin):
+        self._fpioa.set_function(pin, self._functions[pin], ie=1, oe=1, pu=0, pd=0)
+        self.check_route(pin)
+
+    def check_route(self, pin):
+        if self._fpioa.get_pin_func(pin) != self._functions[pin]:
+            raise RuntimeError("PWM IO%d pin route mismatch" % pin)
+
+    def disconnect(self, pin):
+        from machine import FPIOA
+
+        # 切到输入 GPIO 并下拉。不能用 set_function(PWMx, oe=0) 隔离运行中的
+        # PWM：SDK 会先恢复 PWM 默认 OE=1，再处理关键字参数。
+        self._fpioa.set_function(pin, getattr(FPIOA, "GPIO%d" % pin),
+                                 ie=1, oe=0, pu=0, pd=1)
+
+
 def _stop_pwm(outputs):
-    # 某一路失败仍继续关闭其它输出。deinit 关闭波形，不等于切断舵机供电。
-    for output in outputs:
+    # 先让所有已接通的通道回到各自零点，再共同等待；未完成启动的通道仅关闭 PWM。
+    return_requested = False
+    for state in outputs:
+        if not state["connected"]:
+            continue
         try:
-            output.deinit()
-        except Exception as exc:
+            output = state["pwm"]
+            output.duty_ns(state["zero_ns"])
+            return_requested = True  # 写入成功就保留回位时间，即使随后的读回失败。
+            if abs(output.duty_ns() - state["zero_ns"]) > 1000:
+                raise RuntimeError("PWM%d zero readback mismatch" % state["channel"])
+        except (Exception, KeyboardInterrupt) as exc:
+            print("PWM return to zero:", exc)
+    if return_requested:
+        try:
+            print("PWM returning to calibrated zero for %d ms" % SERVO_RETURN_MS)
+            time.sleep_ms(SERVO_RETURN_MS)
+        except (Exception, KeyboardInterrupt) as exc:
+            print("PWM return wait:", exc)
+
+    # 退出时保留当前引脚复用和缓冲配置，直接停止 PWM，不再切换到 GPIO。
+    # 某一路失败仍继续关闭其它输出。deinit 关闭波形，不等于切断舵机供电。
+    for state in outputs:
+        try:
+            state["pwm"].deinit()
+        except (Exception, KeyboardInterrupt) as exc:
             print("PWM cleanup:", exc)
 
 
-def _start_pwm(outputs):
-    from machine import FPIOA, PWM, Pin
+def _start_pwm(outputs, pads):
+    from machine import PWM
 
-    fpioa = FPIOA()
+    # 先建立构造 PWM(channel) 所需的路由；构造后立即切回输入 GPIO。
+    for i, pin in enumerate(PWM_PINS):
+        if SERVO_ENABLED[i]:
+            pads.prepare(pin, PWM_CHANNELS[i])
     for i, channel in enumerate(PWM_CHANNELS):
         if not SERVO_ENABLED[i]:
             continue
         pin = PWM_PINS[i]
-        # 不设置 msc，保留板级 IO 电压选择；启用输入/输出缓冲，与 C++ 后端一致。
-        fpioa.set_function(pin, getattr(FPIOA, "PWM%d" % channel), ie=1, oe=1)
         output = PWM(channel)
-        outputs.append(output)  # 后续任一步失败，finally 都会处理已创建的通道
-        # 本机 CanMV freq()/duty_ns() 自动使能：配置期间先将物理引脚保持 GPIO 低。
-        fpioa.set_function(pin, getattr(FPIOA, "GPIO%d" % pin), ie=1, oe=1)
-        Pin(pin, Pin.OUT, value=0)
-        output.freq(PWM_FREQUENCY_HZ)
+        state = {
+            "pwm": output, "channel": channel, "pin": pin,
+            "zero_ns": int(SERVO_INITIAL_US[i] * 1000.0 + 0.5),
+            "connected": False,
+        }
+        outputs.append(state)  # 后续任一步失败，finally 都会处理已创建的通道
+        pads.disconnect(pin)
+    # 本机 CanMV freq()/duty_ns() 自动使能；所有物理脚已切到输入 GPIO。
+    for state in outputs:
+        state["pwm"].freq(PWM_FREQUENCY_HZ)
     # PWM0/1/2、PWM3/4/5 分别共用周期；全部频率配置完再写各路零点。
-    index = 0
-    for i, channel in enumerate(PWM_CHANNELS):
-        if not SERVO_ENABLED[i]:
-            continue
-        output = outputs[index]
-        index += 1
-        pulse_ns = int(SERVO_INITIAL_US[i] * 1000.0 + 0.5)  # 与 C++ llround(µs*1000) 一致
+    for state in outputs:
+        output = state["pwm"]
+        channel = state["channel"]
+        pulse_ns = state["zero_ns"]  # 与 C++ llround(µs*1000) 一致
         output.duty_ns(pulse_ns)
         if output.freq() != PWM_FREQUENCY_HZ or abs(output.duty_ns() - pulse_ns) > 1000:
             raise RuntimeError("PWM%d configuration readback mismatch" % channel)
         print("CH%d: PWM%d IO%d %.3f us @ %d Hz" % (
-            i + 1, channel, PWM_PINS[i], pulse_ns / 1000.0, PWM_FREQUENCY_HZ
+            PWM_CHANNELS.index(channel) + 1, channel, state["pin"], pulse_ns / 1000.0, PWM_FREQUENCY_HZ
         ))
     # 全部脉宽读回通过后，再把固定零点波形接到各路物理引脚。
-    for i, channel in enumerate(PWM_CHANNELS):
-        if SERVO_ENABLED[i]:
-            fpioa.set_function(PWM_PINS[i], getattr(FPIOA, "PWM%d" % channel), ie=1, oe=1)
+    for state in outputs:
+        pads.connect(state["pin"])
+        state["connected"] = True
+    # 公开接口只提供路由与驱动配置读回，不能据此宣称已测得物理波形。
 
 
 def _print_parameters():
@@ -288,6 +351,7 @@ def main():
     detector = None
     display = None
     outputs = []
+    pwm_pads = None
     try:
         if CAMERA_ENABLED:
             # 当前本机固件的普通 Sensor.snapshot() 经过 ISP，亮度响应与 RAW 直采不同。
@@ -345,7 +409,8 @@ def main():
             print("SC038HGS CSI2: 640x480 RAW10 packed10-lsb -> grayscale Y8; no ISP")
         _print_parameters()
         if PWM_ENABLED:
-            _start_pwm(outputs)
+            pwm_pads = _PwmPads()
+            _start_pwm(outputs, pwm_pads)
 
         start = time.ticks_ms()
         report = start

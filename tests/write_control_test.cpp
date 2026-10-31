@@ -1,3 +1,7 @@
+#include <cstdint>
+#include <cstddef>
+#include <expected>
+#include <utility>
 #include <array>
 #include <cassert>
 #include <chrono>
@@ -7,11 +11,13 @@
 #include <string>
 #include <thread>
 
-#include "logging/csv_writer.cpp"
-#include "logging/logger.cpp"
-#include "recorder/recorder.cpp"
-#include "runtime/imu/session.cpp"
-#include "src/recording/trigger.cpp"
+import dart.logging.csv_writer;
+import dart.logging.logger;
+import dart.recorder.recorder;
+import dart.runtime.imu.session;
+import dart.app.recording.trigger;
+
+import dart.system.write_control;
 
 namespace dart::tests {
 

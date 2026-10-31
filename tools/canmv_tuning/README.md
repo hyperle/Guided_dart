@@ -84,6 +84,7 @@ Detect/Track 分工要求 `_dart_detect.TRACK_FEATURE_VERSION >= 1`。
 | `SERVO_MIN_US` / `SERVO_MAX_US` | `--servo-min` / `--servo-max` | µs；零点超出范围时直接报错 |
 | `PWM_FREQUENCY_HZ` | `dart::pwm::kFrequencyHz` | 固定 333 Hz |
 | `SERVO_ENABLED` | 调试时逐路选择 | 仅 Python 标定开关；原生应用启用全部四路 |
+| `SERVO_RETURN_MS` | 仅 Python 退出清理 | 停止前发送零点脉宽的时长，默认 500 ms，至少 20 ms |
 
 四路数组顺序固定为 CH1～CH4：
 
@@ -96,8 +97,32 @@ Detect/Track 分工要求 `_dart_detect.TRACK_FEATURE_VERSION >= 1`。
 
 PWM0/1/2 共用周期，PWM3/4/5 共用周期，调试期间独占这两组。
 PWM 使用 `duty_ns(round(us*1000))`，与原生后端的 µs→ns 换算一致。
-脚本在配置频率、脉宽期间将输出脚保持为 GPIO 低电平，全部读回通过后接通 PWM。
-停止、异常或达到运行时长时尝试逐路关闭 PWM；关闭波形不会切断舵机电源。
+脚本启动后直接输出 `SERVO_INITIAL_US`，当前为 `(1523, 1520, 1520, 1520)` µs，
+与有无视觉目标无关；已经在该角度的舵机不会额外摆动。
+PWM 仅使用现有固件的 `machine.FPIOA`、`machine.PWM` 公开接口。
+在 IDE 中重新运行电脑上的 `canmv_tune.py` 即可应用本次 PWM 修复，
+无需保存脚本到板上，也无需更换解释器。相机和识别仍使用原有的 `_dart_raw`、`_dart_detect`。
+旧脚本的 `Cannot map K230 PWM pad registers` 来自直接映射 IOMUX，
+上一版的 `Missing _dart_pwm` 来自额外原生模块依赖；当前脚本已移除这两条路径。
+
+`PWM(channel)` 构造时需要先找到 PWM 引脚路由。脚本先建立路由并关闭 OE，
+构造 PWM 对象后立即把各脚切到输入 GPIO 并下拉；全部完成后才设置频率、写入零点。
+读回通过后，再切回 PWM 输出，运行期间持续输出零点脉宽。
+FPIOA 由 SDK 保留板级电压位。不创建 `machine.Pin`，避免其构造/析构修改 PWM 引脚。
+现有 Python 接口无法直接采样 PAD 的 DI 寄存器；启动只检查路由及
+`freq()` / `duty_ns()` 配置读回，不再打印 `pad high/low confirmed`。
+配置读回不能证明物理波形存在，连接器波形和脉宽需用示波器或逻辑分析仪确认。
+
+停止、异常或达到运行时长时，先向所有已接通的通道重新写入各自的
+`SERVO_INITIAL_US` 并读回，持续输出 `SERVO_RETURN_MS`（默认 500 ms）后，
+直接调用底层 `PWM.deinit()`，退出期间不再调用 FPIOA 改变引脚复用、输出缓冲或上下拉。
+启动未完成、尚未接通的通道直接关闭，不会为了回位而重新接通；某路回位或关闭失败
+仍继续清理其它通道和相机。可按实际舵机速度、负载增大 `SERVO_RETURN_MS`；
+脚本没有角度反馈，等待时长不代表已确认机械回位。
+已接通的引脚保留 PWM 复用；启动时用于隔离和接通的引脚切换仍然保留。
+停止 PWM 是否产生完整末尾脉冲取决于底层驱动，此修改不能保证消除所有退出抽动。
+关闭波形不会切断舵机电源，也不保证关闭后继续保持零点；持续保持需要持续 PWM。
+IDE 正常停止会执行 `finally`；强制终止解释器、硬复位或断电不能保证回位流程完成。
 
 ## 当前本机固件需要的相机接口
 
@@ -181,7 +206,7 @@ assert PIXEL_FORMAT == "gray8"
 回退时将 `/sdcard/micropython` 改名保存，再将对应 `previous` 恢复为
 `/sdcard/micropython`，完整重启即可。主机备份也可重新上传。
 
-在更新解释器前，将 `CAMERA_ENABLED=False` 就能先在现有固件调试四路 PWM。
+仅调试四路 PWM 可设 `CAMERA_ENABLED=False`，不需要额外的原生模块。
 相机启用而缺少 `_dart_raw` 时会明确报错。
 
 ## 参数移植与验证范围
@@ -212,3 +237,8 @@ Detect 两次调用分别为 603 / 611 µs。已检查干扰物关联、质量�
 两次打开/各连续取 3 帧/关闭，取帧均成功（曝光 400 行、阈值 50，PWM 关闭）。
 IDE 预览、曝光响应和连接器处的 PWM 波形仍需确认。
 PWM API 与引脚配置依据本机 SDK 源码及[官方 PWM 手册](https://www.kendryte.com/k230_canmv/v0.6/zh/api/machine/k230_canmv_pwm_api_manual.html)。
+
+C++ 模块构建：检测桥接通过 CMake 的 `dart_canmv_detector` 静态库链接同一套检测器，
+不再由解释器的旧 GCC 包含或重新编译 C++ 源码。构建机需安装 Clang >= 19 和配套
+`clang-scan-deps`（或完整 GCC >= 14 交叉工具链）；可用 `DART_CXX_COMPILER` 指定前端。
+私有 overlay 的网络补丁选项与 C ABI 保持原有用法。

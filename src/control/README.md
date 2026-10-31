@@ -1,7 +1,7 @@
 # 四路舵机坐标映射
 
 `servo_mapping.cpp` 是 L4 纯 C++23 映射，构建目标为 `dart_control`。
-文件有包含保护，类外定义为 `inline`；不包含 SDK，不操作 PWM 设备，也不分配堆内存。
+文件声明命名模块 `dart.control.servo_mapping`，独立编译并链接为静态库；不包含 SDK，不操作 PWM 设备，也不分配堆内存。
 
 四个数组元素始终按已有 PWM 测试的 CH1～CH4 排列：
 
@@ -44,7 +44,7 @@
 下面的数值只是展示各字段的含义，方向和比例须自行修改：
 
 ```cpp
-#include "src/control/servo_mapping.cpp"
+import dart.control.servo_mapping;
 
 // 以下配置和调用放在所属业务函数内。以下参数为 UNVALIDATED。
 dart::control::ServoMapping::Config config{};
@@ -156,7 +156,7 @@ bash .script/deploy-rtos list     # 或直接改板端 /sdcard/app/startup_final
 cmake --preset host
 cmake --build --preset host
 ctest --test-dir build --output-on-failure
-cmake --build --preset cross --target dart_control_checks
+cmake --build --preset cross --target dart_control
 ```
 
 主机回归覆盖四路独立初始位置、四个方向的符号、目标选择和丢失、原点坐标、

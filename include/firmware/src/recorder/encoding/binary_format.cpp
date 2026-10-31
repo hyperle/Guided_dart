@@ -1,12 +1,14 @@
-#ifndef DART_RECORDER_BINARY_FORMAT_CPP
-#define DART_RECORDER_BINARY_FORMAT_CPP
-
+module;
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <span>
 
-namespace dart::recorder {
+export module dart.recorder.encoding.binary_format;
+
+
+
+export namespace dart::recorder {
 
 // DBV1: one 12-byte file header, then unsigned LEB128 (payload_bytes << 2 | kind)
 // and payload. Geometry is shared, identities stay in frames.csv. Compressed
@@ -82,5 +84,3 @@ struct BinaryFormat final {
 };
 
 } // namespace dart::recorder
-
-#endif // DART_RECORDER_BINARY_FORMAT_CPP

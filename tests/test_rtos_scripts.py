@@ -328,13 +328,14 @@ sys.exit(subprocess.call(['/usr/bin/gio', *args]))
 
     def test_full_card_deploy_uses_data_partition(self):
         artifacts = self.repo / 'artifacts'
-        for name in ('launcher', 'dart_app'):
+        for name in ('launcher', 'dart_app', 'imu_raw_probe'):
             path = artifacts / name / name
             path.parent.mkdir(parents=True)
             path.write_text('new-' + name)
         self.env['DART_BUILD_DIR'] = str(artifacts)
         self.run_script('deploy-rtos', '--keep-logs')
         self.assertEqual((self.sd / 'app/dart_app').read_text(), 'new-dart_app')
+        self.assertEqual((self.sd / 'app/imu_raw_probe').read_text(), 'new-imu_raw_probe')
         self.assert_present(self.logs + self.records)
         self.run_script('deploy-rtos')
         self.assertFalse((self.data / 'app/logs/imu_000001.log').exists())
@@ -343,7 +344,7 @@ sys.exit(subprocess.call(['/usr/bin/gio', *args]))
 
     def test_custom_mtp_directories_and_full_deploy(self):
         artifacts = self.repo / 'artifacts'
-        for name in ('launcher', 'dart_app'):
+        for name in ('launcher', 'dart_app', 'imu_raw_probe'):
             path = artifacts / name / name
             path.parent.mkdir(parents=True)
             path.write_text('new-' + name)
@@ -353,6 +354,7 @@ sys.exit(subprocess.call(['/usr/bin/gio', *args]))
         result = self.run_script('deploy-rtos')
         self.assertIn('部署完成', result.stdout)
         self.assertEqual((self.sd / 'program/dart_app').read_text(), 'new-dart_app')
+        self.assertEqual((self.sd / 'program/imu_raw_probe').read_text(), 'new-imu_raw_probe')
         self.assertTrue((self.data / 'capture/logs').is_dir())
         self.assertFalse((self.sd / 'program/logs').exists())
         self.assert_present(self.keep + self.logs + self.records)
@@ -378,6 +380,20 @@ sys.exit(subprocess.call(['/usr/bin/gio', *args]))
                 if mode == 'card':
                     self.assertTrue(os.access(deployed, os.X_OK))
                 self.assertIn('/sdcard/app/pwm_swing', result.stdout)
+                self.assert_present(self.keep + self.logs + self.records)
+
+    def test_imu_raw_probe_deploy_preserves_files_without_data_mount(self):
+        for mode in ('card', 'mtp'):
+            with self.subTest(mode=mode):
+                if mode == 'mtp':
+                    self.mode(mode)
+                binary = self.repo / 'artifacts/imu_raw_probe/imu_raw_probe'
+                binary.parent.mkdir(parents=True, exist_ok=True)
+                binary.write_text('imu-raw-' + mode)
+                self.env.update(DART_BUILD_DIR=str(self.repo / 'artifacts'), DATA_SDCARD='')
+                result = self.run_script('deploy-rtos', 'imu_raw_probe')
+                self.assertEqual((self.sd / 'app/imu_raw_probe').read_text(), binary.read_text())
+                self.assertIn('deploy-rtos list', result.stdout)
                 self.assert_present(self.keep + self.logs + self.records)
 
     def test_unsafe_root_rejected(self):

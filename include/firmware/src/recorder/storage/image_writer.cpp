@@ -1,6 +1,4 @@
-#ifndef DART_RECORDER_IMAGE_WRITER_CPP
-#define DART_RECORDER_IMAGE_WRITER_CPP
-
+module;
 #include <cerrno>
 #include <chrono>
 #include <cstddef>
@@ -13,13 +11,18 @@
 #include <span>
 #include <unistd.h>
 
-#include "camera/frame_view.cpp"
-#include "recorder/encoding/binary_encoder.cpp"
-#include "recorder/encoding/png_encoder.cpp"
-#include "recorder/storage/image_files.cpp"
-#include "recorder/storage/session.cpp"
+export module dart.recorder.storage.image_writer;
 
-namespace dart::recorder {
+import dart.camera.frame_view;
+import dart.recorder.config;
+import dart.recorder.encoding.binary_encoder;
+import dart.recorder.encoding.binary_format;
+import dart.recorder.encoding.png_encoder;
+import dart.recorder.error;
+import dart.recorder.storage.image_files;
+import dart.recorder.storage.session;
+
+export namespace dart::recorder {
 
 class ImageWriter final {
 public:
@@ -142,7 +145,7 @@ private:
     std::chrono::steady_clock::time_point last_flush_{};
 };
 
-inline bool ImageWriter::valid_view(const camera::FrameView& view) const noexcept {
+bool ImageWriter::valid_view(const camera::FrameView& view) const noexcept {
     if (view.width != config_.width || view.height != config_.height || view.stride < view.width
         || view.luma.data() == nullptr)
         return false;
@@ -151,7 +154,7 @@ inline bool ImageWriter::valid_view(const camera::FrameView& view) const noexcep
     return required <= view.luma.size();
 }
 
-inline bool
+bool
     ImageWriter::copy_image(std::span<std::byte> pixels, const camera::FrameView& view) noexcept {
     if (!valid_view(view) || pixels.size() < frame_bytes_)
         return false;
@@ -163,7 +166,7 @@ inline bool
     return true;
 }
 
-inline bool
+bool
     ImageWriter::write_png(std::span<const std::byte> pixels, std::uint64_t index) noexcept {
     const auto begin = std::chrono::steady_clock::now();
     const auto encoded = png_.encode(pixels);
@@ -235,7 +238,7 @@ inline bool
     return true;
 }
 
-inline bool
+bool
     ImageWriter::write_binary(std::span<const std::byte> pixels) noexcept {
     if (!file_)
         return false;
@@ -280,7 +283,7 @@ inline bool
     return true;
 }
 
-inline bool
+bool
     ImageWriter::write_image(std::span<const std::byte> pixels, std::uint64_t index) noexcept {
     if (config_.image_format == ImageFormat::kDbv)
         return write_binary(pixels);
@@ -343,5 +346,3 @@ inline bool
 }
 
 } // namespace dart::recorder
-
-#endif // DART_RECORDER_IMAGE_WRITER_CPP

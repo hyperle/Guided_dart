@@ -1,16 +1,18 @@
-#ifndef DART_INCLUDE_FIRMWARE_APP_SRC_CAMERA_FRAME_LEASE_CPP
-#define DART_INCLUDE_FIRMWARE_APP_SRC_CAMERA_FRAME_LEASE_CPP
-
+module;
 #include <cstddef>
 #include <cstdint>
 #include <expected>
 #include <optional>
 #include <utility>
 
-#include "error.cpp"
-#include "frame_view.cpp"
+#include "camera/error_codes.h"
 
-namespace dart::camera {
+export module dart.camera.frame_lease;
+
+export import dart.camera.error;
+export import dart.camera.frame_view;
+
+export namespace dart::camera {
 
 class FrameLease;
 
@@ -82,12 +84,12 @@ private:
     }
 };
 
-inline FrameLease::FrameLease(FrameLease&& other) noexcept
+FrameLease::FrameLease(FrameLease&& other) noexcept
     : slot_(other.slot_) {
     other.slot_ = nullptr;
 }
 
-inline FrameLease& FrameLease::operator=(FrameLease&& other) noexcept {
+FrameLease& FrameLease::operator=(FrameLease&& other) noexcept {
     if (this == &other)
         return *this;
     if (slot_ != nullptr && slot_->state == FrameLeaseAccess::SlotState::kHeld) {
@@ -100,7 +102,7 @@ inline FrameLease& FrameLease::operator=(FrameLease&& other) noexcept {
     return *this;
 }
 
-inline FrameLease::~FrameLease() {
+FrameLease::~FrameLease() {
     if (slot_ == nullptr || slot_->state != FrameLeaseAccess::SlotState::kHeld)
         return;
     auto result = release();
@@ -111,18 +113,18 @@ inline FrameLease::~FrameLease() {
     }
 }
 
-inline const FrameView& FrameLease::view() const noexcept {
+const FrameView& FrameLease::view() const noexcept {
     static const FrameView empty{};
     if (slot_ == nullptr || slot_->state != FrameLeaseAccess::SlotState::kHeld)
         return empty;
     return slot_->view;
 }
 
-inline bool FrameLease::valid() const noexcept {
+bool FrameLease::valid() const noexcept {
     return slot_ != nullptr && slot_->state == FrameLeaseAccess::SlotState::kHeld;
 }
 
-inline std::expected<void, CameraError> FrameLease::release() noexcept {
+std::expected<void, CameraError> FrameLease::release() noexcept {
     if (slot_ == nullptr)
         return {};
     FrameLeaseAccess::Slot* slot = slot_;
@@ -140,10 +142,8 @@ inline std::expected<void, CameraError> FrameLease::release() noexcept {
     return result;
 }
 
-inline FrameLease FrameLeaseAccess::make(Slot* slot) noexcept {
+FrameLease FrameLeaseAccess::make(Slot* slot) noexcept {
     return FrameLease(slot);
 }
 
 } // namespace dart::camera
-
-#endif // DART_INCLUDE_FIRMWARE_APP_SRC_CAMERA_FRAME_LEASE_CPP

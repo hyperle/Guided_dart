@@ -1,11 +1,11 @@
-
-
 #include <array>
 #include <cassert>
 #include <chrono>
 #include <cstdint>
+#include "camera/c_api/camera.h"
+#include "camera/error_codes.h"
 
-#include "camera/k230/camera.cpp"
+import dart.camera.k230.camera;
 
 namespace dart::tests {
 

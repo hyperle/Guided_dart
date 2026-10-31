@@ -1,6 +1,4 @@
-#ifndef DART_RECORDER_EVENT_WRITER_CPP
-#define DART_RECORDER_EVENT_WRITER_CPP
-
+module;
 #include <chrono>
 #include <cstddef>
 #include <cstdio>
@@ -9,9 +7,13 @@
 #include <string_view>
 #include <unistd.h>
 
-#include "recorder/storage/session.cpp"
+export module dart.recorder.storage.event_writer;
 
-namespace dart::recorder {
+import dart.recorder.config;
+import dart.recorder.error;
+import dart.recorder.storage.session;
+
+export namespace dart::recorder {
 
 class EventWriter final {
 public:
@@ -82,7 +84,7 @@ private:
     std::chrono::steady_clock::time_point last_event_flush_{};
 };
 
-inline void EventWriter::maybe_flush_events(bool force) noexcept {
+void EventWriter::maybe_flush_events(bool force) noexcept {
     if (event_file_ == nullptr)
         return;
     const auto now = std::chrono::steady_clock::now();
@@ -93,7 +95,7 @@ inline void EventWriter::maybe_flush_events(bool force) noexcept {
     last_event_flush_ = now;
 }
 
-inline std::string_view EventWriter::decision_text(EventDecision decision) noexcept {
+std::string_view EventWriter::decision_text(EventDecision decision) noexcept {
     switch (decision) {
     case EventDecision::kAccepted: return "accepted";
     case EventDecision::kDownsampled: return "downsampled";
@@ -105,5 +107,3 @@ inline std::string_view EventWriter::decision_text(EventDecision decision) noexc
 }
 
 } // namespace dart::recorder
-
-#endif // DART_RECORDER_EVENT_WRITER_CPP

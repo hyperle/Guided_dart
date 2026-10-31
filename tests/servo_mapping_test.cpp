@@ -1,14 +1,18 @@
+#include <cstddef>
 #include <array>
 #include <cassert>
 #include <limits>
 
-#include "src/control/servo_mapping.cpp"
+import dart.control.servo_mapping;
+
+import dart.tests.odr_consumer;
 
 namespace dart::tests {
 
 class ServoMappingTest final {
 public:
     static void run() {
+        assert(OdrConsumer::check());
         control::ServoMapping::Config config{};
         config.channels = {{
             {1510.0F, 1400.0F, 1640.0F, 1.0F, 0.5F},

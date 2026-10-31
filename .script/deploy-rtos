@@ -3,10 +3,11 @@
 # deploy-rtos —— 把编译产物上板到 /sdcard/app/
 #
 # 用法:
-#   deploy-rtos              上板全部：launcher + dart_app + startup_final.list
+#   deploy-rtos              上板全部：launcher + dart_app + imu_raw_probe + startup_final.list
 #   deploy-rtos launcher     只上板 launcher
 #   deploy-rtos dart_app     只上板 dart_app
 #   deploy-rtos pwm_swing    只上板舵机测试程序（手动运行）
+#   deploy-rtos imu_raw_probe 只上板 IMU 直读程序（首次启用还需 deploy-rtos list）
 #   deploy-rtos list         只上板启动清单（startup_final.list）
 #   deploy-rtos --keep-logs  全量读卡器部署时保留日志和录像
 #   deploy-rtos -h           本帮助
@@ -41,18 +42,18 @@ for arg in "$@"; do
     case "${arg}" in
     -h | --help) usage; exit 0 ;;
     --keep-logs) KEEP_LOGS=1 ;;
-    launcher | dart_app | pwm_swing | list)
+    launcher | dart_app | pwm_swing | imu_raw_probe | list)
         [[ -z "${TARGET}" ]] || die "只能指定一个目标"
         TARGET="${arg}"
         ;;
-    *) usage >&2; die "未知参数: ${arg}（可选 launcher | dart_app | pwm_swing | list | --keep-logs）" ;;
+    *) usage >&2; die "未知参数: ${arg}（可选 launcher | dart_app | pwm_swing | imu_raw_probe | list | --keep-logs）" ;;
     esac
 done
 
 # 统一选择和预检文件，三种传输方式使用同一套路径。
 NAMES=()
 SOURCES=()
-for name in launcher dart_app list pwm_swing; do
+for name in launcher dart_app imu_raw_probe list pwm_swing; do
     # The motion test is deployed only when explicitly selected.
     [[ "${name}" != pwm_swing || "${TARGET}" == pwm_swing ]] || continue
     [[ -z "${TARGET}" || "${TARGET}" == "${name}" ]] || continue
@@ -165,7 +166,12 @@ if [[ "${TARGET}" == pwm_swing ]]; then
     info "  msh> ${BOARD_DIR}/pwm_swing"
     exit 0
 fi
+if [[ "${TARGET}" == imu_raw_probe ]]; then
+    info "IMU 直读程序已部署；首次启用还需 deploy-rtos list，重启后自动读取"
+    info "板端手动运行: ${BOARD_DIR}/imu_raw_probe（不要与自启实例同时运行）"
+    exit 0
+fi
 info "部署完成；请重启板子以加载新文件（读卡器模式先卸载 SD 卡再插回板子）"
-info "板端手动验证（不要与 launcher 同时跑，两者都独占 VICAP）:"
+info "板端验证:"
 info "  msh> ${BOARD_DIR}/launcher -t"
-info "  msh> ${BOARD_DIR}/dart_app --seconds 10"
+info "本轮清单上电自动运行 imu_raw_probe；不与其它 IMU/SPI1 使用者同时运行"

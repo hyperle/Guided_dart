@@ -1,6 +1,6 @@
-#ifndef DART_CANMV_DETECTOR_BRIDGE_CPP
-#define DART_CANMV_DETECTOR_BRIDGE_CPP
-
+#include <cstdint>
+#include <cstddef>
+#include <chrono>
 #include "detector_bridge.h"
 
 #include <cmath>
@@ -9,7 +9,8 @@
 #include <new>
 
 #include "camera/c_api/camera.h"
-#include "src/detector/roi.cpp"
+
+import dart.detection.roi;
 
 namespace dart::canmv {
 
@@ -187,5 +188,3 @@ extern "C" void dart_tuning_detector_reset(dart_tuning_detector* self) {
 extern "C" void dart_tuning_detector_destroy(dart_tuning_detector* self) { delete self; }
 
 } // namespace dart::canmv
-
-#endif // DART_CANMV_DETECTOR_BRIDGE_CPP

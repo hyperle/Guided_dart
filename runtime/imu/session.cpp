@@ -1,6 +1,4 @@
-#ifndef DART_RUNTIME_IMU_SESSION_CPP
-#define DART_RUNTIME_IMU_SESSION_CPP
-
+module;
 #include <atomic>
 #include <cerrno>
 #include <chrono>
@@ -18,12 +16,14 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#include "imu/estimator.cpp"
-#include "imu/interface.cpp"
-#include "storage/directories.cpp"
-#include "system/write_control.cpp"
+export module dart.runtime.imu.session;
 
-namespace dart::imu {
+export import dart.imu.estimator;
+export import dart.imu.interface;
+import dart.storage.directories;
+import dart.system.write_control;
+
+export namespace dart::imu {
 
 /* Owns the estimator shared by consumers and the log. Device lifetime encloses
  * Session lifetime. start()/stop() belong to the application lifecycle thread;
@@ -143,7 +143,7 @@ private:
     std::uint64_t log_limit_bytes_ = kDefaultLogLimitBytes;
 };
 
-inline bool Session::open_log(const char* base_path) noexcept {
+bool Session::open_log(const char* base_path) noexcept {
     const auto length = std::strlen(base_path);
     if (length >= sizeof(log_path_)) {
         errno = ENAMETOOLONG;
@@ -247,7 +247,7 @@ inline bool Session::open_log(const char* base_path) noexcept {
     return false;
 }
 
-inline bool Session::begin_log(bool initial_seed) noexcept {
+bool Session::begin_log(bool initial_seed) noexcept {
     if (writes_ != nullptr)
         storage::ensure_parent(base_path_);
     if (!open_log(base_path_)) {
@@ -288,7 +288,7 @@ inline bool Session::begin_log(bool initial_seed) noexcept {
     return true;
 }
 
-inline bool Session::start(
+bool Session::start(
     const char* path, std::uint32_t period_us, bool initial_seed,
     std::uint64_t log_limit_bytes, platform::WriteControl* writes,
     SampleObserver observer, void* observer_context) noexcept {
@@ -331,7 +331,7 @@ inline bool Session::start(
     return true;
 }
 
-inline void Session::stop() noexcept {
+void Session::stop() noexcept {
     {
         std::lock_guard lock(sleep_mutex_);
         sampling_.store(false);
@@ -357,7 +357,7 @@ inline void Session::stop() noexcept {
     end_log();
 }
 
-inline void Session::end_log() noexcept {
+void Session::end_log() noexcept {
     log_active_.store(false);
     if (file_ != nullptr) {
         char footer[256];
@@ -382,18 +382,18 @@ inline void Session::end_log() noexcept {
     }
 }
 
-inline Estimator::Estimate Session::current() const noexcept {
+Estimator::Estimate Session::current() const noexcept {
     std::lock_guard lock(state_mutex_);
     return latest_;
 }
 
-inline Estimator::SeedResult Session::seed(const Quaternionf& reference) noexcept {
+Estimator::SeedResult Session::seed(const Quaternionf& reference) noexcept {
     std::lock_guard lock(state_mutex_);
     initial_seed_pending_ = false;
     return seed_locked(reference);
 }
 
-inline Estimator::SeedResult Session::seed_locked(const Quaternionf& reference) noexcept {
+Estimator::SeedResult Session::seed_locked(const Quaternionf& reference) noexcept {
     const auto result = estimator_.seed(latest_.sample, reference);
     if (result.accepted)
         latest_ = estimator_.current();
@@ -407,7 +407,7 @@ inline Estimator::SeedResult Session::seed_locked(const Quaternionf& reference) 
     return result;
 }
 
-inline void Session::reset() noexcept {
+void Session::reset() noexcept {
     std::lock_guard lock(state_mutex_);
     initial_seed_pending_ = false;
     estimator_.reset();
@@ -419,12 +419,12 @@ inline void Session::reset() noexcept {
     enqueue(event);
 }
 
-inline Session::Stats Session::stats() const noexcept {
+Session::Stats Session::stats() const noexcept {
     return {samples_.load(),   read_errors_.load(), written_.load(),          dropped_.load(),
             io_errors_.load(), log_bytes_.load(),   log_limit_reached_.load()};
 }
 
-inline void Session::enqueue(Event event) noexcept {
+void Session::enqueue(Event event) noexcept {
     if (!accepting_ || !logging_enabled() || !log_active_.load())
         return;
     event.sequence = ++sequence_;
@@ -448,7 +448,7 @@ inline void Session::enqueue(Event event) noexcept {
     queue_ready_.notify_one();
 }
 
-inline void Session::sample_loop() noexcept {
+void Session::sample_loop() noexcept {
     auto next = std::chrono::steady_clock::now();
     while (sampling_.load()) {
         const auto sample = source_.read_sample();
@@ -483,7 +483,7 @@ inline void Session::sample_loop() noexcept {
     }
 }
 
-inline void Session::writer_loop() noexcept {
+void Session::writer_loop() noexcept {
     auto next_flush = std::chrono::steady_clock::now() + std::chrono::seconds{1};
     bool attempted = file_ != nullptr || logging_enabled();
     for (;;) {
@@ -538,7 +538,7 @@ inline void Session::writer_loop() noexcept {
     }
 }
 
-inline bool Session::write_event(const Event& event) noexcept {
+bool Session::write_event(const Event& event) noexcept {
     if (log_limit_reached_.load())
         return false;
     const auto& e = event.estimate;
@@ -578,7 +578,7 @@ inline bool Session::write_event(const Event& event) noexcept {
     return write_log(row, length, sizeof(row));
 }
 
-inline bool Session::write_log(const char* data, int length, std::size_t capacity) noexcept {
+bool Session::write_log(const char* data, int length, std::size_t capacity) noexcept {
     if (log_limit_reached_.load())
         return false;
     if (length < 0 || static_cast<std::size_t>(length) >= capacity)
@@ -596,5 +596,3 @@ inline bool Session::write_log(const char* data, int length, std::size_t capacit
 }
 
 } // namespace dart::imu
-
-#endif // DART_RUNTIME_IMU_SESSION_CPP

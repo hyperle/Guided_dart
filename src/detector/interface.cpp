@@ -1,12 +1,12 @@
-#ifndef DART_SRC_DETECTOR_INTERFACE_CPP
-#define DART_SRC_DETECTOR_INTERFACE_CPP
-
+module;
 #include <expected>
 
-#include "camera/frame_view.cpp"
-#include "result.cpp"
+export module dart.detection.interface;
 
-namespace dart::detection {
+export import dart.camera.frame_view;
+export import dart.detection.result;
+
+export namespace dart::detection {
 
 enum class DetectionError : int {
     kInvalidConfig = 1,
@@ -27,5 +27,3 @@ public:
 };
 
 } // namespace dart::detection
-
-#endif // DART_SRC_DETECTOR_INTERFACE_CPP

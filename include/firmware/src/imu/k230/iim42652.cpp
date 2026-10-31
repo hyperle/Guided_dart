@@ -1,12 +1,13 @@
-#ifndef DART_INCLUDE_FIRMWARE_APP_SRC_IMU_K230_IIM42652_CPP
-#define DART_INCLUDE_FIRMWARE_APP_SRC_IMU_K230_IIM42652_CPP
-
+module;
 #include <expected>
 
-#include "imu/interface.cpp"
 #include "spi/iim42652.h"
 
-namespace dart::imu::k230 {
+export module dart.imu.k230.iim42652;
+
+export import dart.imu.interface;
+
+export namespace dart::imu::k230 {
 
 class Iim42652 final : public IImu {
 public:
@@ -40,6 +41,7 @@ private:
         case DART_IIM42652_UNEXPECTED_DEVICE_ID: return ErrorCode::kUnexpectedDeviceId;
         case DART_IIM42652_CLOCK_ERROR: return ErrorCode::kClock;
         case DART_IIM42652_READY_TIMEOUT: return ErrorCode::kReadyTimeout;
+        case DART_IIM42652_NO_DATA: return ErrorCode::kNoData;
         case DART_IIM42652_INVALID_ARGUMENT: return ErrorCode::kInvalidConfiguration;
         case DART_IIM42652_CONFIGURATION_MISMATCH: return ErrorCode::kInvalidConfiguration;
         case DART_IIM42652_BUS_ERROR:
@@ -49,16 +51,16 @@ private:
     }
 };
 
-inline Iim42652::~Iim42652() { deinitialize(); }
+Iim42652::~Iim42652() { deinitialize(); }
 
-inline std::expected<void, ErrorCode> Iim42652::initialize() noexcept {
+std::expected<void, ErrorCode> Iim42652::initialize() noexcept {
     const auto status = dart_iim42652_init_with_diagnostic(&config_, &sensor_, &diagnostic_);
     if (status != DART_IIM42652_OK)
         return std::unexpected(convert_error(status));
     return {};
 }
 
-inline std::expected<Sample, ErrorCode> Iim42652::read_sample() noexcept {
+std::expected<Sample, ErrorCode> Iim42652::read_sample() noexcept {
     dart_iim42652_sample_t c_sample{};
     const auto status = dart_iim42652_read_sample(sensor_, &c_sample);
     if (status != DART_IIM42652_OK)
@@ -81,8 +83,6 @@ inline std::expected<Sample, ErrorCode> Iim42652::read_sample() noexcept {
     return sample;
 }
 
-inline void Iim42652::deinitialize() noexcept { dart_iim42652_deinit(&sensor_); }
+void Iim42652::deinitialize() noexcept { dart_iim42652_deinit(&sensor_); }
 
 } // namespace dart::imu::k230
-
-#endif // DART_INCLUDE_FIRMWARE_APP_SRC_IMU_K230_IIM42652_CPP

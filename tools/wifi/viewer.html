@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>相机实时画面</title>
+<style>
+:root{color-scheme:dark;font-family:system-ui,sans-serif;background:#10151d;color:#e9eef6}
+body{max-width:1000px;margin:auto;padding:20px}
+header{display:flex;align-items:center;justify-content:space-between;gap:12px}
+h1{font-size:22px;margin:12px 0}#state{font-size:14px;color:#aab7c9}
+.screen{position:relative;background:#05080c;border:1px solid #293448;border-radius:12px;overflow:hidden;margin:16px 0}
+video{display:block;width:100%;max-height:72vh;min-height:200px;object-fit:contain}
+#waiting{position:absolute;inset:0;display:grid;place-items:center;color:#aab7c9;pointer-events:none;text-align:center;padding:24px}
+.stats{display:flex;flex-wrap:wrap;gap:12px 24px;font-size:14px;color:#aab7c9}
+button{background:#386beb;color:white;border:0;border-radius:7px;padding:10px 16px;font:inherit;cursor:pointer}
+footer{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-top:20px;font-size:13px;color:#8d9ab0}
+.error{color:#ffb0a9!important}
+</style>
+</head>
+<body>
+<header><h1>相机实时画面</h1><span id="state">正在连接…</span></header>
+<div class="screen">
+<video id="video" controls autoplay muted playsinline></video>
+<div id="waiting">等待相机上传画面…</div>
+</div>
+<div class="stats"><span id="received">已接收 0 帧</span><span id="rate">上传 — FPS</span><span id="format">视频准备中</span><span id="freshness">等待收帧</span></div>
+<footer><span>画面通常延迟几秒；相机离线时会保留最后一帧。</span><button id="play">播放 / 重连</button></footer>
+<script>
+const video=document.querySelector('#video'),state=document.querySelector('#state'),waiting=document.querySelector('#waiting');
+let player=null,starting=false,started=false,streamId=null,lastCount=null,lastTime=performance.now(),retryAt=0;
+function showError(message){state.textContent=message;state.classList.add('error');}
+function loadHls(){
+  if(window.Hls)return Promise.resolve();
+  return new Promise((resolve,reject)=>{
+    const script=document.createElement('script');
+    script.src='/assets/hls-1.5.18.min.js';
+    script.onload=resolve;script.onerror=reject;document.head.appendChild(script);
+  });
+}
+async function startVideo(){
+  if(starting)return;
+  starting=true;
+  try{
+    if(player){player.destroy();player=null;}
+    video.removeAttribute('src');video.load();
+    if(video.canPlayType('application/vnd.apple.mpegurl')){
+      video.src='/live/index.m3u8';
+    }else{
+      await loadHls();
+      if(!Hls.isSupported())throw new Error('此浏览器不支持 HLS 视频，请使用 Safari 或新版 Chrome');
+      player=new Hls({liveSyncDurationCount:2,liveMaxLatencyDurationCount:5,maxBufferLength:8});
+      player.on(Hls.Events.ERROR,(_,data)=>{if(data.fatal){
+        started=false;retryAt=Date.now()+3000;showError('视频连接中断，正在重连…');
+      }});
+      player.loadSource('/live/index.m3u8');player.attachMedia(video);
+    }
+    started=true;
+    video.play().catch(()=>{waiting.textContent='视频已就绪，点击播放';});
+  }catch(error){showError(error.message||'播放器加载失败，请检查网络后重连');started=false;retryAt=Date.now()+5000;}
+  finally{starting=false;}
+}
+video.addEventListener('playing',()=>{waiting.style.display='none';});
+video.addEventListener('error',()=>{started=false;retryAt=Date.now()+3000;});
+document.querySelector('#play').onclick=()=>{if(started)video.play().catch(()=>{});else startVideo();};
+async function poll(){
+  try{
+    const response=await fetch('/api/status',{cache:'no-store'});
+    if(!response.ok)throw new Error();
+    const status=await response.json(),now=performance.now();
+    if(streamId!==null&&status.stream_id&&streamId!==status.stream_id)started=false;
+    streamId=status.stream_id||null;
+    state.classList.toggle('error',Boolean(status.error));
+    state.textContent=status.error?'视频编码出错，请查看后端日志':status.online?'相机在线':status.received_frames?'相机离线':'等待相机';
+    document.querySelector('#received').textContent=`已接收 ${status.received_frames} 帧`;
+    const rate=status.upload_fps??(lastCount===null?0:Math.max(0,(status.received_frames-lastCount)*1000/(now-lastTime)));
+    document.querySelector('#rate').textContent=`新图 ${rate.toFixed(1)} FPS`;
+    document.querySelector('#format').textContent=`H.264 · ${status.width} × ${status.height} · ${status.fps} FPS`;
+    document.querySelector('#freshness').textContent=status.age_seconds===null?'等待收帧':`最近收帧 ${status.age_seconds.toFixed(1)} 秒前 · 最长间隔 ${(status.max_upload_gap_seconds||0).toFixed(1)} 秒`;
+    lastCount=status.received_frames;lastTime=now;
+    if(status.hls_ready&&!status.error&&!started&&Date.now()>=retryAt)await startVideo();
+  }catch(_){showError('后端连接中断，正在重试…');}
+  setTimeout(poll,1500);
+}
+poll();
+</script>
+</body>
+</html>

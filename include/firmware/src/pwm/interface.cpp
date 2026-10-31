@@ -1,13 +1,15 @@
-#ifndef DART_PWM_INTERFACE_CPP
-#define DART_PWM_INTERFACE_CPP
-
+module;
 #include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <expected>
 
-namespace dart::pwm {
+export module dart.pwm.interface;
+
+
+
+export namespace dart::pwm {
 
 inline constexpr std::size_t kChannelCount = 4;
 inline constexpr std::uint32_t kFrequencyHz = 333;
@@ -20,7 +22,7 @@ struct Error {
     int code = 0;
 };
 
-inline bool valid_pulses(const Pulses& pulses) noexcept {
+bool valid_pulses(const Pulses& pulses) noexcept {
     for (const auto pulse : pulses) {
         const double ns = static_cast<double>(pulse) * 1000.0;
         if (!std::isfinite(ns) || ns < 1.0 || ns > kPeriodNs)
@@ -40,5 +42,3 @@ public:
 };
 
 } // namespace dart::pwm
-
-#endif // DART_PWM_INTERFACE_CPP

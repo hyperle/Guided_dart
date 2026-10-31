@@ -1,6 +1,4 @@
-#ifndef DART_RECORDER_BINARY_ENCODER_CPP
-#define DART_RECORDER_BINARY_ENCODER_CPP
-
+module;
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
@@ -10,9 +8,11 @@
 #include <span>
 #include <zlib.h>
 
-#include "recorder/encoding/binary_format.cpp"
+export module dart.recorder.encoding.binary_encoder;
 
-namespace dart::recorder {
+import dart.recorder.encoding.binary_format;
+
+export namespace dart::recorder {
 
 class BinaryEncoder final {
 public:
@@ -64,7 +64,7 @@ private:
     std::unique_ptr<std::byte[]> bits_, previous_, delta_, compressed_, record_;
 };
 
-inline std::span<const std::byte>
+std::span<const std::byte>
     BinaryEncoder::encode(std::span<const std::byte> pixels) noexcept {
     if (!initialized_ || !record_ || pixels.size() < static_cast<std::size_t>(width_) * height_)
         return {};
@@ -135,5 +135,3 @@ inline std::span<const std::byte>
 }
 
 } // namespace dart::recorder
-
-#endif // DART_RECORDER_BINARY_ENCODER_CPP

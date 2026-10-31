@@ -1,6 +1,4 @@
-#ifndef DART_TOOLS_VIDEO_PLAYER_RECORDING_CPP
-#define DART_TOOLS_VIDEO_PLAYER_RECORDING_CPP
-
+module;
 #include <QDir>
 #include <QDirIterator>
 #include <QFile>
@@ -8,8 +6,8 @@
 #include <QRegularExpression>
 #include <QString>
 #include <QStringList>
-
 #include <algorithm>
+#include <cstddef>
 #include <iterator>
 #include <map>
 #include <optional>
@@ -17,12 +15,15 @@
 #include <utility>
 #include <vector>
 
-#include "csv.cpp"
-#include "binary_stream.cpp"
-#include "recording_paths.cpp"
-#include "recording_types.cpp"
+export module dart.tools.video_player.recording;
 
-namespace dart::tools::video_player {
+import dart.recorder.encoding.binary_format;
+import dart.tools.video_player.binary_stream;
+import dart.tools.video_player.csv;
+import dart.tools.video_player.recording_paths;
+export import dart.tools.video_player.recording_types;
+
+export namespace dart::tools::video_player {
 
 class Recording final {
 public:
@@ -59,7 +60,7 @@ private:
     std::size_t required_detection_matches_ = 0;
 };
 
-inline bool Recording::load_directory(
+bool Recording::load_directory(
     const QString& directory, const std::optional<QString>& frames_csv,
     const std::optional<QString>& detection_csv, const QString& extension, QString& error) {
     *this = Recording{};
@@ -91,7 +92,7 @@ inline bool Recording::load_directory(
     return true;
 }
 
-inline bool Recording::append_binary(const QFileInfo& file_info, QString& error) {
+bool Recording::append_binary(const QFileInfo& file_info, QString& error) {
     QFile file(file_info.absoluteFilePath());
     if (!file.open(QIODevice::ReadOnly)) {
         error = file_info.absoluteFilePath() + ": " + file.errorString();
@@ -147,7 +148,7 @@ inline bool Recording::append_binary(const QFileInfo& file_info, QString& error)
     return true;
 }
 
-inline bool Recording::append_stream(const QFileInfo& file_info, QString& error) {
+bool Recording::append_stream(const QFileInfo& file_info, QString& error) {
     QFile file(file_info.absoluteFilePath());
     if (!file.open(QIODevice::ReadOnly)) {
         error = file_info.absoluteFilePath() + ": " + file.errorString();
@@ -194,7 +195,7 @@ inline bool Recording::append_stream(const QFileInfo& file_info, QString& error)
     return true;
 }
 
-inline bool Recording::load(
+bool Recording::load(
     const QString& image_directory, const QString& frames_csv, const QString& detection_csv,
     const QString& extension, QString& error) {
     *this = Recording{};
@@ -371,5 +372,3 @@ inline bool Recording::load(
 }
 
 } // namespace dart::tools::video_player
-
-#endif // DART_TOOLS_VIDEO_PLAYER_RECORDING_CPP

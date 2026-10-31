@@ -1,20 +1,23 @@
-#ifndef DART_SRC_DETECTOR_ROI_CPP
-#define DART_SRC_DETECTOR_ROI_CPP
-
+module;
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <expected>
 #include <limits>
 
-#include "armor.cpp"
-#include "blob_workspace.cpp"
-#include "geometry.cpp"
-#include "interface.cpp"
-#include "light.cpp"
+export module dart.detection.roi;
 
-namespace dart::detection {
+export import dart.detection.armor;
+import dart.detection.blob_workspace;
+import dart.detection.geometry;
+export import dart.detection.interface;
+export import dart.detection.light;
+import dart.detection.numeric;
+import dart.detection.tracking;
+
+export namespace dart::detection {
 
 class RoiDetector final : public IDetector {
 public:
@@ -92,16 +95,16 @@ private:
     RoiState roi_state_{};
 };
 
-inline RoiDetector::RoiDetector() noexcept : RoiDetector(Config{}) {}
+RoiDetector::RoiDetector() noexcept : RoiDetector(Config{}) {}
 
-inline RoiDetector::RoiDetector(Config config) noexcept
+RoiDetector::RoiDetector(Config config) noexcept
     : config_(config)
     , light_(config.light)
     , armor_(config.armor)
     , light_tracker_(config.light, config.track)
     , light_motion_(config.track), armor_motion_(config.track) {}
 
-inline std::expected<void, DetectionError>
+std::expected<void, DetectionError>
     RoiDetector::Prepare(std::uint32_t max_width, std::uint32_t max_height) noexcept {
     if (!light_.ValidConfig() || !light_tracker_.ValidConfig() || !armor_.ValidConfig()
         || !TargetTracker::ValidConfig(config_.track) || !ValidRoiConfig()) {
@@ -114,7 +117,7 @@ inline std::expected<void, DetectionError>
     return {};
 }
 
-inline std::expected<DetectResult, DetectionError>
+std::expected<DetectResult, DetectionError>
     RoiDetector::Detect(const camera::FrameView& frame) noexcept {
     auto valid = workspace_.Validate(frame);
     if (!valid)
@@ -173,7 +176,7 @@ inline std::expected<DetectResult, DetectionError>
     return result;
 }
 
-inline void RoiDetector::ResetTracking() noexcept {
+void RoiDetector::ResetTracking() noexcept {
     targets_ = {};
     roi_state_ = {};
     light_tracker_.Reset();
@@ -183,15 +186,15 @@ inline void RoiDetector::ResetTracking() noexcept {
     armor_hits_ = tracking_frames_ = 0;
 }
 
-inline void RoiDetector::Reset() noexcept { ResetTracking(); frame_ = {}; }
+void RoiDetector::Reset() noexcept { ResetTracking(); frame_ = {}; }
 
-inline bool RoiDetector::QualityDropped(const Target& value, const Target& validated) const noexcept {
+bool RoiDetector::QualityDropped(const Target& value, const Target& validated) const noexcept {
     return value.valid && validated.valid
         && (value.contrast < validated.contrast * config_.track.quality_drop_ratio
             || value.snr < validated.snr * config_.track.quality_drop_ratio);
 }
 
-inline bool RoiDetector::ConfirmArmor(const Target& armor) noexcept {
+bool RoiDetector::ConfirmArmor(const Target& armor) noexcept {
     if (!armor.valid) { pending_armor_ = {}; armor_hits_ = 0; return false; }
     if (!pending_armor_.valid || !std::isfinite(TargetTracker::MatchCost(
             armor, pending_armor_, pending_armor_, config_.track))) armor_hits_ = 0;
@@ -203,7 +206,7 @@ inline bool RoiDetector::ConfirmArmor(const Target& armor) noexcept {
     return true;
 }
 
-inline void RoiDetector::UpdateTracking(DetectResult& result, bool tracking) noexcept {
+void RoiDetector::UpdateTracking(DetectResult& result, bool tracking) noexcept {
     if (result.light.valid) {
         light_motion_.Observe(result.light, result.source.received);
         if (result.scan.full_validation) {
@@ -237,7 +240,7 @@ inline void RoiDetector::UpdateTracking(DetectResult& result, bool tracking) noe
     else IncrementSaturated(roi_state_.frames_since_full);
 }
 
-inline std::expected<void, DetectionError> RoiDetector::Measure(
+std::expected<void, DetectionError> RoiDetector::Measure(
     const camera::FrameView& frame, Rect window, DetectResult& result, bool tracking,
     bool validate, const Target& predicted_light, const Target& predicted_armor) noexcept {
     result.scan.phase = tracking ? DetectionPhase::kTrack : DetectionPhase::kDetect;
@@ -304,7 +307,7 @@ inline std::expected<void, DetectionError> RoiDetector::Measure(
     return {};
 }
 
-inline bool RoiDetector::ValidRoiConfig() const noexcept {
+bool RoiDetector::ValidRoiConfig() const noexcept {
     const auto& config = config_.roi;
     return config.min_width > 0 && config.min_height > 0 && std::isfinite(config.size_k)
         && config.size_k >= 1.0F && std::isfinite(config.margin) && config.margin >= 0.0F
@@ -314,7 +317,7 @@ inline bool RoiDetector::ValidRoiConfig() const noexcept {
         && config.max_gap.count() > 0;
 }
 
-inline Rect RoiDetector::NextWindow(std::uint32_t width, std::uint32_t height,
+Rect RoiDetector::NextWindow(std::uint32_t width, std::uint32_t height,
     const Target& predicted_light, const Target& predicted_armor, bool validate) const noexcept {
     const auto& config = config_.roi;
     const auto& state = roi_state_;
@@ -354,5 +357,3 @@ inline Rect RoiDetector::NextWindow(std::uint32_t width, std::uint32_t height,
 }
 
 } // namespace dart::detection
-
-#endif // DART_SRC_DETECTOR_ROI_CPP

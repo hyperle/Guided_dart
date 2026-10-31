@@ -1,18 +1,20 @@
-#ifndef DART_SRC_DETECTOR_ARMOR_CPP
-#define DART_SRC_DETECTOR_ARMOR_CPP
-
+module;
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstddef>
+#include <cstdint>
 #include <limits>
 #include <span>
 #include <utility>
 
-#include "blob_workspace.cpp"
-#include "numeric.cpp"
-#include "result.cpp"
+export module dart.detection.armor;
 
-namespace dart::detection {
+export import dart.detection.blob_workspace;
+import dart.detection.numeric;
+import dart.detection.result;
+
+export namespace dart::detection {
 
 class ArmorDetector {
 public:
@@ -69,6 +71,48 @@ private:
         float thickness = 0.0F;
     };
 
+    // Recover the dimensions of a filled rectangular bar from its axis-aligned
+    // bounds and area. A rotated bar's bounding-box aspect/fill can be poor even
+    // when its principal dimensions are still a valid light bar.
+    // The caller keeps the axis-aligned bbox interpretation if recovery fails.
+    static bool RecoverRectShape(
+        const Blob& blob, float& length, float& thickness, float& tilt) noexcept {
+        if (blob.bounds.width == 0 || blob.bounds.height == 0 || blob.area == 0)
+            return false;
+        const double w = blob.bounds.width;
+        const double h = blob.bounds.height;
+        const double area = blob.area;
+        const double sum = w + h;
+        const double product = w * h;
+        const double coefficient = 2.0 * product - 4.0 * area - sum * sum;
+        const double discriminant = coefficient * coefficient - 8.0 * area * sum * sum;
+        if (discriminant < 0.0)
+            return false;
+        const double root = std::sqrt(discriminant);
+        for (const double z0 : {
+                 (-coefficient + root) / (4.0 * area),
+                 (-coefficient - root) / (4.0 * area)}) {
+            if (z0 < 1.0 - 1.0e-6 || z0 > 2.0 + 1.0e-6)
+                continue;
+            const double z = std::clamp(z0, 1.0, 2.0);
+            const double sum_edges = sum / std::sqrt(z);
+            const double difference_squared = sum_edges * sum_edges - 4.0 * area;
+            if (difference_squared < 0.0)
+                continue;
+            const double difference = std::sqrt(difference_squared);
+            const double long_edge = 0.5 * (sum_edges + difference);
+            const double short_edge = 0.5 * (sum_edges - difference);
+            if (!(std::isfinite(long_edge) && std::isfinite(short_edge)
+                  && long_edge >= short_edge && short_edge > 0.0))
+                continue;
+            length = static_cast<float>(long_edge);
+            thickness = static_cast<float>(short_edge);
+            tilt = static_cast<float>(0.5 * std::asin(std::clamp(z - 1.0, -1.0, 1.0)));
+            return true;
+        }
+        return false;
+    }
+
     static float Dot(Point a, Point b) noexcept { return a.x * b.x + a.y * b.y; }
 
     static float Cross(Point a, Point b) noexcept { return a.x * b.y - a.y * b.x; }
@@ -103,11 +147,22 @@ private:
         float angle = blob.angle;
         bar.length = blob.length;
         bar.thickness = blob.thickness;
-        if (!(bar.length > 0.0F && bar.thickness > 0.0F)) {
-            bar.length = static_cast<float>(std::max(blob.bounds.width, blob.bounds.height));
-            bar.thickness = static_cast<float>(std::min(blob.bounds.width, blob.bounds.height));
-            angle = blob.bounds.height >= blob.bounds.width ? static_cast<float>(kPi * 0.5)
-                                                            : 0.0F;
+        // Area and bounds cannot describe every foreground shape. Preserve
+        // measured moment geometry and recover a rectangle only when it is absent.
+        if (!(IsPositive(bar.length) && IsPositive(bar.thickness) && std::isfinite(angle))) {
+            float tilt = 0.0F;
+            if (RecoverRectShape(blob, bar.length, bar.thickness, tilt)) {
+                const float long_axis_angle = blob.bounds.width > blob.bounds.height
+                    ? tilt : static_cast<float>(kPi * 0.5) - tilt;
+                angle = std::copysign(long_axis_angle, blob.angle);
+            } else {
+                // Keep the legacy bbox interpretation when area/bounds cannot be
+                // explained by a filled rotated rectangle.
+                bar.length = static_cast<float>(std::max(blob.bounds.width, blob.bounds.height));
+                bar.thickness = static_cast<float>(std::min(blob.bounds.width, blob.bounds.height));
+                angle = blob.bounds.height >= blob.bounds.width ? static_cast<float>(kPi * 0.5)
+                                                                : 0.0F;
+            }
         }
         // Remote blobs are too quantized for shape tests; LightTracker's temporal
         // confirmation is the gate. Keep only the area/pixel floor above.
@@ -120,6 +175,9 @@ private:
         if (!far) {
             if (bar.length < config.aspect_min * bar.thickness)
                 return false;
+            // For a recovered rotated rectangle, the bbox fill is expected to
+            // fall as the angle grows. Keep the fill gate only near flat bars;
+            // unrecoverable blobs retain the legacy bbox fallback behavior.
             if (skew <= config.flat_deg && blob.fill < config.fill_min)
                 return false;
         }
@@ -203,12 +261,12 @@ private:
     Config config_;
 };
 
-inline ArmorDetector::ArmorDetector() noexcept : ArmorDetector(Config{}) {}
+ArmorDetector::ArmorDetector() noexcept : ArmorDetector(Config{}) {}
 
-inline ArmorDetector::ArmorDetector(Config config) noexcept
+ArmorDetector::ArmorDetector(Config config) noexcept
     : config_(config) {}
 
-inline bool ArmorDetector::ValidConfig() const noexcept {
+bool ArmorDetector::ValidConfig() const noexcept {
     const std::array values{
         config_.length_min_k,   config_.length_max_k,    config_.tiny_px,
         config_.aspect_min,     config_.gap_max_k,       config_.diagonal_min_sin,
@@ -232,7 +290,7 @@ inline bool ArmorDetector::ValidConfig() const noexcept {
 
 // Both selectors read measured candidates. The current light anchors the armor
 // search above it; an old target is used only for association.
-inline Target ArmorDetector::Detect(
+Target ArmorDetector::Detect(
     std::span<const Blob> blobs, const Target& light, const Target* previous,
     const camera::FrameView* frame, bool associated_only, std::array<Blob, 2>* selected) const noexcept {
     if (!light.valid || !IsPositive(light.radius)
@@ -354,7 +412,7 @@ inline Target ArmorDetector::Detect(
     return best;
 }
 
-inline Rect ArmorDetector::SearchWindow(
+Rect ArmorDetector::SearchWindow(
     const Target& light, std::uint32_t width, std::uint32_t height) const noexcept {
     if (!light.valid || !IsPositive(light.radius) || !std::isfinite(light.center.x)
         || !std::isfinite(light.center.y))
@@ -374,5 +432,3 @@ inline Rect ArmorDetector::SearchWindow(
 }
 
 } // namespace dart::detection
-
-#endif // DART_SRC_DETECTOR_ARMOR_CPP

@@ -43,15 +43,24 @@ def build(args):
     staged_port = stage / "port"
     staged_port.mkdir(parents=True, exist_ok=True)
     # Source overlay: build tools may touch core/main.c, so keep core and the
-    # target board private. Every other source is only read through a symlink.
+    # target board private. Network sources are private for optional socket fixes.
+    # Every other source is only read through a symlink.
     for source in port.iterdir():
         target = staged_port / source.name
         if source.name in ("boards", "core"):
             continue
-        if source.name == "Makefile":
+        if source.name == "network":
+            if target.is_symlink():
+                target.unlink()
+            shutil.copytree(source, target, dirs_exist_ok=True)
+        elif source.name == "Makefile":
             shutil.copy2(source, target)
         elif not target.exists():
             target.symlink_to(source, target_is_directory=source.is_dir())
+    if getattr(args, "wifi_socket_fix", False):
+        subprocess.run(["patch", "--batch", "--fuzz=0", "-p1", "-i",
+                        str(ROOT / "tools/wifi/network-socket-fix.patch")],
+                       cwd=staged_port / "network", check=True)
     # Version probes must use the SDK's CanMV repository, not the workspace
     # containing this isolated overlay (the IDE also reads these strings).
     makefile = staged_port / "Makefile"
@@ -75,8 +84,27 @@ def build(args):
             target.symlink_to(sdk / "src/canmv" / name, target_is_directory=True)
 
     board = staged_boards / BOARD
-    for name in ("moddart_raw.c", "moddart_detect.c", "detector_bridge.cpp", "detector_bridge.h"):
+    for name in ("moddart_raw.c", "moddart_detect.c", "detector_bridge.h"):
         shutil.copy2(HERE / name, board / name)
+    # The interpreter's GCC may predate named-module support. Compile the real
+    # detector with the application's module toolchain and link its C ABI archive.
+    # Remove only the obsolete generated source from older private overlays.
+    (board / "detector_bridge.cpp").unlink(missing_ok=True)
+    module_build = destination / "detector-modules"
+    subprocess.run([
+        "cmake", "-S", str(ROOT), "-B", str(module_build), "-G", "Ninja",
+        f"-DCMAKE_TOOLCHAIN_FILE={ROOT / 'cmake/toolchain-riscv64-musl.cmake'}",
+        f"-DK230_TOOLCHAIN_DIR={toolchain}", f"-DK230_SDK_ROOT={sdk}",
+        "-DDART_CAMERA_K230=OFF", "-DDART_IMU_K230=OFF", "-DDART_PWM_K230=OFF",
+        "-DDART_CAMERA_CLANGD_COMMANDS=OFF", "-DDART_IMU_CLANGD_COMMANDS=OFF",
+        "-DBUILD_TESTING=OFF",
+    ], check=True)
+    subprocess.run(["cmake", "--build", str(module_build), "--target",
+                    "dart_canmv_detector", "--parallel", str(args.jobs)], check=True)
+    detector_archives = [module_build / "src/libdart_canmv_detector.a",
+                         module_build / "src/libdart_detection.a",
+                         module_build / "include/libdart_camera_types.a"]
+
     # Recompile the actual app sources, not a second implementation of exposure,
     # unpacking, cutoff, cache handling, or DMA ownership.
     camera = ROOT / "include/firmware/src/camera"
@@ -111,7 +139,8 @@ def build(args):
         f'CFLAGS_EXTRA += -I{ROOT / "include/firmware/src"}\n'
         'LDFLAGS_EXTRA += -Wl,--wrap=ioctl\n'
         f'INC += -I{ROOT} -I{ROOT / "include/firmware/src"}\n'
-        '$(BUILD)/$(BOARD_DIR)/detector_bridge.o: CXXFLAGS += -std=gnu++2b\n'
+        'LDFLAGS_EXTRA += -Wl,--start-group ' + " ".join(map(str, detector_archives))
+        + ' -Wl,--end-group\n'
     )
     (board / "manifest.py").write_text(
         f'include("{port / "boards/manifest.py"}")\n'
@@ -175,6 +204,7 @@ def build(args):
         "track_feature_version": 1,
         "camera_path": "native app C backend; CanMV borrows VM-owned VB",
         "hardware_tested": False,
+        "wifi_socket_fix": bool(getattr(args, "wifi_socket_fix", False)),
         "sdk": str(sdk),
         "sources": {str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest()
                     for path in sorted(HERE.glob("*.[ch]")) + sorted(HERE.glob("*.cpp"))
@@ -195,6 +225,8 @@ def main():
         "K230_TOOLCHAIN_DIR",
         "/mnt/mydata/SelfGuidingDart/third_party/toolchain/"
         "riscv64-linux-musleabi_for_x86_64-pc-linux-gnu/bin")))
+    parser.add_argument("--wifi-socket-fix", action="store_true",
+                        help="fix RT-Smart nonblocking TCP EOF/connect semantics in the private overlay")
     parser.add_argument("--jobs", type=int, default=8)
     build(parser.parse_args())
 

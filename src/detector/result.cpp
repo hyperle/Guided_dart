@@ -1,12 +1,12 @@
-#ifndef DART_SRC_DETECTOR_RESULT_CPP
-#define DART_SRC_DETECTOR_RESULT_CPP
-
+module;
 #include <chrono>
 #include <cstdint>
 
-#include "geometry.cpp"
+export module dart.detection.result;
 
-namespace dart::detection {
+export import dart.detection.geometry;
+
+export namespace dart::detection {
 
 class Target {
 public:
@@ -61,5 +61,3 @@ public:
 };
 
 } // namespace dart::detection
-
-#endif // DART_SRC_DETECTOR_RESULT_CPP

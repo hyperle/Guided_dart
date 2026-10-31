@@ -1,12 +1,14 @@
-#ifndef DART_INCLUDE_FIRMWARE_APP_SRC_CAMERA_FRAME_VIEW_CPP
-#define DART_INCLUDE_FIRMWARE_APP_SRC_CAMERA_FRAME_VIEW_CPP
-
+module;
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <span>
 
-namespace dart::camera {
+export module dart.camera.frame_view;
+
+
+
+export namespace dart::camera {
 
 enum class FrameFlag : std::uint32_t {
     kSourcePtsUnvalidated = 1U,
@@ -31,5 +33,3 @@ public:
 };
 
 } // namespace dart::camera
-
-#endif // DART_INCLUDE_FIRMWARE_APP_SRC_CAMERA_FRAME_VIEW_CPP

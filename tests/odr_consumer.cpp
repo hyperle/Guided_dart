@@ -1,23 +1,24 @@
-#ifndef DART_TESTS_ODR_CONSUMER_CPP
-#define DART_TESTS_ODR_CONSUMER_CPP
+module;
 
-#include "camera/frame_lease.cpp"
-#include "imu/estimator.cpp"
-#include "pwm/session.cpp"
-#include "recorder/recorder.cpp"
-#include "src/control/servo_mapping.cpp"
-#include "src/detector/roi.cpp"
+export module dart.tests.odr_consumer;
 
-namespace dart::tests {
+import dart.camera.frame_lease;
+import dart.control.servo_mapping;
+import dart.detection.roi;
+import dart.imu.estimator;
+import dart.pwm.session;
+import dart.recorder.recorder;
+
+export namespace dart::tests {
 
 class OdrConsumer final {
 public:
-    [[gnu::used]] static bool check() noexcept;
+    static bool check() noexcept;
 };
 
-// Deliberately emit references from another translation unit, exercising the
-// inline definitions shared with the main test executable at link time.
-inline bool OdrConsumer::check() noexcept {
+// Independent callers share these compiled definitions through module imports.
+// The main tests call this method so the archive must participate in the link.
+bool OdrConsumer::check() noexcept {
     imu::Estimator estimator;
     detection::RoiDetector detector;
     recorder::Recorder recording{recorder::Config{}};
@@ -28,5 +29,3 @@ inline bool OdrConsumer::check() noexcept {
 }
 
 } // namespace dart::tests
-
-#endif // DART_TESTS_ODR_CONSUMER_CPP

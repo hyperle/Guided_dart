@@ -1,5 +1,5 @@
-#include "board/k230.cpp"
-#include "startup/run.cpp"
+import dart.board.k230;
+import dart.app.startup.run;
 
 int main(int argc, char* argv[]) {
     return dart::app::run_application(

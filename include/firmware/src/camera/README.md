@@ -1,8 +1,8 @@
 # Camera ACL
 
-C++ 按职责包含带保护的 `.cpp`，通过 `dart_camera_acl` INTERFACE 目标
+C++ 通过命名模块 `dart.camera.*` 导入各职责，通过 `dart_camera_acl` 静态库
 取得 C ABI 依赖；不再提供 C++ 头文件。C 数据面保留 `.c` / `.h`。
-`dart_camera_checks` 在主机和交叉构建中逐文件检查独立依赖。
+各模块独立编译；主机相机契约/适配测试与交叉应用完成最终链接。
 
 | 文件 | 类 / 职责 |
 |---|---|
@@ -17,7 +17,7 @@ C++ 按职责包含带保护的 `.cpp`，通过 `dart_camera_acl` INTERFACE 目�
 上下文中保留，不再构造单独的规划结果或规划器。
 
 ```cpp
-#include "camera/k230/camera.cpp"
+import dart.camera.k230.camera;
 
 auto created = dart::camera::k230::Camera<4>::create();
 if (!created) {
@@ -184,7 +184,7 @@ cmake -S . -B /tmp/dart-camera-cross \
   -DK230_SDK_ROOT=/mnt/mydata/kRTOSSDK \
   -DDART_CAMERA_K230=ON
 cmake --build /tmp/dart-camera-cross \
-  --target dart_camera_k230 dart_camera_checks
+  --target dart_camera_k230 dart_camera_acl
 ```
 
 `K230_MPP_LIB_DIR` and `K230_LINK_SCRIPT` are explicit override points for other

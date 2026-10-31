@@ -1,11 +1,13 @@
-#ifndef DART_DIAGNOSTICS_DETECTION_CSV_CPP
-#define DART_DIAGNOSTICS_DETECTION_CSV_CPP
+module;
 
-#include "camera/frame_view.cpp"
-#include "logging/csv_writer.cpp"
-#include "src/detector/result.cpp"
+export module dart.app.diagnostics.detection_csv;
 
-namespace dart::app {
+import dart.camera.frame_view;
+import dart.detection.result;
+import dart.logging.csv_writer;
+import dart.system.write_control;
+
+export namespace dart::app {
 
 // Detection schema and business values; buffering and file I/O live below L4.
 class DetectionCsv final {
@@ -61,5 +63,3 @@ private:
 };
 
 } // namespace dart::app
-
-#endif // DART_DIAGNOSTICS_DETECTION_CSV_CPP

@@ -1,8 +1,6 @@
-#ifndef DART_APP_ARGUMENT_PARSER_CPP
-#define DART_APP_ARGUMENT_PARSER_CPP
-
-#include <cerrno>
+module;
 #include <array>
+#include <cerrno>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -12,14 +10,16 @@
 #include <expected>
 #include <string_view>
 
-#include "camera/interface.cpp"
-#include "recorder/config.cpp"
-#include "pwm/interface.cpp"
-#include "src/control/servo_mapping.cpp"
+export module dart.app.startup.argument_parser;
+
+export import dart.camera.interface;
+export import dart.control.servo_mapping;
+export import dart.pwm.interface;
+export import dart.recorder.config;
 
 namespace dart::app {
 
-class Arguments {
+export class Arguments {
 public:
     std::uint32_t seconds = 0; /* 0 = 跑到信号 */
     std::uint32_t exposure_lines = 400;
@@ -57,7 +57,7 @@ inline constexpr std::string_view kDefaultLog = "/data/app/logs/dart_app.log";
 
 inline constexpr std::string_view kDefaultRecordDir = "/data/app/records";
 
-inline std::int64_t parse_int(std::string_view text) noexcept {
+std::int64_t parse_int(std::string_view text) noexcept {
     char buf[32];
     char* end = nullptr;
     long value;
@@ -72,7 +72,7 @@ inline std::int64_t parse_int(std::string_view text) noexcept {
     return static_cast<std::int64_t>(value);
 }
 
-inline bool parse_on_off(std::string_view text, bool& out) noexcept {
+bool parse_on_off(std::string_view text, bool& out) noexcept {
     if (text == "on" || text == "1" || text == "true") {
         out = true;
         return true;
@@ -84,7 +84,7 @@ inline bool parse_on_off(std::string_view text, bool& out) noexcept {
     return false;
 }
 
-inline bool copy_path(char* out, std::size_t cap, std::string_view text) noexcept {
+export bool copy_path(char* out, std::size_t cap, std::string_view text) noexcept {
     if (text.size() >= cap)
         return false;
     std::memcpy(out, text.data(), text.size());
@@ -94,7 +94,7 @@ inline bool copy_path(char* out, std::size_t cap, std::string_view text) noexcep
 
 // Fixed-size comma-separated numbers, accepting signed/fractional gains.
 template <std::size_t N>
-inline bool parse_floats(std::string_view text, std::array<float, N>& out) noexcept {
+bool parse_floats(std::string_view text, std::array<float, N>& out) noexcept {
     for (std::size_t i = 0; i < N; ++i) {
         const auto comma = text.find(',');
         const auto part = text.substr(0, comma);
@@ -118,7 +118,7 @@ inline bool parse_floats(std::string_view text, std::array<float, N>& out) noexc
     return false;
 }
 
-inline void usage(const char* argv0) {
+void usage(const char* argv0) {
     std::printf("用法: %s [选项]\n\n", argv0);
     std::printf("  --seconds N      有界运行秒数，0 = 跑到 SIGINT/SIGTERM（默认 0）\n");
     std::printf("  --exp LINES      固定曝光行数（默认 400；0 保留传感器初始曝光）\n");
@@ -161,7 +161,7 @@ inline void usage(const char* argv0) {
 }
 
 /* 失败值是退出码；帮助返回 0，参数非法返回 2，消息已打印。 */
-inline std::expected<Arguments, int> parse_args(int argc, char* argv[]) {
+export std::expected<Arguments, int> parse_args(int argc, char* argv[]) {
     Arguments args;
     args.det_csv[0] = '\0';
 
@@ -430,5 +430,3 @@ inline std::expected<Arguments, int> parse_args(int argc, char* argv[]) {
 }
 
 } // namespace dart::app
-
-#endif // DART_APP_ARGUMENT_PARSER_CPP

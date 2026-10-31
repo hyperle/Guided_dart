@@ -1,15 +1,19 @@
-
+#include <expected>
 
 #include <cassert>
 #include <utility>
+#include "camera/error_codes.h"
 
-#include "camera/frame_lease.cpp"
+import dart.camera.frame_lease;
+
+import dart.tests.odr_consumer;
 
 namespace dart::tests {
 
 class CameraContractTest final {
 public:
     static void run() {
+        assert(OdrConsumer::check());
         camera::CallContext context{};
         context.operation = camera::Operation::kAcquire;
         const camera::CameraError error{DART_CAMERA_E_INVALID_STATE, context};

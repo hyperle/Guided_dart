@@ -2,12 +2,8 @@
 # Module subdirectories contain sources and README files; targets live here.
 
 # IMU acquisition, shared estimator state and asynchronous raw/estimate log.
-add_library(dart_imu_logging INTERFACE)
-target_link_libraries(dart_imu_logging INTERFACE dart_imu Threads::Threads)
-target_include_directories(dart_imu_logging INTERFACE "${PROJECT_SOURCE_DIR}")
-file(GLOB_RECURSE _imu_runtime_classes CONFIGURE_DEPENDS "imu/*.cpp")
-add_library(dart_imu_logging_checks OBJECT ${_imu_runtime_classes})
-target_link_libraries(dart_imu_logging_checks PRIVATE dart_imu_logging)
+dart_add_modules(dart_imu_logging imu/session.cpp)
+target_link_libraries(dart_imu_logging PUBLIC dart_imu dart_platform Threads::Threads)
 
 # Finite board diagnostic for initialization timing comparisons. Run alone.
 if(DART_IMU_K230)
@@ -16,6 +12,14 @@ if(DART_IMU_K230)
     target_link_libraries(imu_init_probe PRIVATE dart_iim42652 k230_rtos_app m)
     set_target_properties(imu_init_probe PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/imu_init_probe")
+
+    # Continuous SPI scope test. Deliberately does not link the IMU driver.
+    add_executable(imu_raw_probe imu/raw_probe.cpp)
+    target_compile_options(imu_raw_probe PRIVATE
+        -Wall -Wextra -Wpedantic -Werror -fno-exceptions -fno-rtti)
+    target_link_libraries(imu_raw_probe PRIVATE dart_platform k230_rtos_app)
+    set_target_properties(imu_raw_probe PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/imu_raw_probe")
 endif()
 
 # ---------------------------------------------------------------------------

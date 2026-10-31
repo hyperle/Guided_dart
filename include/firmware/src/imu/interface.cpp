@@ -1,12 +1,12 @@
-#ifndef DART_INCLUDE_FIRMWARE_APP_SRC_IMU_INTERFACE_CPP
-#define DART_INCLUDE_FIRMWARE_APP_SRC_IMU_INTERFACE_CPP
-
+module;
 #include <cstdint>
 #include <expected>
 
-#include "sample.cpp"
+export module dart.imu.interface;
 
-namespace dart::imu {
+export import dart.imu.sample;
+
+export namespace dart::imu {
 
 enum class ErrorCode : std::uint8_t {
     kInvalidConfiguration,
@@ -17,6 +17,8 @@ enum class ErrorCode : std::uint8_t {
     kUnexpectedDeviceId,
     kClock,
     kReadyTimeout,
+    /* -32768 sense data: that sensor has not produced a sample since reset. */
+    kNoData,
 };
 
 class IImu {
@@ -26,5 +28,3 @@ public:
 };
 
 } // namespace dart::imu
-
-#endif // DART_INCLUDE_FIRMWARE_APP_SRC_IMU_INTERFACE_CPP

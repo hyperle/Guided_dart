@@ -1,6 +1,4 @@
-#ifndef DART_INCLUDE_FIRMWARE_APP_SRC_CAMERA_K230_CAMERA_CPP
-#define DART_INCLUDE_FIRMWARE_APP_SRC_CAMERA_K230_CAMERA_CPP
-
+module;
 #include <array>
 #include <chrono>
 #include <cstddef>
@@ -9,13 +7,18 @@
 #include <limits>
 #include <memory>
 #include <new>
+#include <span>
 #include <utility>
 
 #include "camera/c_api/camera.h"
-#include "camera/frame_lease.cpp"
-#include "camera/interface.cpp"
+#include "camera/error_codes.h"
 
-namespace dart::camera::k230 {
+export module dart.camera.k230.camera;
+
+import dart.camera.frame_lease;
+export import dart.camera.interface;
+
+export namespace dart::camera::k230 {
 
 template <std::uint32_t kCapacity>
 class Camera final : public ICamera {
@@ -586,5 +589,3 @@ Camera<kCapacity>::~Camera() {
  */
 
 } // namespace dart::camera::k230
-
-#endif // DART_INCLUDE_FIRMWARE_APP_SRC_CAMERA_K230_CAMERA_CPP

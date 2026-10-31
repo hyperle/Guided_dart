@@ -34,13 +34,48 @@
 # 一次上电只放一条，换配置就改这一行。
 # ----------------------------------------------------------------------------
 
+# ---- 本轮启用项：v9 启动审计（--startup-audit），修正两处初始化规范问题 ----
+# v8（--gyro-core）结论见 records/imu-gyro-core-v8/README.md：器件为正品 IIM-42652、
+# 初始化正确，但陀螺仪测量通路自复位起未产生任何一帧，属器件/板级问题。
+#
+# 本轮修正：
+# 1) INTF_CONFIG4 (0x7A) 不再整字节写 0x02。SPI_AP_4WIRE(bit1) 复位即为 1，那笔写对目标位
+#    毫无作用，只会把 bit7 保留位从 1 清成 0，违反 DS-000440 第 67/97 页。
+#    现在只读校验 bit1 并原样记录整字节；假 HAL 测试断言该寄存器永不写入。
+# 2) 新增"进入即读"零写入快照（imu_audit op=entry / op=entry_sample）：
+#    记录 SPI 建链后第一时间读到的 REG_BANK_SEL/WHO_AM_I/INTF0/1/PWR_MGMT0/量程、
+#    以及 0x1D..0x2A 原始块，随后 1 秒观察 PWR_MGMT0 是否被别的写者改动
+#    （sensor_config_writes=0）。INT_STATUS 故意不读，因为它读后即清。
+#    判据：冷上电应读到 PWR_MGMT0=0x00 且 14 字节块全 -32768（手册第 62/68/80 页：
+#    POR 进入 sleep）；若为 0x0F 或块里已有有效样本，说明此前已有别的驱动/进程开过六轴。
+# 3) 三组对照均只读校验 SPI_AP_4WIRE：CLKIN 外部时钟、内部自动/RC 时钟，并保留保留位。
+# 需要复现 v8 诊断时手动运行（必须先停掉本行进程）：
+#   /sdcard/app/imu_raw_probe /data/app/logs/imu_core_v8_probe.log --gyro-core
+#
+# ---- v10 计量模式（--metrology）：无仪表条件下继续定位陀螺仪 ----
+# 1) FIFO_COUNT 做 ODR 计量：手册第 60 页规定 ODR 按 f_clkin/32 缩放，故 1 kHz 档配板上
+#    32.768 kHz 晶振应实测 1024 Hz。四组对照（CLKIN / 内部自动 / 内部自动仅加速度 / 强制 RC）
+#    同时回答"晶振是否真的在给芯片供时钟"和"器件是否切到了陀螺仪 MEMS 振荡器"。
+# 2) INT_STATUS bit5 PLL_RDY 专项窗口（历史从未出现）。
+# 3) FIFO 包通路：Packet 3 里是否有陀螺仪包（感测寄存器之外的第二条读出通路）。
+# 4) TMST_VALUE 两条读出路径，且置 TMST_TO_REGS_EN=1（第 85 页：该位为 0 时读回 0，
+#    所以 v8 的 delta=0 结论必须在置位后复测）。
+# 计量结论见 records/imu-metrology-v11/README.md：
+#   - RTC_MODE=1（原生产配置）会让整颗 IMU 停摆 —— 板上 32.768 kHz 晶振未到 Pin 9；
+#     生产固件已改为 use_external_clock=0（见 include/firmware/src/board/k230.cpp）。
+#   - 陀螺仪在感测寄存器与 FIFO 两条通路都只给 -32768，属器件级故障。
+# 需要复现计量时手动运行（先停掉本行进程）：
+#   /sdcard/app/imu_raw_probe /data/app/logs/imu_met_v12_probe.log --metrology
+# 当前只做六轴 LN 唤醒 + 原始寄存器轮询。
+/sdcard/app/imu_raw_probe /data/app/logs/imu_poll_v12.log &
+
 # ---- 四路舵机 PWM 测试（停用；需要时单独部署并手动运行）----
 # 333 Hz，1520 us 中心，1420..1620 us 正弦摆动；每次开机运行一轮，约 43 秒。
 # 普通 & 只监督退出，不重启；不要改为 &!，以免反复摆动。
 # 日志：/data/app/logs/pwm_swing.console.log。
 # /sdcard/app/pwm_swing &
 
-# ---- 本轮启用项：纯视觉舵机输出 + 录像 ----
+# ---- 纯视觉舵机输出 + 录像（IMU 硬件测试期间停用）----
 # PWM 由 dart_app 独占，不能与 pwm_swing 同时运行。
 # 默认预设点为实际图像中心，两轴增益为 0，四路保持各自初始脉宽。
 # 方向/比例标定后可追加 --servo-horizontal A,B,C,D 和 --servo-vertical A,B,C,D。
@@ -77,7 +112,7 @@
 #                              销毁相机 → 摘要行 "step=summary"。一轮上电即可同时
 #                              回答：有没有拉起来 / 采集通不通 / 识别有没有目标 /
 #                              录像落没落盘 / 收尾干不干净。
-/sdcard/app/dart_app --exp 400 --vision on --pwm on --record on --rec-fps 60 --rec-keep 0 --rec-format pgm --raw-layout packed10-lsb --threshold 50 --rec-dir /data/app/records --det-csv /data/app/records/detection.csv --log /data/app/logs/dart_app.log &
+# /sdcard/app/dart_app --exp 400 --vision on --pwm on --record on --rec-fps 60 --rec-keep 0 --rec-format pgm --raw-layout packed10-lsb --threshold 50 --rec-dir /data/app/records --det-csv /data/app/records/detection.csv --log /data/app/logs/dart_app.log &
 
 # 纯视觉控制不依赖 IMU。需要独立 IMU 日志时，可追加 --imu on --imu-bus 1 --imu-cs 14，
 # 同时删去其它默认参数以满足清单 token 上限。IMU 不参与 PWM 计算。

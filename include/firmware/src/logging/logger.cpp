@@ -1,18 +1,19 @@
-#ifndef DART_LOGGING_LOGGER_CPP
-#define DART_LOGGING_LOGGER_CPP
-
+module;
 #include <cstdarg>
+#include <cstddef>
 #include <cstdio>
 #include <cstring>
 #include <fcntl.h>
 #include <string_view>
 #include <unistd.h>
 
-#include "storage/directories.cpp"
-#include "system/monotonic_clock.cpp"
-#include "system/write_control.cpp"
+export module dart.logging.logger;
 
-namespace dart::logging {
+import dart.storage.directories;
+import dart.system.monotonic_clock;
+import dart.system.write_control;
+
+export namespace dart::logging {
 
 /* File logging only. A failed log write must not become a console error loop. */
 class Logger {
@@ -85,5 +86,3 @@ private:
 };
 
 } // namespace dart::logging
-
-#endif // DART_LOGGING_LOGGER_CPP

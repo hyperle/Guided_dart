@@ -18,6 +18,9 @@ typedef enum {
     DART_IIM42652_CLOCK_ERROR = -7,
     DART_IIM42652_CONFIGURATION_MISMATCH = -8,
     DART_IIM42652_READY_TIMEOUT = -9,
+    /* A sense register returned -32768: that sensor has not produced a sample
+     * since the last reset (DS-000440 p62). Not saturation, not a bus error. */
+    DART_IIM42652_NO_DATA = -10,
 } dart_iim42652_status_t;
 
 /* IIM-42652 DS-000440; other 426xx variants need their own validation. */
@@ -59,11 +62,18 @@ typedef struct {
     /* Diagnostic override: bypass identity comparisons, retain bus/config checks.
      * Also capture raw registers even if later initialization fails. Default 0. */
     uint8_t skip_device_id_check;
+    /* Enable Pin 9 CLKIN and RTC_MODE. Requires an external 31..50 kHz signal;
+     * this selects the input, it does not generate a clock. Default 0. */
+    uint8_t use_external_clock;
 } dart_iim42652_config_t;
 
 enum {
     DART_IIM42652_SAMPLE_ACCEL_SATURATED = 1u << 0,
     DART_IIM42652_SAMPLE_GYRO_SATURATED = 1u << 1,
+    /* -32768 in a sense register: no sample since reset (DS-000440 p62). */
+    DART_IIM42652_SAMPLE_ACCEL_NO_DATA = 1u << 2,
+    DART_IIM42652_SAMPLE_GYRO_NO_DATA = 1u << 3,
+    DART_IIM42652_SAMPLE_TEMP_NO_DATA = 1u << 4,
 };
 
 typedef struct {
@@ -112,6 +122,9 @@ typedef struct {
     int16_t last_accelerometer[3];
     int16_t last_gyroscope[3];
     uint32_t readiness_polls;
+    /* Polls in which INT_STATUS.DATA_RDY was set. A stalled part latches it
+     * once; a sampling part sets it on nearly every poll. */
+    uint32_t data_ready_polls;
     dart_iim42652_init_stage_t stage;
     dart_iim42652_status_t result;
     /* Absolute CLOCK_MONOTONIC timestamps; zero means the stage was not reached. */
@@ -126,6 +139,8 @@ typedef struct {
     uint8_t raw_probe_read;
     uint8_t raw_probe[14]; /* Bank 0 0x1d..0x2a; an unverified register snapshot. */
     dart_iim42652_init_stage_t raw_probe_stage;
+    uint8_t external_clock_config_read;
+    uint8_t interface_config5; /* Bank 1: PIN9_FUNCTION bits 2:1. */
 } dart_iim42652_diagnostic_t;
 
 dart_iim42652_status_t

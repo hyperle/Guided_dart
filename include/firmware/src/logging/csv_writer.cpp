@@ -1,23 +1,24 @@
-#ifndef DART_LOGGING_CSV_WRITER_CPP
-#define DART_LOGGING_CSV_WRITER_CPP
-
+module;
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
-#include <cstdint>
-#include <cstring>
 #include <cstdarg>
+#include <cstddef>
+#include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <memory>
-#include <new>
 #include <mutex>
+#include <new>
 #include <pthread.h>
 #include <unistd.h>
 
-#include "storage/directories.cpp"
-#include "system/write_control.cpp"
+export module dart.logging.csv_writer;
 
-namespace dart::logging {
+import dart.storage.directories;
+import dart.system.write_control;
+
+export namespace dart::logging {
 
 // Own buffering and file durability; the caller owns column and row semantics.
 class CsvWriter final {
@@ -189,5 +190,3 @@ private:
 };
 
 } // namespace dart::logging
-
-#endif // DART_LOGGING_CSV_WRITER_CPP

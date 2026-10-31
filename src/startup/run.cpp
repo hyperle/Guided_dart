@@ -1,21 +1,22 @@
-#ifndef DART_STARTUP_RUN_CPP
-#define DART_STARTUP_RUN_CPP
-
+module;
 #include <utility>
 
-#include "argument_parser.cpp"
-#include "logging/logger.cpp"
-#include "services.cpp"
-#include "src/recording/trigger.cpp"
-#include "system/device_services.cpp"
-#include "system/launcher_exit.cpp"
-#include "system/run_control.cpp"
-#include "system/write_control.cpp"
+export module dart.app.startup.run;
+
+import dart.app.recording.trigger;
+import dart.app.startup.argument_parser;
+import dart.app.startup.services;
+import dart.logging.logger;
+import dart.runtime.imu.session;
+import dart.system.device_services;
+import dart.system.launcher_exit;
+import dart.system.run_control;
+import dart.system.write_control;
 
 namespace dart::app {
 
 template <typename ImuRunner>
-inline int run_capture(
+int run_capture(
     const Arguments& args, platform::CameraFactory camera_factory, ImuRunner&& run_imu,
     platform::PwmFactory pwm_factory = nullptr) noexcept {
     platform::RunControl control{args.seconds};
@@ -36,8 +37,8 @@ inline int run_capture(
     });
 }
 
-template <typename ImuRunner>
-inline int run_application(
+export template <typename ImuRunner>
+int run_application(
     int argc, char* argv[], platform::CameraFactory camera_factory, ImuRunner&& run_imu,
     platform::PwmFactory pwm_factory = nullptr) noexcept {
     auto args = parse_args(argc, argv);
@@ -50,5 +51,3 @@ inline int run_application(
 }
 
 } // namespace dart::app
-
-#endif // DART_STARTUP_RUN_CPP

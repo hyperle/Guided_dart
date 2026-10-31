@@ -8,8 +8,8 @@
 
 ## 构建与打开
 
-本机已具备 Qt 5 开发环境。其他 Debian/Ubuntu 主机可安装 `cmake`、`g++`、
-`qtbase5-dev`、`zlib1g-dev`；需要图形桌面来显示窗口。在仓库根目录运行：
+本机已具备 Qt 5 开发环境。需要 CMake >= 3.28、Ninja >= 1.11，及 GCC >= 14 或
+Clang >= 19 + clang-tools；另需 `qtbase5-dev`、`zlib1g-dev`；需要图形桌面来显示窗口。在仓库根目录运行：
 
 ```bash
 # 自动增量构建并打开；也可从其他目录调用 .script/player 的绝对路径。
@@ -33,12 +33,14 @@ bash .script/player records "" ""
 也可以独立构建，不使用任何交叉编译预设：
 
 ```bash
-cmake -S tools/video_player -B build/video_player
+cmake -S tools/video_player -B build/video_player -G Ninja
 cmake --build build/video_player --parallel
 ./build/video_player/video_player --help
 ./build/video_player/video_player records
 ```
 
+从旧版缓存迁移时，先执行 `cmake --fresh -S tools/video_player -B build/video_player -G Ninja`。
+`DART_CXX_COMPILER` 可指定模块编译器，默认自动选择 GCC >= 14 / Clang >= 19。
 `DART_PLAYER_BUILD_DIR` 可覆盖脚本的默认构建目录 `build/video_player`。
 脚本透传参数，数据相对路径以调用时工作目录为准。指定一轮录像的目录，支持
 原始 `rec_NNNN`、其 `img` 目录，以及当前仓库 `records` 这样的拷贝布局：
@@ -147,8 +149,8 @@ python3 tests/check_cpp_structure.py
 `recording_paths.cpp` 解析原始会话和拷贝布局的默认路径，`image_reader.cpp` 负责逐帧解码，
 `recording.cpp` 扫描文件并关联录像/检测记录；
 `image_view.cpp` 管理显示和原图坐标映射，`player.cpp` 组合窗口与命令入口，
-`main.cpp` 仅转交入口。可包含 `.cpp` 使用包含保护、
-单个具名命名空间及 inline 定义；CMake 分别编译每个组件以验证独立包含。
+`main.cpp` 仅转交入口。组件声明 `dart.tools.video_player.*` 命名模块，
+CMake 原生扫描依赖，各 `.cpp` 独立编译并链接进播放器与测试。
 测试使用 Qt offscreen 平台，不需要实际显示器，覆盖 DBV 完整帧/差分/旧版重复/异常尾部及 PNG 导出，
 并直接调用当前板端编码器生成含相同输入、阈值边界及非整字节行宽的录像，核对每帧像素、
 顺序/向后/随机跳帧、CSV 偏移与检测关联、全部 PNG 导出及脱离 CSV 的独立解码；另覆盖真实 PNG/PGM/PBM 解码、单色 1-bit PNG、
@@ -159,3 +161,6 @@ python3 tests/check_cpp_structure.py
 `check_cpp_structure.py` 检查通过；使用既有主机录像样本验证了 `--check`，
 并从其他工作目录运行了 `.script/player`。界面通过 offscreen 渲染与事件测试验证，
 未进行桌面窗口的人工操作；Qt 6 尚未在本机实测。
+
+2026-10-31 使用 Clang 19.1.1 / Qt 5.15.13 迁移命名模块后，独立构建、最终链接与
+offscreen CTest 通过。

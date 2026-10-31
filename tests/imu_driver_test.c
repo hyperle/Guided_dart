@@ -16,7 +16,8 @@ static struct {
     int fail_sleep, fail_clock, never_ready, invalid_one_axis;
     int allow_raw_probe, all_reads_ff, all_sample_ff, all_sample_zero;
     int fail_raw_probe_at, raw_probe_reads;
-    uint64_t now, reset_at, powered_at, ready_after_ns, interrupt_min_ns;
+    int require_external_clock, corrupt_pin, corrupt_rtc, corrupt_int1, corrupt_bank, warm_on;
+    uint64_t now, reset_at, powered_at, ready_after_ns, interrupt_min_ns, gyro_off_at;
 } fake;
 static int instance;
 
@@ -72,7 +73,9 @@ static void sample_bytes(uint8_t bytes[14]) {
     /* 26 C, +1 g X, -0.5 g Y, +16.4 dps X, -32.8 dps Z. */
     const uint8_t valid[] = {0, 132, 8, 0, 0xfc, 0, 0, 0, 1, 13, 0, 0, 0xfd, 0xe6};
     memcpy(bytes, valid, sizeof(valid));
-    if (fake.never_ready || fake.now - fake.powered_at < fake.ready_after_ns) {
+    if (fake.never_ready || fake.now - fake.powered_at < fake.ready_after_ns
+        || (fake.require_external_clock && ((fake.regs[1][0x7b] & 6) != 4
+                                           || (fake.regs[0][0x4d] & 7) != 5))) {
         for (int axis = 0; axis < 3; ++axis) {
             bytes[8 + axis * 2] = 0x80;
             bytes[9 + axis * 2] = 0;
@@ -99,7 +102,10 @@ int drv_spi_transfer(
         memset(out, 0xff, length - 1);
         return (int)length;
     }
-    if (reg == 0x75) {
+    if (reg == 0x76) {
+        assert(length == 2);
+        out[0] = fake.corrupt_bank ? 0xff : fake.bank;
+    } else if (reg == 0x75) {
         assert(fake.bank == 0 && length == 2);
         out[0] = fake.change_reset_id && fake.reset_at ? 0xff : fake.id;
     } else if (fake.bank == 0 && reg == 0x2d) {
@@ -144,20 +150,50 @@ int drv_spi_write(drv_spi_inst_t handle, const void* tx, size_t length, bool cha
     } else if (bytes[0] == 0x11) {
         assert(fake.bank == 0 && bytes[1] == 1);
         memset(fake.regs, 0, sizeof(fake.regs));
+        fake.regs[0][0x14] = 0xa0;
         fake.regs[0][0x4c] = 0x30;
         fake.regs[0][0x4d] = 0x91;
+        fake.regs[0][0x56] = 0xfe;
+        fake.regs[0][0x57] = 0xab;
         fake.regs[0][0x2d] = 0x10;
         fake.regs[1][0x03] = 0x80 | fake.axis_disable;
+        fake.regs[1][0x7b] = 0xab;
         fake.reset_at = fake.now;
+    } else if (fake.bank == 1) {
+        assert(bytes[0] == 0x7b && bytes[1] == 0xad);
+        assert((fake.regs[0][0x4e] & 0x0f) == 0);
+        if (!fake.corrupt_pin)
+            fake.regs[1][bytes[0]] = bytes[1];
+    } else if (bytes[0] == 0x14) {
+        assert(bytes[1] == 0xa3 && (fake.regs[0][0x4e] & 0x0f) == 0);
+        if (!fake.corrupt_int1)
+            fake.regs[0][bytes[0]] = bytes[1];
+    } else if (bytes[0] == 0x4d) {
+        assert(bytes[1] == 0x95 && (fake.regs[0][0x4e] & 0x0f) == 0);
+        if (!fake.corrupt_rtc)
+            fake.regs[0][bytes[0]] = bytes[1];
+    } else if (bytes[0] == 0x56 || bytes[0] == 0x57) {
+        assert(fake.bank == 0 && (fake.regs[0][0x4e] & 0x0f) == 0);
+        assert(bytes[1] == (bytes[0] == 0x56 ? 0x0a : 0xa8));
+        fake.regs[0][bytes[0]] = bytes[1];
     } else {
         assert(fake.bank == 0);
         assert(bytes[0] == 0x4f || bytes[0] == 0x50 || bytes[0] == 0x4e);
-        fake.regs[0][bytes[0]] = bytes[1];
         if (bytes[0] == 0x4e) {
-            assert(bytes[1] == 0x0f);
-            assert(fake.regs[0][0x4f] == 6 && fake.regs[0][0x50] == 6);
-            fake.powered_at = fake.now;
+            assert(bytes[1] == 0x0f || (bytes[1] & 0x0f) == 0);
+            if (bytes[1] == 0x0f) {
+                assert(fake.regs[0][0x4f] == 6 && fake.regs[0][0x50] == 6);
+                assert(fake.now - fake.gyro_off_at > 150000000u);
+                assert(fake.regs[0][0x14] == 0xa3);
+                assert(fake.regs[0][0x56] == 0x0a && fake.regs[0][0x57] == 0xa8);
+                fake.powered_at = fake.now;
+            } else {
+                if (fake.warm_on)
+                    assert(fake.now >= 1050000000u);
+                fake.gyro_off_at = fake.now;
+            }
         }
+        fake.regs[0][bytes[0]] = bytes[1];
     }
     return (int)length;
 }
@@ -196,6 +232,19 @@ static int initialize(dart_iim42652_config_t c, dart_iim42652_diagnostic_t* d) {
         assert(fabsf(sample.acceleration_m_s2[0] - 9.80665f) < 0.0001f);
         assert(fabsf(sample.angular_velocity_rad_s[2] + 0.57253f) < 0.001f);
         assert(fabsf(sample.temperature_c - 26.0f) < 0.01f);
+        /* DS-000440 p62: -32768 is "no sample since reset", not saturation.
+         * It must be reported as no data, never scaled into a rate. */
+        fake.invalid_one_axis = 1;
+        assert(dart_iim42652_read_sample(sensor, &sample) == DART_IIM42652_NO_DATA);
+        assert(sample.flags & DART_IIM42652_SAMPLE_GYRO_NO_DATA);
+        assert(!(sample.flags & DART_IIM42652_SAMPLE_GYRO_SATURATED));
+        assert(sample.gyroscope[1] == INT16_MIN && sample.gyroscope[0] == 269);
+        assert(sample.angular_velocity_rad_s[0] == 0.0f
+               && sample.angular_velocity_rad_s[1] == 0.0f
+               && sample.angular_velocity_rad_s[2] == 0.0f);
+        fake.invalid_one_axis = 0;
+        assert(dart_iim42652_read_sample(sensor, &sample) == DART_IIM42652_OK);
+        assert(sample.flags == 0);
         if (c.skip_device_id_check) {
             /* A valid first sample cannot hide a later disconnected bus. */
             fake.all_sample_ff = 1;
@@ -219,8 +268,45 @@ int main(void) {
     assert(d.first_read_ns - d.enabled_ns == 50000000u);
     assert(d.interrupt_status_seen == 0x18 && d.interrupt_status == 0x08);
     assert(d.individual_gyroscope_read && d.individual_gyroscope[2] == -538);
-    const int normal_reads = fake.reads - 1; /* Exclude the consumer's sample read. */
+    /* Exclude the consumer's three sample reads: valid, no-data, valid. */
+    const int normal_reads = fake.reads - 3;
     const int normal_writes = fake.writes;
+
+    clear_fake(); fake.corrupt_bank = 1;
+    assert(initialize(config(), &d) == DART_IIM42652_BUS_ERROR);
+    assert(!fake.powered_at && fake.bank == 0);
+
+    /* Both CLKIN mux and RTC_MODE are required, and all reserved fields survive.
+     * A successful transfer without matching readback must never enable sensors. */
+    dart_iim42652_config_t external = config();
+    external.use_external_clock = 1;
+    clear_fake(); fake.require_external_clock = 1;
+    assert(initialize(external, &d) == DART_IIM42652_OK);
+    assert(d.external_clock_config_read && d.interface_config5 == 0xad);
+    assert(d.interface_config1 == 0x95 && d.first_read_ns - d.enabled_ns == 50000000u);
+    /* Three consumer sample reads are appended after initialization. */
+    const int external_reads = fake.reads - 3, external_writes = fake.writes;
+    clear_fake(); fake.require_external_clock = 1; fake.warm_on = 1; fake.regs[0][0x4e] = 0x0f;
+    assert(initialize(external, &d) == DART_IIM42652_OK);
+    for (int reg = 0; reg < 2; ++reg) {
+        clear_fake(); fake.corrupt_pin = reg == 0; fake.corrupt_rtc = reg == 1;
+        assert(initialize(external, &d) == DART_IIM42652_CONFIGURATION_MISMATCH);
+        assert(!fake.powered_at && fake.bank == 0);
+    }
+    for (int read = 1; read <= external_reads; ++read) {
+        clear_fake(); fake.require_external_clock = 1; fake.fail_read_at = read;
+        assert(initialize(external, &d)
+            == (read <= external_reads - 6 ? DART_IIM42652_BUS_ERROR : DART_IIM42652_OK));
+        assert(fake.destroys == 1 && fake.bank == 0);
+    }
+    for (int write = 1; write <= external_writes; ++write) {
+        clear_fake(); fake.fail_write_at = write;
+        assert(initialize(external, &d) == DART_IIM42652_BUS_ERROR);
+        assert(fake.destroys == 1);
+    }
+    clear_fake(); external.use_external_clock = 2;
+    assert(initialize(external, &d) == DART_IIM42652_INVALID_ARGUMENT);
+    assert(!fake.reads && !fake.writes);
 
     /* All mandatory transfer failures release the handle. Optional byte
      * diagnostics cannot turn success into failure. Bank is restored on a
@@ -248,6 +334,9 @@ int main(void) {
     }
     clear_fake(); fake.change_reset_id = 1;
     assert(initialize(config(), &d) == DART_IIM42652_UNEXPECTED_DEVICE_ID);
+    clear_fake(); fake.corrupt_int1 = 1;
+    assert(initialize(config(), &d) == DART_IIM42652_CONFIGURATION_MISMATCH);
+    assert(!fake.powered_at);
     clear_fake(); fake.corrupt_config = 1;
     assert(initialize(config(), &d) == DART_IIM42652_CONFIGURATION_MISMATCH);
     clear_fake(); fake.axis_disable = 0x08;
@@ -302,11 +391,11 @@ int main(void) {
     assert(d.observed_device_id == 0x6f && d.reset_device_id == 0xff);
 
     /* ID transport errors still fail, after the direct diagnostic burst. */
-    for (int read = 2; read <= 3; ++read) {
+    for (int read = 3; read <= 4; ++read) {
         clear_fake(); fake.fail_read_at = read;
         assert(initialize(c, &d) == DART_IIM42652_BUS_ERROR);
         assert(d.raw_probe_read && d.raw_probe_stage == DART_IIM42652_STAGE_IDENTIFY);
-        assert(d.device_id_read == (read == 3) && !d.reset_device_id_read);
+        assert(d.device_id_read == (read == 4) && !d.reset_device_id_read);
     }
     clear_fake(); fake.fail_raw_probe_at = 1;
     assert(initialize(c, &d) == DART_IIM42652_OK); /* Optional probe is best effort. */
@@ -322,12 +411,10 @@ int main(void) {
 
     /* A floating bus is observable, never promoted to a usable device. */
     clear_fake(); fake.all_reads_ff = 1;
-    assert(initialize(c, &d) == DART_IIM42652_CONFIGURATION_MISMATCH);
-    assert(d.device_id_check_skipped && d.observed_device_id == 0xff);
-    assert(d.reset_device_id == 0xff && d.raw_probe_read && !d.ready_ns);
-    assert(d.stage == DART_IIM42652_STAGE_CONFIGURE);
-    assert(d.raw_probe_stage == DART_IIM42652_STAGE_IDENTIFY);
-    for (unsigned int i = 0; i < sizeof(d.raw_probe); ++i) assert(d.raw_probe[i] == 0xff);
+    assert(initialize(c, &d) == DART_IIM42652_BUS_ERROR);
+    assert(d.device_id_check_skipped && !d.device_id_read);
+    assert(!d.reset_device_id_read && !d.raw_probe_read && !d.ready_ns);
+    assert(d.stage == DART_IIM42652_STAGE_IDENTIFY);
     for (int bypass = 0; bypass <= 1; ++bypass) {
         c.skip_device_id_check = (uint8_t)bypass;
         for (int zero = 0; zero <= 1; ++zero) {

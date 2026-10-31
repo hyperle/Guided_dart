@@ -1,17 +1,19 @@
-#ifndef DART_VISION_VISUAL_SERVO_CPP
-#define DART_VISION_VISUAL_SERVO_CPP
-
+module;
+#include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <utility>
 
-#include "logging/logger.cpp"
-#include "pwm/session.cpp"
-#include "src/control/servo_mapping.cpp"
-#include "src/startup/argument_parser.cpp"
-#include "system/device_services.cpp"
+export module dart.app.vision.visual_servo;
 
-namespace dart::app {
+import dart.app.startup.argument_parser;
+import dart.control.servo_mapping;
+import dart.logging.logger;
+import dart.pwm.session;
+import dart.system.device_services;
+
+export namespace dart::app {
 
 class VisualServo final {
 public:
@@ -148,5 +150,3 @@ private:
 };
 
 } // namespace dart::app
-
-#endif // DART_VISION_VISUAL_SERVO_CPP

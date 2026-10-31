@@ -1,17 +1,17 @@
-#ifndef DART_TOOLS_VIDEO_PLAYER_IMAGE_READER_CPP
-#define DART_TOOLS_VIDEO_PLAYER_IMAGE_READER_CPP
-
+module;
 #include <QBuffer>
 #include <QFile>
 #include <QImageReader>
 #include <QString>
 
-#include "recording_types.cpp"
-#include "binary_stream.cpp"
+export module dart.tools.video_player.image_reader;
 
-namespace dart::tools::video_player {
+import dart.tools.video_player.binary_stream;
+import dart.tools.video_player.recording_types;
 
-inline QImage read_frame_image(const Frame& frame, QString& error) {
+export namespace dart::tools::video_player {
+
+QImage read_frame_image(const Frame& frame, QString& error) {
     error.clear();
     if (frame.binary_key_offset >= 0) {
         static thread_local BinaryImageReader binary;
@@ -43,5 +43,3 @@ inline QImage read_frame_image(const Frame& frame, QString& error) {
 }
 
 } // namespace dart::tools::video_player
-
-#endif // DART_TOOLS_VIDEO_PLAYER_IMAGE_READER_CPP

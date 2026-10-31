@@ -18,13 +18,13 @@
 不拥有写线程或编码器；`diagnostics/` 定义业务记录内容，不管理文件缓冲与同步。
 `vision/visual_servo.cpp` 调用 `control/` 合成绝对脉宽并发布给下层 PWM 任务，
 不直接访问引脚、设备寄存器或系统线程；控制不依赖 IMU。
-检测器只包含 `camera/frame_view.cpp`，构建目标只依赖 `dart_camera_types`；
+检测器只导入 `dart.camera.frame_view`，构建目标只依赖 `dart_camera_types`；
 不持有相机、不创建设备、不操作帧租约。
 所有 L4 模块均不包含 K230/MPP 或 POSIX 实现头文件。
 
-`src/CMakeLists.txt` 统一声明领域库与业务应用目标；`dart_detection_checks`、
-`dart_control_checks` 和 `dart_application_checks` 分别独立编译所属模块，领域库不继承应用的设备或
-运行时依赖。板级、日志、存储和录像目标由 `include/CMakeLists.txt` 声明；
-`runtime/` 中现有 IMU 采样服务本轮保留，launcher 负责进程监督。
+`src/CMakeLists.txt` 声明 `dart_detection`、`dart_control` 和 `dart_application` 静态模块库，
+所属 `.cpp` 独立编译并参与应用/测试最终链接；领域库不继承应用的设备或运行时依赖。
+板级、日志、存储和录像目标由 `include/CMakeLists.txt` 声明；
+`runtime/` 中保留现有 IMU 采样行为，launcher 负责进程监督。
 
 应用参数、数据流和退出契约见 [`startup/README.md`](startup/README.md)。

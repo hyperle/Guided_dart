@@ -1,12 +1,14 @@
-#ifndef DART_RECORDER_CONFIG_CPP
-#define DART_RECORDER_CONFIG_CPP
-
+module;
 #include <array>
 #include <chrono>
 #include <cstdint>
 #include <string_view>
 
-namespace dart::recorder {
+export module dart.recorder.config;
+
+
+
+export namespace dart::recorder {
 
 enum class EventDecision : std::uint8_t {
     kAccepted,
@@ -75,5 +77,3 @@ public:
 };
 
 } // namespace dart::recorder
-
-#endif // DART_RECORDER_CONFIG_CPP

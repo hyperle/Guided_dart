@@ -1,16 +1,18 @@
-#ifndef DART_PWM_K230_OUTPUT_CPP
-#define DART_PWM_K230_OUTPUT_CPP
-
+module;
 #include <array>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <expected>
 
 #include "drv_fpioa.h"
 #include "drv_pwm.h"
-#include "pwm/interface.cpp"
 
-namespace dart::pwm::k230 {
+export module dart.pwm.k230.output;
+
+import dart.pwm.interface;
+
+export namespace dart::pwm::k230 {
 
 // Same connector routing and setup order as tools/pwm_swing.
 // One owner per process; the HAL has process-global device state.
@@ -120,5 +122,3 @@ private:
 };
 
 } // namespace dart::pwm::k230
-
-#endif // DART_PWM_K230_OUTPUT_CPP

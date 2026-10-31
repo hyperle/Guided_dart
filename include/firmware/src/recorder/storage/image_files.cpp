@@ -1,6 +1,4 @@
-#ifndef DART_RECORDER_IMAGE_FILES_CPP
-#define DART_RECORDER_IMAGE_FILES_CPP
-
+module;
 #include <algorithm>
 #include <cerrno>
 #include <cstddef>
@@ -8,11 +6,13 @@
 #include <cstdio>
 #include <sys/stat.h>
 
-#include "recorder/config.cpp"
-#include "recorder/storage/session.cpp"
-#include "recorder/storage/storage_space.cpp"
+export module dart.recorder.storage.image_files;
 
-namespace dart::recorder {
+import dart.recorder.config;
+import dart.recorder.storage.session;
+import dart.recorder.storage.storage_space;
+
+export namespace dart::recorder {
 
 // Per-image filesystem state belongs to the image worker, independently of
 // session creation and retention. Encoding never accesses the filesystem.
@@ -46,7 +46,7 @@ private:
     std::uint32_t space_checks_remaining_ = 0;
 };
 
-inline bool ImageFiles::png_path(
+bool ImageFiles::png_path(
     std::uint64_t index, char* path, std::size_t path_size, char* name,
     std::size_t name_size) noexcept {
     // Bound FAT directory size and lookup cost even for highly compressible frames.
@@ -83,7 +83,7 @@ inline bool ImageFiles::png_path(
     return true;
 }
 
-inline bool ImageFiles::space_available(std::size_t bytes) noexcept {
+bool ImageFiles::space_available(std::size_t bytes) noexcept {
     constexpr std::uint64_t guard = 1024U * 1024U;
     const bool continuous = config_.image_format == ImageFormat::kDbv;
     const auto charge = continuous ? static_cast<std::uint64_t>(bytes)
@@ -114,5 +114,3 @@ inline bool ImageFiles::space_available(std::size_t bytes) noexcept {
 }
 
 } // namespace dart::recorder
-
-#endif // DART_RECORDER_IMAGE_FILES_CPP

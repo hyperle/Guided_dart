@@ -20,6 +20,12 @@ bag 写入边界，无需创建 ROS package 或运行 colcon。
 当前 launcher 清单启用识别与录像，PWM 测试行已注释；按需手动测试时，
 开机配置与日志说明见该工具说明。
 
+[`wifi/wifi_test.py`](wifi/wifi_test.py) 是 CanMV MicroPython 独立 Wi-Fi 测试脚本，
+在 VS Code 插件中直接运行。默认检测 RTL8189 / SDIO 网卡并扫描附近热点，空结果自动重试；
+填写 SSID 和密码后验证连接、IP 和链路；填写上传地址后逐帧上传相机 JPEG。
+[`wifi/video_server.py`](wifi/video_server.py) 在电脑端用 FFmpeg 编码 H.264/HLS，
+供手机网页播放，可通过公网隧道跨网络访问。运行方法、实测和固件要求见 [Wi-Fi 说明](wifi/README.md)。
+
 ## 录像逐帧播放器
 
 [`video_player/`](video_player/README.md) 移植远程 `k230_v1` 的 Qt 播放器，

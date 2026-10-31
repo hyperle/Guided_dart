@@ -8,6 +8,6 @@ PLAYER_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLAYER_REPO_ROOT="$(cd "${PLAYER_SCRIPT_DIR}/.." && pwd)"
 PLAYER_BUILD_DIR="${DART_PLAYER_BUILD_DIR:-${PLAYER_REPO_ROOT}/build/video_player}"
 
-cmake -S "${PLAYER_REPO_ROOT}/tools/video_player" -B "${PLAYER_BUILD_DIR}"
+cmake -S "${PLAYER_REPO_ROOT}/tools/video_player" -B "${PLAYER_BUILD_DIR}" -G Ninja
 cmake --build "${PLAYER_BUILD_DIR}" --target video_player --parallel
 exec "${PLAYER_BUILD_DIR}/video_player" "$@"

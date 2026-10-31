@@ -1,10 +1,10 @@
-
+#include <cstdint>
 
 #include <cassert>
 #include <cmath>
 #include <limits>
 
-#include "imu/estimator.cpp"
+import dart.imu.estimator;
 
 namespace dart::tests {
 

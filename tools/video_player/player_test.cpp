@@ -1,3 +1,5 @@
+#include <zlib.h>
+#include <optional>
 #include <QApplication>
 #include <QFile>
 #include <QImageReader>
@@ -16,8 +18,13 @@
 #include <stdexcept>
 #include <vector>
 
-#include "recorder/encoding/binary_encoder.cpp"
-#include "player.cpp"
+import dart.recorder.encoding.binary_encoder;
+import dart.tools.video_player.player;
+
+import dart.recorder.encoding.binary_format;
+import dart.tools.video_player.csv;
+import dart.tools.video_player.image_reader;
+import dart.tools.video_player.recording_paths;
 
 namespace dart::tools::video_player::tests {
 

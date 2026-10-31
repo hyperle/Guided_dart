@@ -1,3 +1,9 @@
+#include <cstdint>
+#include <cstddef>
+#include <expected>
+#include <span>
+#include <utility>
+#include <string_view>
 #include <array>
 #include <cassert>
 #include <chrono>
@@ -9,8 +15,15 @@
 #include <thread>
 #include <vector>
 
-#include "recorder/encoding/binary_decoder.cpp"
-#include "recorder/recorder.cpp"
+import dart.recorder.encoding.binary_decoder;
+import dart.recorder.recorder;
+
+import dart.recorder.encoding.binary_encoder;
+import dart.recorder.encoding.binary_format;
+import dart.recorder.encoding.png_encoder;
+import dart.recorder.storage.session;
+
+import dart.recorder.storage.image_writer;
 
 namespace dart::tests {
 

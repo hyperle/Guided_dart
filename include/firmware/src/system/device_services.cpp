@@ -1,15 +1,15 @@
-#ifndef DART_SYSTEM_DEVICE_SERVICES_CPP
-#define DART_SYSTEM_DEVICE_SERVICES_CPP
-
+module;
 #include <expected>
 #include <memory>
 
-#include "camera/interface.cpp"
-#include "imu/sample.cpp"
-#include "pwm/interface.cpp"
-#include "system/write_control.cpp"
+export module dart.system.device_services;
 
-namespace dart::platform {
+export import dart.camera.interface;
+export import dart.imu.sample;
+export import dart.pwm.interface;
+export import dart.system.write_control;
+
+export namespace dart::platform {
 
 // Device selection is supplied by the process entry. Business modules use these
 // callbacks without selecting a board backend or configuring hardware registers.
@@ -29,5 +29,3 @@ struct ImuOptions {
 };
 
 } // namespace dart::platform
-
-#endif // DART_SYSTEM_DEVICE_SERVICES_CPP

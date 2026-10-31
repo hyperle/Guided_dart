@@ -1,3 +1,6 @@
+#include <expected>
+#include <span>
+#include <cmath>
 #include <array>
 #include <cassert>
 #include <chrono>
@@ -12,9 +15,20 @@
 #include <thread>
 #include <vector>
 
-#include "src/startup/services.cpp"
 #include "camera/c_api/raw10.h"
-#include "recorder/encoding/binary_decoder.cpp"
+
+import dart.app.startup.services;
+import dart.recorder.encoding.binary_decoder;
+
+import dart.app.startup.argument_parser;
+import dart.camera.interface;
+import dart.logging.logger;
+import dart.pwm.interface;
+import dart.recorder.encoding.binary_format;
+
+import dart.system.run_control;
+import dart.system.write_control;
+import dart.system.device_services;
 
 namespace dart::tests {
 

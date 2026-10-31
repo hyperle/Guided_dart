@@ -1,23 +1,23 @@
-#ifndef DART_APP_SERVICES_CPP
-#define DART_APP_SERVICES_CPP
-
+module;
 #include <chrono>
 #include <expected>
 #include <memory>
 #include <utility>
 
-#include "logging/logger.cpp"
-#include "runtime/imu/session.cpp"
-#include "src/diagnostics/camera_error.cpp"
-#include "src/startup/argument_parser.cpp"
-#include "src/vision/capture_pipeline.cpp"
-#include "system/device_services.cpp"
-#include "system/monotonic_clock.cpp"
-#include "system/run_control.cpp"
+export module dart.app.startup.services;
 
-namespace dart::app {
+import dart.app.diagnostics.camera_error;
+import dart.app.startup.argument_parser;
+import dart.app.vision.capture_pipeline;
+import dart.logging.logger;
+import dart.runtime.imu.session;
+import dart.system.device_services;
+import dart.system.monotonic_clock;
+import dart.system.run_control;
 
-inline int run_services(
+export namespace dart::app {
+
+int run_services(
     const Arguments& args, platform::CameraFactory factory, platform::RunControl& control,
     logging::Logger& log, imu::Session* imu_session = nullptr,
     platform::WriteControl* writes = nullptr,
@@ -89,5 +89,3 @@ inline int run_services(
 }
 
 } // namespace dart::app
-
-#endif // DART_APP_SERVICES_CPP

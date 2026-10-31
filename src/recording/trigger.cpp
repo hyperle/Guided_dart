@@ -1,13 +1,13 @@
-#ifndef DART_RECORDING_TRIGGER_CPP
-#define DART_RECORDING_TRIGGER_CPP
-
+module;
 #include <cmath>
 #include <cstdint>
 
-#include "imu/sample.cpp"
-#include "system/write_control.cpp"
+export module dart.app.recording.trigger;
 
-namespace dart::app {
+import dart.imu.sample;
+import dart.system.write_control;
+
+export namespace dart::app {
 
 // Optional recording policy. Only the IMU sampling thread touches this state;
 // it publishes a memory request and never opens files or waits for storage.
@@ -59,5 +59,3 @@ private:
 };
 
 } // namespace dart::app
-
-#endif

@@ -1,6 +1,4 @@
-#ifndef DART_RECORDER_BINARY_DECODER_CPP
-#define DART_RECORDER_BINARY_DECODER_CPP
-
+module;
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -9,9 +7,11 @@
 #include <span>
 #include <zlib.h>
 
-#include "recorder/encoding/binary_format.cpp"
+export module dart.recorder.encoding.binary_decoder;
 
-namespace dart::recorder {
+import dart.recorder.encoding.binary_format;
+
+export namespace dart::recorder {
 
 class BinaryDecoder final {
 public:
@@ -78,5 +78,3 @@ private:
 };
 
 } // namespace dart::recorder
-
-#endif // DART_RECORDER_BINARY_DECODER_CPP

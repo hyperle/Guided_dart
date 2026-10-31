@@ -1,0 +1,91 @@
+--- a/network_rt_smart.c
++++ b/network_rt_smart.c
+@@ -517,6 +517,9 @@
+         debug_printf("socket_connect() -> errno %d %d\n", *_errno, ret);
+ 
+         switch (*_errno) {
++            case EISCONN:
++                ret = 0;
++                goto connected;
+             case EINPROGRESS:
+             case EALREADY:{
+                 *_errno = EAGAIN;
+@@ -544,9 +547,11 @@
+                 return -1;
+             }
+         }
++        mp_hal_delay_ms(1);
+         debug_printf("retryng...\n");
+     }while(ret < 0);
+ 
++connected:
+     network_rt_wlan_socket_settimeout(_socket, _socket->timeout, _errno);
+     mp_printf(&mp_plat_print, "connect success\n");
+ 
+@@ -585,66 +590,14 @@
+         return -1;
+     }
+ 
+-#if 0
+     int ret = recv(_socket->fileno, buf, len, 0);
+     if (ret < 0) {
+         *_errno = errno;
+         debug_printf("socket_recv() -> errno %d %d\n", *_errno, ret);
+-        // network_rt_wlan_socket_close(_socket);
+-
+-        if(EAGAIN == *_errno) {
+-            return 0;
+-        }
+-
+         return -1;
+     }
+ 
+     return ret;
+-#else
+-    int ret = -1;
+-    mp_uint_t received = 0;
+-
+-    mp_uint_t curr_tick_ms, stop_ms = 0;
+-    int32_t timeout_ms = _socket->timeout;
+-
+-    if(0 < timeout_ms) {
+-        stop_ms = mp_hal_ticks_ms() + timeout_ms;
+-    }
+-
+-    do {
+-        *_errno = 0;
+-        MICROPY_EVENT_POLL_HOOK
+-
+-        ret = recv(_socket->fileno, buf + received, len - received, 0);
+-
+-        if(0 > ret) {
+-            *_errno = errno;
+-
+-            debug_printf("socket_recv() -> errno %d %d\n", *_errno, ret);
+-
+-            if(EAGAIN == *_errno) {
+-                goto _check_timeout;
+-            }
+-            break;
+-        } else {
+-            received += ret;
+-        }
+-
+-_check_timeout:
+-        if(0x00 == timeout_ms) { // non blocking
+-            return received;
+-        } else if((-1) == timeout_ms) { // blocking
+-        } else {
+-            curr_tick_ms = mp_hal_ticks_ms();
+-            if(curr_tick_ms > stop_ms) {
+-                debug_printf("recv timeout!\n");
+-                return received;
+-            }
+-        }
+-    } while(received < len);
+-
+-    return received;
+-#endif
+ }
+ 
+ STATIC mp_uint_t network_rt_wlan_socket_sendto(struct _mod_network_socket_obj_t *_socket, const byte *buf, mp_uint_t len, byte *ip, mp_uint_t port, int *_errno)

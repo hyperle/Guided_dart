@@ -1,3 +1,9 @@
+#include <cstdint>
+#include <cstddef>
+#include <expected>
+#include <chrono>
+#include <utility>
+#include <string>
 #include <array>
 #include <atomic>
 #include <cassert>
@@ -10,7 +16,10 @@
 #include <thread>
 #include <vector>
 
-#include "recorder/recorder.cpp"
+import dart.recorder.recorder;
+
+import dart.recorder.storage.image_writer;
+import dart.recorder.storage.session;
 
 namespace dart::tests {
 

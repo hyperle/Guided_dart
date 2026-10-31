@@ -1,6 +1,4 @@
-#ifndef DART_APP_CAPTURE_PIPELINE_CPP
-#define DART_APP_CAPTURE_PIPELINE_CPP
-
+module;
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
@@ -8,19 +6,24 @@
 #include <string_view>
 #include <utility>
 
-#include "camera/interface.cpp"
-#include "logging/logger.cpp"
-#include "runtime/imu/session.cpp"
-#include "src/detector/roi.cpp"
-#include "src/diagnostics/camera_error.cpp"
-#include "src/diagnostics/detection_csv.cpp"
-#include "src/recording/frame_recording.cpp"
-#include "src/startup/argument_parser.cpp"
-#include "src/vision/visual_servo.cpp"
-#include "system/monotonic_clock.cpp"
-#include "system/run_control.cpp"
+export module dart.app.vision.capture_pipeline;
 
-namespace dart::app {
+import dart.app.diagnostics.camera_error;
+import dart.app.diagnostics.detection_csv;
+import dart.app.recording.frame_recording;
+import dart.app.startup.argument_parser;
+import dart.app.vision.visual_servo;
+import dart.camera.interface;
+import dart.detection.roi;
+import dart.logging.logger;
+import dart.recorder.recorder;
+import dart.runtime.imu.session;
+import dart.system.device_services;
+import dart.system.monotonic_clock;
+import dart.system.run_control;
+import dart.system.write_control;
+
+export namespace dart::app {
 
 class CapturePipeline final {
 private:
@@ -430,5 +433,3 @@ public:
 };
 
 } // namespace dart::app
-
-#endif // DART_APP_CAPTURE_PIPELINE_CPP

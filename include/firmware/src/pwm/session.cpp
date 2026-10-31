@@ -1,16 +1,17 @@
-#ifndef DART_PWM_SESSION_CPP
-#define DART_PWM_SESSION_CPP
-
+module;
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <expected>
 #include <pthread.h>
 
-#include "pwm/interface.cpp"
-#include "system/monotonic_clock.cpp"
+export module dart.pwm.session;
 
-namespace dart::pwm {
+export import dart.pwm.interface;
+import dart.system.monotonic_clock;
+
+export namespace dart::pwm {
 
 // The capture thread only publishes values. This task owns all subsequent HAL
 // writes and expires observations even while capture or file logging is blocked.
@@ -145,5 +146,3 @@ private:
 };
 
 } // namespace dart::pwm
-
-#endif // DART_PWM_SESSION_CPP

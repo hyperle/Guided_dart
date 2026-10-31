@@ -1,9 +1,11 @@
-#ifndef DART_INCLUDE_FIRMWARE_APP_SRC_IMU_MATH_TYPES_CPP
-#define DART_INCLUDE_FIRMWARE_APP_SRC_IMU_MATH_TYPES_CPP
-
+module;
 #include <cstdint>
 
-namespace dart::imu {
+export module dart.imu.math_types;
+
+
+
+export namespace dart::imu {
 
 struct Vector3f {
     float x = 0.0F;
@@ -26,5 +28,3 @@ struct Quaternionf {
 };
 
 } // namespace dart::imu
-
-#endif // DART_INCLUDE_FIRMWARE_APP_SRC_IMU_MATH_TYPES_CPP

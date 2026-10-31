@@ -1,12 +1,13 @@
-#ifndef DART_INCLUDE_FIRMWARE_APP_SRC_IMU_ESTIMATOR_CPP
-#define DART_INCLUDE_FIRMWARE_APP_SRC_IMU_ESTIMATOR_CPP
-
+module;
 #include <cmath>
+#include <cstdint>
 #include <limits>
 
-#include "sample.cpp"
+export module dart.imu.estimator;
 
-namespace dart::imu {
+export import dart.imu.sample;
+
+export namespace dart::imu {
 
 class Estimator final {
 public:
@@ -182,12 +183,12 @@ private:
     }
 };
 
-inline Estimator::Estimator() noexcept : Estimator(Config{}) {}
+Estimator::Estimator() noexcept : Estimator(Config{}) {}
 
-inline Estimator::Estimator(const Config& config) noexcept
+Estimator::Estimator(const Config& config) noexcept
     : config_(config) {}
 
-inline std::uint32_t
+std::uint32_t
     Estimator::assess_sample(const Sample& sample, bool check_steps) const noexcept {
     std::uint32_t events = 0U;
     if (sample.flags != 0U)
@@ -217,7 +218,7 @@ inline std::uint32_t
     return events;
 }
 
-inline Estimator::Estimate Estimator::make_estimate(
+Estimator::Estimate Estimator::make_estimate(
     const Sample& sample, std::uint32_t events, bool accepted, bool integrated) const noexcept {
     Estimate result{};
     result.sample = sample;
@@ -240,7 +241,7 @@ inline Estimator::Estimate Estimator::make_estimate(
     return result;
 }
 
-inline Estimator::Estimate Estimator::update(const Sample& sample) noexcept {
+Estimator::Estimate Estimator::update(const Sample& sample) noexcept {
     std::uint32_t events = assess_sample(sample, has_sample_);
     const std::uint32_t rejection_mask =
         event(QualityEvent::kSampleFlagged) | event(QualityEvent::kNonFinite)
@@ -301,7 +302,7 @@ inline Estimator::Estimate Estimator::update(const Sample& sample) noexcept {
     return make_estimate(sample, events, true, integrated);
 }
 
-inline Estimator::SeedResult
+Estimator::SeedResult
     Estimator::seed(const Sample& sample, const Quaternionf& sensor_to_reference) noexcept {
     SeedResult result{};
     result.generation = generation_;
@@ -347,7 +348,7 @@ inline Estimator::SeedResult
     return result;
 }
 
-inline void Estimator::reset() noexcept {
+void Estimator::reset() noexcept {
     attitude_ = {};
     gravity_reference_m_s2_ = {};
     velocity_m_s_ = {};
@@ -361,12 +362,10 @@ inline void Estimator::reset() noexcept {
         ++generation_;
 }
 
-inline Estimator::Estimate Estimator::current() const noexcept {
+Estimator::Estimate Estimator::current() const noexcept {
     const std::uint32_t events =
         has_reference_frame_ ? 0U : event(QualityEvent::kReferenceNotSeeded);
     return make_estimate(latest_sample_, events, has_sample_, false);
 }
 
 } // namespace dart::imu
-
-#endif // DART_INCLUDE_FIRMWARE_APP_SRC_IMU_ESTIMATOR_CPP

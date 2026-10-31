@@ -36,13 +36,13 @@
 六轴 IMU 的偏航角靠陀螺积分，
 没有绝对航向传感器就会漂移；速度同样会受加速度计零偏和姿态误差影响。
 
-消费者包含对应的职责文件 `.cpp`，类外方法内联；CMake 的 `dart_imu` / `dart_imu_k230`
-为 INTERFACE 目标，`dart_imu_checks` 对所有层级的文件逐一编译。
+消费者导入 `dart.imu.estimator`、`dart.imu.interface` 或 `dart.imu.k230.iim42652`。
+CMake 的 `dart_imu` / `dart_imu_k230` 为静态模块库，各 `.cpp` 独立编译并参与最终链接。
 
 ## 构建
 
 ```bash
-cmake --preset host    # 主机编译所有 IMU 类检查目标，供 clangd 使用
+cmake --preset host    # 主机编译 IMU 模块和行为回归，供 clangd 使用
 cmake --preset cross   # DART_IMU_K230=ON：dart_imu + dart_imu_k230（链接 dart_iim42652）
 ```
 

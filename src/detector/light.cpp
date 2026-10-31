@@ -1,18 +1,19 @@
-#ifndef DART_SRC_DETECTOR_LIGHT_CPP
-#define DART_SRC_DETECTOR_LIGHT_CPP
-
+module;
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <limits>
 #include <span>
 
-#include "blob_workspace.cpp"
-#include "geometry.cpp"
-#include "numeric.cpp"
-#include "result.cpp"
-#include "tracking.cpp"
+export module dart.detection.light;
 
-namespace dart::detection {
+export import dart.detection.blob_workspace;
+import dart.detection.geometry;
+import dart.detection.numeric;
+import dart.detection.result;
+import dart.detection.tracking;
+
+export namespace dart::detection {
 
 class LightDetector {
 public:
@@ -65,12 +66,12 @@ private:
     }
 };
 
-inline LightDetector::LightDetector() noexcept : LightDetector(Config{}) {}
+LightDetector::LightDetector() noexcept : LightDetector(Config{}) {}
 
-inline LightDetector::LightDetector(Config config) noexcept
+LightDetector::LightDetector(Config config) noexcept
     : config_(config) {}
 
-inline bool LightDetector::ValidConfig() const noexcept {
+bool LightDetector::ValidConfig() const noexcept {
     return config_.min_area > 0 && config_.far_area_threshold > 0 && config_.far_size_px > 0
         && config_.search_step > 0 && IsFraction(config_.min_fill)
         && IsFraction(config_.min_circularity) && std::isfinite(config_.circularity_weight)
@@ -79,7 +80,7 @@ inline bool LightDetector::ValidConfig() const noexcept {
         && IsPositive(config_.max_area_fraction) && config_.max_area_fraction <= 1.0F;
 }
 
-inline Target
+Target
     LightDetector::Detect(std::span<const Blob> blobs, std::uint64_t frame_area,
                           const Blob** selected) const noexcept {
     const Blob* best = nullptr;
@@ -101,7 +102,7 @@ inline Target
     return best ? TargetFromBlob(*best) : Target{};
 }
 
-inline Target LightDetector::Track(
+Target LightDetector::Track(
     std::span<const Blob> blobs, std::uint64_t frame_area, const TargetTracker& tracker,
     const Target& predicted, const Blob** selected) const noexcept {
     const Blob* best = nullptr;
@@ -142,16 +143,16 @@ private:
     State state_{};
 };
 
-inline LightTracker::LightTracker(LightDetector::Config config, TargetTracker::Config track) noexcept
+LightTracker::LightTracker(LightDetector::Config config, TargetTracker::Config track) noexcept
     : config_(config), track_config_(track) {}
 
-inline bool LightTracker::ValidConfig() const noexcept {
+bool LightTracker::ValidConfig() const noexcept {
     return config_.confirm_frames > 0 && config_.far_confirm_frames > 0
         && config_.far_jump_min_px > 0 && std::isfinite(config_.far_jump_k)
         && config_.far_jump_k > 0.0F;
 }
 
-inline bool
+bool
     LightTracker::Confirm(Target& light, std::uint64_t frame_id, const Target& previous) noexcept {
     state_.measurement_valid = light.valid;
     const bool same_frame = state_.seen_frame && frame_id == state_.last_frame_id;
@@ -204,14 +205,12 @@ inline bool
     return true;
 }
 
-inline void LightTracker::ClearConfirmation() noexcept {
+void LightTracker::ClearConfirmation() noexcept {
     state_.last_measurement = {};
     state_.hits = 0;
     state_.locked = false;
 }
 
-inline void LightTracker::Reset() noexcept { state_ = {}; }
+void LightTracker::Reset() noexcept { state_ = {}; }
 
 } // namespace dart::detection
-
-#endif // DART_SRC_DETECTOR_LIGHT_CPP

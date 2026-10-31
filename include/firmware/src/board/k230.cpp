@@ -1,26 +1,28 @@
-#ifndef DART_BOARD_K230_CPP
-#define DART_BOARD_K230_CPP
-
+module;
 #include <expected>
 #include <memory>
 #include <new>
 #include <utility>
 
-#include "camera/k230/camera.cpp"
-#include "logging/logger.cpp"
-#include "runtime/imu/session.cpp"
-#include "storage/directories.cpp"
-#include "system/device_services.cpp"
+#include "spi/iim42652.h"
+
+export module dart.board.k230;
+
 #ifdef DART_APP_IMU_K230
-# include "imu/k230/iim42652.cpp"
+import dart.imu.k230.iim42652;
 #endif
 #ifdef DART_APP_PWM_K230
-# include "pwm/k230/output.cpp"
+import dart.pwm.k230.output;
 #endif
+import dart.camera.k230.camera;
+import dart.logging.logger;
+import dart.runtime.imu.session;
+import dart.storage.directories;
+import dart.system.device_services;
 
-namespace dart::board {
+export namespace dart::board {
 
-inline std::expected<std::unique_ptr<pwm::IPwm>, pwm::Error> create_pwm() noexcept {
+std::expected<std::unique_ptr<pwm::IPwm>, pwm::Error> create_pwm() noexcept {
 #ifdef DART_APP_PWM_K230
     auto* device = new (std::nothrow) pwm::k230::Output;
     if (device == nullptr)
@@ -31,7 +33,7 @@ inline std::expected<std::unique_ptr<pwm::IPwm>, pwm::Error> create_pwm() noexce
 #endif
 }
 
-inline std::expected<std::unique_ptr<camera::ICamera>, camera::CameraError>
+std::expected<std::unique_ptr<camera::ICamera>, camera::CameraError>
     create_camera(const camera::Controls& controls) noexcept {
     auto created = camera::k230::Camera<4>::create(controls);
     if (!created)
@@ -40,7 +42,7 @@ inline std::expected<std::unique_ptr<camera::ICamera>, camera::CameraError>
 }
 
 template <typename Service>
-inline int with_imu(
+int with_imu(
     const platform::ImuOptions& options, logging::Logger& log, Service&& service) noexcept {
     if (!options.enabled)
         return service(nullptr);
@@ -53,6 +55,12 @@ inline int with_imu(
     config.bus_hz = 1'000'000;
     config.timeout_ms = 20;
     config.output_data_rate = 0x06;
+    /* 2026-10-30 metrology: with RTC_MODE=1 this board produced 0 FIFO packets,
+     * one DATA_RDY in 2 s and no frame change, i.e. the part stopped sampling,
+     * while RTC_MODE=0 sampled at 1006 Hz. The 32.768 kHz CLKIN is therefore
+     * not reaching pin 9, so the external clock must not be requested until it
+     * is measured at the device pin. Set to 1 again only after that. */
+    config.use_external_clock = 0;
     config.skip_device_id_check = options.ignore_device_id;
     imu::k230::Iim42652 device{config};
     const auto initialized = device.initialize();
@@ -85,7 +93,8 @@ inline int with_imu(
     log.line(
         "level=%s module=imu op=init_timing result=%d stage=%s "
         "start_ns=%llu first_access_ns=%llu reset_ns=%llu configured_ns=%llu "
-        "enabled_ns=%llu first_read_ns=%llu ready_ns=%llu finished_ns=%llu polls=%u\n",
+        "enabled_ns=%llu first_read_ns=%llu ready_ns=%llu finished_ns=%llu polls=%u "
+        "data_ready_polls=%u\n",
         level, diagnostic.result, dart_iim42652_stage_name(diagnostic.stage),
         static_cast<unsigned long long>(diagnostic.started_ns),
         static_cast<unsigned long long>(diagnostic.first_access_ns),
@@ -94,16 +103,18 @@ inline int with_imu(
         static_cast<unsigned long long>(diagnostic.enabled_ns),
         static_cast<unsigned long long>(diagnostic.first_read_ns),
         static_cast<unsigned long long>(diagnostic.ready_ns),
-        static_cast<unsigned long long>(diagnostic.finished_ns), diagnostic.readiness_polls);
+        static_cast<unsigned long long>(diagnostic.finished_ns), diagnostic.readiness_polls,
+        diagnostic.data_ready_polls);
     log.line(
         "level=%s module=imu op=config read=%u intf0=0x%02x intf1=0x%02x "
         "power=0x%02x gyro=0x%02x accel=0x%02x status=0x%02x status_seen=0x%02x "
-        "sensor_config_read=%u sensor_config0=0x%02x "
+        "sensor_config_read=%u sensor_config0=0x%02x external_clock_read=%u intf5=0x%02x "
         "accel_raw=%d,%d,%d gyro_raw=%d,%d,%d individual_read=%u gyro_individual=%d,%d,%d\n",
         level, diagnostic.registers_read, diagnostic.interface_config0, diagnostic.interface_config1,
         diagnostic.power_config, diagnostic.gyro_config, diagnostic.accel_config,
         diagnostic.interrupt_status, diagnostic.interrupt_status_seen,
         diagnostic.sensor_config_read, diagnostic.sensor_config0,
+        diagnostic.external_clock_config_read, diagnostic.interface_config5,
         diagnostic.last_accelerometer[0], diagnostic.last_accelerometer[1],
         diagnostic.last_accelerometer[2], diagnostic.last_gyroscope[0],
         diagnostic.last_gyroscope[1], diagnostic.last_gyroscope[2],
@@ -159,5 +170,3 @@ inline int with_imu(
 }
 
 } // namespace dart::board
-
-#endif // DART_BOARD_K230_CPP

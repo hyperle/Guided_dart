@@ -1,4 +1,5 @@
-
+#include <cstdint>
+#include <limits>
 
 #include <array>
 #include <cassert>
@@ -6,7 +7,7 @@
 #include <cmath>
 #include <cstddef>
 
-#include "src/detector/roi.cpp"
+import dart.detection.roi;
 
 namespace dart::tests {
 
@@ -198,6 +199,53 @@ public:
         assert(low_quality.valid && low_quality.quality < target.quality);
     }
 
+    static void armor_moment_geometry() {
+        constexpr unsigned width = 192, height = 192;
+        constexpr float pi = 3.14159265358979323846F;
+        std::array<std::byte, width * height> pixels;
+        camera::FrameView frame{};
+        frame.luma = pixels;
+        frame.width = frame.stride = width;
+        frame.height = height;
+        detection::BlobWorkspace workspace;
+        assert(workspace.Prepare(width, height));
+        detection::ArmorDetector::Config config{};
+        config.window_width_k = config.window_height_k = 16;
+        detection::ArmorDetector detector{config};
+        detection::Target anchor{};
+        anchor.valid = true;
+        anchor.center = {96, 170};
+        anchor.bounds = {88, 162, 16, 16};
+        anchor.radius = 8;
+        // Elliptical bars have valid moment geometry, but their area and bounds
+        // do not describe filled rectangles. Cover both signs and near-flat axes.
+        for (const float degrees : {-75.0F, -60.0F, -45.0F, -30.0F, -15.0F,
+                                    0.0F, 15.0F, 30.0F, 45.0F, 60.0F, 75.0F, 90.0F}) {
+            pixels.fill(std::byte{20});
+            const float ux = std::cos(degrees * pi / 180.0F);
+            const float uy = std::sin(degrees * pi / 180.0F);
+            for (const int side : {-1, 1}) {
+                const float cx = 96 + std::round(-uy * 30 * side);
+                const float cy = 80 + std::round(ux * 30 * side);
+                for (unsigned y = 0; y < height; ++y) {
+                    for (unsigned x = 0; x < width; ++x) {
+                        const float dx = x - cx, dy = y - cy;
+                        const float along = dx * ux + dy * uy;
+                        const float across = -dx * uy + dy * ux;
+                        if (along * along / 400.0F + across * across / 6.25F <= 1.0F)
+                            pixels[y * width + x] = std::byte{180};
+                    }
+                }
+            }
+            const auto blobs = workspace.Scan(frame, {0, 0, width, height}, 50);
+            assert(blobs && blobs->size() == 2);
+            const auto plate = detector.Detect(*blobs, anchor, nullptr, &frame);
+            assert(plate.valid);
+            assert(std::abs(plate.center.x - 96.0F) < 0.01F);
+            assert(std::abs(plate.center.y - 80.0F) < 0.01F);
+        }
+    }
+
     static void grayscale_ranking_and_tracking() {
         std::array<detection::Blob, 2> blobs{};
         for (auto& blob : blobs) {
@@ -295,6 +343,35 @@ public:
         assert(plate.valid);
         assert(std::abs(plate.center.x - 30.5F) < 0.001F);
         assert(std::abs(plate.center.y - 25.5F) < 0.001F);
+
+        // A 30-degree rotated 5x40 bar has a roughly 24x37 bounding box.
+        // Leave moment dimensions empty to ensure ArmorDetector recovers the
+        // principal dimensions from bounds + area and still computes the center
+        // from the bars' long-axis endpoints.
+        std::array<detection::Blob, 2> rotated{};
+        for (std::size_t i = 0; i < rotated.size(); ++i) {
+            auto& bar = rotated[i];
+            // The center spacing is perpendicular to the 60-degree long axis,
+            // so the two bars have full projected overlap like a real plate.
+            bar.bounds = {i == 0 ? 300u : 355u, i == 0 ? 100u : 68u, 24, 37};
+            bar.center = {static_cast<float>(bar.bounds.x) + 11.5F,
+                          static_cast<float>(bar.bounds.y) + 18.0F};
+            bar.area = 200;
+            // The moment angle is absent here; bounds + area must recover it.
+        }
+        auto rotated_config = detection::ArmorDetector::Config{};
+        rotated_config.window_width_k = 16.0F;
+        rotated_config.window_height_k = 16.0F;
+        detection::ArmorDetector rotated_armor{rotated_config};
+        detection::Target rotated_anchor{};
+        rotated_anchor.valid = true;
+        rotated_anchor.center = {339.0F, 190.0F};
+        rotated_anchor.bounds = {335, 186, 8, 8};
+        rotated_anchor.radius = 4.0F;
+        const auto rotated_plate = rotated_armor.Detect(rotated, rotated_anchor);
+        assert(rotated_plate.valid);
+        assert(std::abs(rotated_plate.center.x - 339.0F) < 1.5F);
+        assert(std::abs(rotated_plate.center.y - 102.0F) < 1.5F);
         anchor.valid = false;
         assert(!armor.Detect(bars, anchor).valid);
     }
@@ -306,6 +383,7 @@ int main() {
     dart::tests::DetectorBehaviorTest::grayscale();
     dart::tests::DetectorBehaviorTest::grayscale_features();
     dart::tests::DetectorBehaviorTest::armor_grayscale();
+    dart::tests::DetectorBehaviorTest::armor_moment_geometry();
     dart::tests::DetectorBehaviorTest::grayscale_ranking_and_tracking();
     dart::tests::DetectorBehaviorTest::run();
 }

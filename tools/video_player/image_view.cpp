@@ -1,22 +1,21 @@
-#ifndef DART_TOOLS_VIDEO_PLAYER_IMAGE_VIEW_CPP
-#define DART_TOOLS_VIDEO_PLAYER_IMAGE_VIEW_CPP
-
+module;
 #include <QImage>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPointF>
 #include <QRectF>
 #include <QWidget>
-
 #include <algorithm>
 #include <cmath>
 #include <functional>
 #include <optional>
 #include <utility>
 
-#include "recording_types.cpp"
+export module dart.tools.video_player.image_view;
 
-namespace dart::tools::video_player {
+export import dart.tools.video_player.recording_types;
+
+export namespace dart::tools::video_player {
 
 class ImageView final : public QWidget {
 public:
@@ -94,7 +93,7 @@ private:
     Overlay overlay_;
 };
 
-inline ImageView::Overlay ImageView::overlay_for(const Frame& frame, const QSize& size) {
+ImageView::Overlay ImageView::overlay_for(const Frame& frame, const QSize& size) {
     Overlay overlay;
     if (!frame.detection)
         return overlay;
@@ -119,5 +118,3 @@ inline ImageView::Overlay ImageView::overlay_for(const Frame& frame, const QSize
 }
 
 } // namespace dart::tools::video_player
-
-#endif // DART_TOOLS_VIDEO_PLAYER_IMAGE_VIEW_CPP

@@ -86,7 +86,7 @@ include/firmware/src/    下层公开接口与实现库
     storage/                轮次保留、空间预算、图片与事件文件
 runtime/
   launcher/                 平台无关 C11 自启器 + startup.list 母版
-  imu/                      现有独立采样服务（本轮由 IMU 诊断任务维护，暂不迁移）
+  imu/                      现有独立采样服务（保留采样与诊断行为，源码已迁移为命名模块）
 cmake/                      交叉工具链配置（链接脚本取 SDK 的 libs/mk/link.lds）
 .script/                    构建、部署、清理与回归检查
 docs/                       设计、标定、调试和验收契约
@@ -97,8 +97,9 @@ L4 通过公开接口调用下层实现，不包含 SDK 或 POSIX 实现头文�
 `diagnostics/` 定义业务字段。线程、缓冲、文件同步和设备寄存器不属于这些调用模块。
 参数帮助文本和参数错误的标准输出属于 CLI 交互，保留在参数解析模块。
 
-检测器只包含 `camera/frame_view.cpp`，通过 INTERFACE 目标 `dart_camera_types`
-获取帧数据类型，不链接相机 ACL 或 K230 后端。入口只连接 `board/` 提供的工厂与
+检测器只导入 `dart.camera.frame_view`，通过静态模块库 `dart_camera_types`
+获取帧数据类型，不链接相机 ACL 或 K230 后端。各 C++ `.cpp` 独立编译，跨文件通过
+命名模块 `export/import` 声明依赖；禁止包含 `.cpp` 或生成包含汇总源文件。入口只连接 `board/` 提供的工厂与
 `startup/` 调用流程，具体初始化由下层板级适配器完成。
 IMU 采样和后续控制任务按各自频率运行，不随相机逐帧循环调度。
 launcher 负责进程监督，L4 启动流程负责进程内部的组件编排。

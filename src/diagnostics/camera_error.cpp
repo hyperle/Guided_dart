@@ -1,14 +1,14 @@
-#ifndef DART_APP_CAMERA_ERROR_CPP
-#define DART_APP_CAMERA_ERROR_CPP
-
+module;
 #include <string_view>
 
-#include "camera/error.cpp"
-#include "logging/logger.cpp"
+export module dart.app.diagnostics.camera_error;
+
+import dart.camera.error;
+import dart.logging.logger;
 
 namespace dart::app {
 
-inline std::string_view camera_operation_text(camera::Operation operation) noexcept {
+std::string_view camera_operation_text(camera::Operation operation) noexcept {
     switch (operation) {
     case camera::Operation::kUnknown: return "unknown";
     case camera::Operation::kConfigValidate: return "config_validate";
@@ -31,7 +31,7 @@ inline std::string_view camera_operation_text(camera::Operation operation) noexc
 }
 
 /* Recovery belongs to the caller. This function only formats one observation. */
-inline void log_camera_error(
+export void log_camera_error(
     logging::Logger& log, const char* op, const char* action,
     const camera::CameraError& error) noexcept {
     const auto& context = error.context();
@@ -46,5 +46,3 @@ inline void log_camera_error(
 }
 
 } // namespace dart::app
-
-#endif // DART_APP_CAMERA_ERROR_CPP

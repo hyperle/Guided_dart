@@ -1,15 +1,16 @@
-#ifndef DART_TOOLS_VIDEO_PLAYER_RECORDING_PATHS_CPP
-#define DART_TOOLS_VIDEO_PLAYER_RECORDING_PATHS_CPP
-
+module;
 #include <QDir>
 #include <QFileInfo>
 #include <QRegularExpression>
 #include <QString>
 #include <QStringList>
-
 #include <algorithm>
 
-namespace dart::tools::video_player {
+export module dart.tools.video_player.recording_paths;
+
+
+
+export namespace dart::tools::video_player {
 
 // Paths on the host may differ from the session path recorded on the board.
 struct RecordingPaths {
@@ -21,7 +22,7 @@ struct RecordingPaths {
     static QStringList directories(const QString& directory);
 };
 
-inline QStringList RecordingPaths::directories(const QString& directory) {
+QStringList RecordingPaths::directories(const QString& directory) {
     const QDir input(QFileInfo(directory).absoluteFilePath());
     // A session or flat image directory takes precedence over child sessions.
     if (input.exists("img") || input.exists("frames.csv") || input.exists("logs/frames.csv"))
@@ -52,7 +53,7 @@ inline QStringList RecordingPaths::directories(const QString& directory) {
     return sessions.isEmpty() ? QStringList{input.absolutePath()} : sessions;
 }
 
-inline RecordingPaths RecordingPaths::resolve(const QString& directory) {
+RecordingPaths RecordingPaths::resolve(const QString& directory) {
     const QDir input(QFileInfo(directory).absoluteFilePath());
     const bool has_img = QFileInfo(input.filePath("img")).isDir();
     const QDir images(has_img ? input.filePath("img") : input.absolutePath());
@@ -83,5 +84,3 @@ inline RecordingPaths RecordingPaths::resolve(const QString& directory) {
 }
 
 } // namespace dart::tools::video_player
-
-#endif // DART_TOOLS_VIDEO_PLAYER_RECORDING_PATHS_CPP

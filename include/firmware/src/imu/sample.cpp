@@ -1,11 +1,11 @@
-#ifndef DART_INCLUDE_FIRMWARE_APP_SRC_IMU_SAMPLE_CPP
-#define DART_INCLUDE_FIRMWARE_APP_SRC_IMU_SAMPLE_CPP
-
+module;
 #include <cstdint>
 
-#include "math_types.cpp"
+export module dart.imu.sample;
 
-namespace dart::imu {
+export import dart.imu.math_types;
+
+export namespace dart::imu {
 
 enum class SampleFlag : std::uint32_t {
     kNone = 0U,
@@ -33,5 +33,3 @@ struct Sample {
 };
 
 } // namespace dart::imu
-
-#endif // DART_INCLUDE_FIRMWARE_APP_SRC_IMU_SAMPLE_CPP

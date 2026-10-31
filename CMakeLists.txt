@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.20)
+cmake_minimum_required(VERSION 3.28)
 
 # ============================================================================
 # K230D / K230 RT-Smart 用户态业务应用仓库（与固件无关）
@@ -20,13 +20,14 @@ cmake_minimum_required(VERSION 3.20)
 project(k230d_rtos_apps LANGUAGES C CXX)
 
 # C data-plane modules use a strict C11 ABI; the orchestration/control plane
-# uses the common C++23 subset (notably std::expected).
+# uses C++23 (notably std::expected) and C++20 named modules.
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+include(cmake/modules.cmake)
 
 # ---------------------------------------------------------------------------
 # K230 RTOS SDK 根目录（本机默认；若 SDK 在其他路径，用 -DK230_SDK_ROOT=... 覆盖）
@@ -113,7 +114,9 @@ set(K230_LINK_SCRIPT "${K230_SDK_ROOT}/src/rtsmart/libs/mk/link.lds" CACHE FILEP
 target_link_options(k230_rtos_app INTERFACE
     "-T${K230_LINK_SCRIPT}"
     --static
-    -Wl,--gc-sections)
+    -Wl,--gc-sections
+    # Clang's default build-id note would precede .text and move _start by 0x40.
+    -Wl,--build-id=none)
 
 # ---------------------------------------------------------------------------
 # 声明公共抽象/设备库、运行时服务，再声明业务入口、编排与领域目标

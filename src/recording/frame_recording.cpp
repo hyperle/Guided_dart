@@ -1,17 +1,17 @@
-#ifndef DART_RECORDING_FRAME_RECORDING_CPP
-#define DART_RECORDING_FRAME_RECORDING_CPP
-
+module;
 #include <cstdint>
 #include <string_view>
 
-#include "logging/logger.cpp"
-#include "recorder/recorder.cpp"
-#include "src/startup/argument_parser.cpp"
-#include "system/monotonic_clock.cpp"
+export module dart.app.recording.frame_recording;
 
-namespace dart::app {
+import dart.app.startup.argument_parser;
+import dart.logging.logger;
+import dart.recorder.recorder;
+import dart.system.monotonic_clock;
 
-inline const char* admission_text(recorder::Admission admission) noexcept {
+export namespace dart::app {
+
+const char* admission_text(recorder::Admission admission) noexcept {
     switch (admission) {
     case recorder::Admission::kAccepted: return "accepted";
     case recorder::Admission::kDownsampled: return "downsampled";
@@ -22,7 +22,7 @@ inline const char* admission_text(recorder::Admission admission) noexcept {
     return "unknown";
 }
 
-inline void drain_recording_releases(recorder::Recorder& rec, logging::Logger& log) noexcept {
+void drain_recording_releases(recorder::Recorder& rec, logging::Logger& log) noexcept {
     for (int attempt = 0; attempt < 500; ++attempt) {
         if (rec.pending_releases() == 0) {
             log.line(
@@ -39,7 +39,7 @@ inline void drain_recording_releases(recorder::Recorder& rec, logging::Logger& l
         rec.pending_releases());
 }
 
-inline recorder::Config
+recorder::Config
     recording_config(const Arguments& args, std::uint32_t width, std::uint32_t height) noexcept {
     recorder::Config config{};
     config.width = width;
@@ -57,7 +57,7 @@ inline recorder::Config
     return config;
 }
 
-inline bool start_recording(
+bool start_recording(
     recorder::Recorder& rec, const recorder::Config& config, logging::Logger& log) noexcept {
     if (!rec.start()) {
         log.line(
@@ -83,7 +83,7 @@ inline bool start_recording(
     return true;
 }
 
-inline bool stop_recording_if_finished(
+bool stop_recording_if_finished(
     recorder::Recorder& rec, const recorder::Config& config, logging::Logger& log) noexcept {
     if (!rec.limit_reached() && rec.last_error() == recorder::Error::kNone)
         return false;
@@ -106,5 +106,3 @@ inline bool stop_recording_if_finished(
 }
 
 } // namespace dart::app
-
-#endif // DART_RECORDING_FRAME_RECORDING_CPP

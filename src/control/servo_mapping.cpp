@@ -1,6 +1,4 @@
-#ifndef DART_SRC_CONTROL_SERVO_MAPPING_CPP
-#define DART_SRC_CONTROL_SERVO_MAPPING_CPP
-
+module;
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -8,9 +6,11 @@
 #include <expected>
 #include <limits>
 
-#include "src/detector/result.cpp"
+export module dart.control.servo_mapping;
 
-namespace dart::control {
+export import dart.detection.result;
+
+export namespace dart::control {
 
 class ServoMapping final {
 public:
@@ -70,11 +70,11 @@ private:
     Config config_;
 };
 
-inline ServoMapping::ServoMapping() noexcept : ServoMapping(Config{}) {}
+ServoMapping::ServoMapping() noexcept : ServoMapping(Config{}) {}
 
-inline ServoMapping::ServoMapping(const Config& config) noexcept : config_(config) {}
+ServoMapping::ServoMapping(const Config& config) noexcept : config_(config) {}
 
-inline bool ServoMapping::valid_config() const noexcept {
+bool ServoMapping::valid_config() const noexcept {
     for (const auto& channel : config_.channels) {
         if (!std::isfinite(channel.initial_pulse_us) || !std::isfinite(channel.min_pulse_us)
             || !std::isfinite(channel.max_pulse_us)
@@ -87,21 +87,21 @@ inline bool ServoMapping::valid_config() const noexcept {
     return true;
 }
 
-inline std::expected<ServoMapping::Increment, ServoMapping::Error>
+std::expected<ServoMapping::Increment, ServoMapping::Error>
 ServoMapping::horizontal_increment(
     const detection::Target& armor, const detection::Target& light,
     detection::Point preset) const noexcept {
     return increment(armor, light, preset, true);
 }
 
-inline std::expected<ServoMapping::Increment, ServoMapping::Error>
+std::expected<ServoMapping::Increment, ServoMapping::Error>
 ServoMapping::vertical_increment(
     const detection::Target& armor, const detection::Target& light,
     detection::Point preset) const noexcept {
     return increment(armor, light, preset, false);
 }
 
-inline std::expected<ServoMapping::Increment, ServoMapping::Error> ServoMapping::increment(
+std::expected<ServoMapping::Increment, ServoMapping::Error> ServoMapping::increment(
     const detection::Target& armor, const detection::Target& light, detection::Point preset,
     bool horizontal) const noexcept {
     if (!valid_config())
@@ -131,7 +131,7 @@ inline std::expected<ServoMapping::Increment, ServoMapping::Error> ServoMapping:
     return result;
 }
 
-inline std::expected<ServoMapping::Output, ServoMapping::Error> ServoMapping::pulses(
+std::expected<ServoMapping::Output, ServoMapping::Error> ServoMapping::pulses(
     const PwmValues& horizontal_delta_us, const PwmValues& vertical_delta_us) const noexcept {
     if (!valid_config())
         return std::unexpected(Error::kInvalidConfig);
@@ -154,5 +154,3 @@ inline std::expected<ServoMapping::Output, ServoMapping::Error> ServoMapping::pu
 }
 
 } // namespace dart::control
-
-#endif // DART_SRC_CONTROL_SERVO_MAPPING_CPP

@@ -1,13 +1,15 @@
-#ifndef DART_RECORDER_ERROR_CPP
-#define DART_RECORDER_ERROR_CPP
-
+module;
 #include <atomic>
 #include <cerrno>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 
-namespace dart::recorder {
+export module dart.recorder.error;
+
+
+
+export namespace dart::recorder {
 
 enum class Error : std::uint8_t {
     kNone,
@@ -47,5 +49,3 @@ private:
 };
 
 } // namespace dart::recorder
-
-#endif // DART_RECORDER_ERROR_CPP

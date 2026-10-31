@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 将交叉编译产物经 GIO/MTP 写入板端 /sdcard/app，保留日志、录像和旧文件备份。
-# 用法：bash .script/deploy-mtp.sh <存储根 URI 或 app URI> [--only launcher|dart_app|pwm_swing|list]
+# 用法：bash .script/deploy-mtp.sh <存储根 URI 或 app URI> [--only launcher|dart_app|pwm_swing|imu_raw_probe|list]
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -19,7 +19,7 @@ while [[ $# -gt 0 ]]; do
     esac
     shift
 done
-case "${ONLY}" in ''|launcher|dart_app|pwm_swing|list) ;; *) echo '无效的 --only 目标' >&2; exit 2 ;; esac
+case "${ONLY}" in ''|launcher|dart_app|pwm_swing|imu_raw_probe|list) ;; *) echo '无效的 --only 目标' >&2; exit 2 ;; esac
 case "${DEST}" in gphoto2://*|mtp://*) ;; *) echo '需要 gphoto2:// 或 mtp:// 存储 URI' >&2; exit 2 ;; esac
 DEST="${DEST%/}"
 # 与统一入口共用分区和应用目录解析；直接调用也会预检。
@@ -34,7 +34,7 @@ command -v sha256sum >/dev/null || die '找不到 sha256sum'
 
 NAMES=()
 SOURCES=()
-for name in launcher dart_app list pwm_swing; do
+for name in launcher dart_app imu_raw_probe list pwm_swing; do
     [[ "${name}" != pwm_swing || "${ONLY}" == pwm_swing ]] || continue
     [[ -z "${ONLY}" || "${ONLY}" == "${name}" ]] || continue
     if [[ "${name}" == list ]]; then
@@ -125,5 +125,9 @@ if [[ "${ONLY}" == pwm_swing ]]; then
     printf '板端手动运行：%s/pwm_swing（约 43 秒，会驱动四路舵机）\n' "${BOARD_DIR}"
     exit 0
 fi
+if [[ "${ONLY}" == imu_raw_probe ]]; then
+    printf '首次启用还需 deploy-rtos list；重启后自动读取。手动运行：%s/imu_raw_probe\n' "${BOARD_DIR}"
+    exit 0
+fi
 printf '板端验证：%s/launcher -t\n' "${BOARD_DIR}"
-printf '注意：写入不会重启当前进程；dart_app 在启动器下次拉起时加载，startup_final.list 需重启启动器或板子后加载。\n'
+printf '注意：写入不会重启当前进程；startup_final.list 需重启启动器或板子后加载。\n'

@@ -27,9 +27,9 @@ launcher 自身日志和子进程 console 日志服从 `/sdcard/app/control/writ
 构建目标与产物路径在 `runtime/CMakeLists.txt`（本仓库约定：模块目录只放源码，
 目标集中声明）：`build-cross/launcher/launcher`。
 
-当前启动清单启用 `dart_app`，在同一进程内运行识别、录像和 IMU，固定曝光 300 行，
-录像目标 60 FPS。PWM 测试行已注释，测试程序仅按需单独部署和手动运行；
-接线与部署步骤见 [PWM 测试说明](../../tools/pwm_swing/README.md)。
+当前启动清单只启用 `imu_raw_probe`，上电后通过 SPI1 / CS IO14 写入唤醒命令，
+等待 50 ms、回读电源寄存器后循环直读 IMU。`dart_app` 与 PWM 测试行已注释。
+波形、构建和恢复视觉版本的步骤见 [IMU 直读测试说明](../imu/README.md)。
 
 ## 清单语法（每行一条）
 

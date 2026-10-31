@@ -1,3 +1,7 @@
+#include <csignal>
+#include <cstdint>
+#include <expected>
+#include <memory>
 #include <atomic>
 #include <cassert>
 #include <chrono>
@@ -9,8 +13,23 @@
 #include <string>
 #include <thread>
 #include <unistd.h>
+#include "camera/error_codes.h"
 
-#include "src/startup/services.cpp"
+import dart.app.startup.services;
+
+import dart.camera.error;
+import dart.camera.interface;
+import dart.imu.sample;
+
+import dart.imu.interface;
+import dart.runtime.imu.session;
+import dart.app.startup.argument_parser;
+import dart.logging.logger;
+import dart.system.run_control;
+import dart.system.write_control;
+import dart.system.device_services;
+
+import dart.app.diagnostics.camera_error;
 
 namespace dart::tests {
 

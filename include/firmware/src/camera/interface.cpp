@@ -1,13 +1,13 @@
-#ifndef DART_INCLUDE_FIRMWARE_APP_SRC_CAMERA_INTERFACE_CPP
-#define DART_INCLUDE_FIRMWARE_APP_SRC_CAMERA_INTERFACE_CPP
-
+module;
 #include <chrono>
 #include <cstdint>
 #include <expected>
 
-#include "frame_lease.cpp"
+export module dart.camera.interface;
 
-namespace dart::camera {
+export import dart.camera.frame_lease;
+
+export namespace dart::camera {
 
 enum class ExposureMode : std::uint32_t {
     kFixed = 0,
@@ -87,5 +87,3 @@ public:
 };
 
 } // namespace dart::camera
-
-#endif // DART_INCLUDE_FIRMWARE_APP_SRC_CAMERA_INTERFACE_CPP

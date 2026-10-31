@@ -1,15 +1,15 @@
-#ifndef DART_RECORDER_STORAGE_SPACE_CPP
-#define DART_RECORDER_STORAGE_SPACE_CPP
-
+module;
 #include <algorithm>
 #include <cerrno>
 #include <cstdint>
 #include <limits>
 #include <sys/statvfs.h>
 
-#include "recorder/config.cpp"
+export module dart.recorder.storage.storage_space;
 
-namespace dart::recorder {
+import dart.recorder.config;
+
+export namespace dart::recorder {
 
 // One volume budget for both session admission and periodic image checks.
 // Count allocated blocks across the filesystem, including older recordings.
@@ -51,5 +51,3 @@ public:
 };
 
 } // namespace dart::recorder
-
-#endif // DART_RECORDER_STORAGE_SPACE_CPP

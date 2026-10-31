@@ -1,15 +1,16 @@
-#ifndef DART_SRC_DETECTOR_TRACKING_CPP
-#define DART_SRC_DETECTOR_TRACKING_CPP
-
+module;
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <limits>
 
-#include "numeric.cpp"
-#include "result.cpp"
+export module dart.detection.tracking;
 
-namespace dart::detection {
+import dart.detection.numeric;
+import dart.detection.result;
+
+export namespace dart::detection {
 
 class TargetTracker {
 public:
@@ -107,5 +108,3 @@ private:
 };
 
 } // namespace dart::detection
-
-#endif // DART_SRC_DETECTOR_TRACKING_CPP

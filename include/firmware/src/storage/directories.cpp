@@ -1,14 +1,16 @@
-#ifndef DART_STORAGE_DIRECTORIES_CPP
-#define DART_STORAGE_DIRECTORIES_CPP
-
+module;
 #include <cerrno>
 #include <cstddef>
 #include <cstring>
 #include <sys/stat.h>
 
-namespace dart::storage {
+export module dart.storage.directories;
 
-inline void ensure_dir(const char* dir) noexcept {
+
+
+export namespace dart::storage {
+
+void ensure_dir(const char* dir) noexcept {
     if (dir == nullptr || dir[0] == '\0')
         return;
     if (::mkdir(dir, 0777) == 0 || errno == EEXIST)
@@ -28,7 +30,7 @@ inline void ensure_dir(const char* dir) noexcept {
     }
 }
 
-inline void ensure_parent(const char* path) noexcept {
+void ensure_parent(const char* path) noexcept {
     char parent[512];
     const char* slash;
     if (path == nullptr)
@@ -45,5 +47,3 @@ inline void ensure_parent(const char* path) noexcept {
 }
 
 } // namespace dart::storage
-
-#endif // DART_STORAGE_DIRECTORIES_CPP

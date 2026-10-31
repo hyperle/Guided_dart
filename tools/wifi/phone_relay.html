@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>相机实时画面</title>
+<style>
+:root{color-scheme:dark;font-family:system-ui,sans-serif;background:#10151d;color:#e9eef6}body{margin:0;padding:12px}header{display:flex;flex-wrap:wrap;gap:12px;align-items:center;font-size:14px;color:#aab7c9}h1{font-size:18px;color:#e9eef6;margin:8px 0}iframe{display:block;border:0;width:100%;height:calc(100dvh - 90px);min-height:450px}button{background:#386beb;color:white;border:0;border-radius:6px;padding:7px 12px}#error{color:#ffb0a9}
+</style>
+<header><h1>手机中继</h1><span id="state">正在连接…</span><button id="retry">重新连接</button></header>
+<p id="error"></p><iframe id="viewer" allow="autoplay; fullscreen" referrerpolicy="no-referrer"></iframe>
+<script>
+const config=__CANMV_CONFIG__;
+const state=document.querySelector('#state'),error=document.querySelector('#error');
+document.querySelector('#viewer').src=config.viewer;
+let camera=null,backend=null,timer=null,received=0,confirmed=0,sent=0,lastReceived=Date.now(),connecting=false;
+function report(stage){
+  if(backend&&backend.readyState===WebSocket.OPEN&&backend.authenticated){
+    backend.send(JSON.stringify({state:stage,local_frames:received,sent_frames:sent,buffered_bytes:backend.bufferedAmount}));
+  }
+}
+function ack(){if(camera&&camera.readyState===WebSocket.OPEN){const data=new ArrayBuffer(8),v=new DataView(data);v.setUint32(0,received);v.setUint32(4,confirmed);camera.send(data);}}
+function retry(message){
+  if(timer)return;
+  state.textContent=message||'连接中断，正在重连…';
+  const a=camera,b=backend;camera=backend=null;connecting=false;
+  if(a)a.close();if(b)b.close();
+  timer=setTimeout(()=>{timer=null;start();},2000);
+}
+function start(){
+  if(connecting||backend)return;
+  connecting=true;received=confirmed=sent=0;lastReceived=Date.now();error.textContent='';state.textContent='正在连接视频后端…';
+  const b=new WebSocket(config.upload);backend=b;b.binaryType='arraybuffer';
+  const timeout=setTimeout(()=>{if(b===backend&&!camera)retry('视频后端连接超时，正在重试…');},12000);
+  b.onopen=()=>b.send(JSON.stringify({token:config.token}));
+  b.onmessage=event=>{
+    if(b!==backend)return;
+    if(typeof event.data==='string'){
+      let reply;try{reply=JSON.parse(event.data);}catch(_){return;}
+      if(!reply.ready||camera)return;
+      b.authenticated=true;report("connecting");
+      clearTimeout(timeout);state.textContent='正在连接相机…';
+      const c=new WebSocket(`ws://${location.host}/camera`);camera=c;c.binaryType='arraybuffer';
+      c.onopen=()=>{connecting=false;lastReceived=Date.now();state.textContent='已连接，请保持本页在前台';report('streaming');};
+      c.onmessage=frame=>{
+        if(c!==camera)return;
+        lastReceived=Date.now();received++;
+        if(b.readyState===WebSocket.OPEN&&b.bufferedAmount<32768){b.send(frame.data);sent++;}
+        ack();
+      };
+      c.onclose=()=>{if(c===camera){report('local_closed');retry('相机连接中断，正在重连…');}};
+      c.onerror=()=>{if(c===camera){report('local_error');retry('相机暂不可达，正在重试…');}};
+    }else if(event.data.byteLength===4){confirmed=new DataView(event.data).getUint32(0);ack();state.textContent=`已连接 · 本地 ${received} 帧 · 后端 ${confirmed} 帧，请保持前台`;}
+  };
+  b.onclose=event=>{
+    clearTimeout(timeout);
+    if(b!==backend)return;
+    if(event.code===1008){error.textContent='上传凭据无效，请检查板端配置';const c=camera;backend=camera=null;connecting=false;if(c)c.close();state.textContent='连接失败';return;}
+    retry('视频后端连接中断，正在重连…');
+  };
+  b.onerror=()=>{if(b===backend)retry('视频后端暂不可达，正在重试…');};
+}
+setInterval(()=>{
+  if(camera&&Date.now()-lastReceived>12000){report('local_stalled');retry('等待相机画面，正在重连…');}
+  else report(document.hidden?'hidden':camera&&camera.readyState===WebSocket.OPEN?'streaming':'connecting');
+},5000);
+document.addEventListener('visibilitychange',()=>{
+  if(document.hidden)report('hidden');
+  else if(!backend||Date.now()-lastReceived>10000)retry('页面恢复，正在重新连接…');
+});
+document.querySelector('#retry').onclick=()=>{if(timer){clearTimeout(timer);timer=null;}retry('正在重新连接…');};
+start();
+</script>

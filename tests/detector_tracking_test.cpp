@@ -1,3 +1,4 @@
+#include <cstddef>
 #include <algorithm>
 #include <array>
 #include <cassert>
@@ -5,7 +6,7 @@
 #include <cmath>
 #include <vector>
 
-#include "src/detector/roi.cpp"
+import dart.detection.roi;
 
 namespace dart::tests {
 

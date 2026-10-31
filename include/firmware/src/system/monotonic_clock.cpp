@@ -1,19 +1,21 @@
-#ifndef DART_SYSTEM_MONOTONIC_CLOCK_CPP
-#define DART_SYSTEM_MONOTONIC_CLOCK_CPP
-
+module;
 #include <cerrno>
 #include <chrono>
 #include <cstdint>
 #include <time.h>
 
-namespace dart::platform {
+export module dart.system.monotonic_clock;
 
-inline std::int64_t mono_ms() noexcept {
+
+
+export namespace dart::platform {
+
+std::int64_t mono_ms() noexcept {
     const auto now = std::chrono::steady_clock::now().time_since_epoch();
     return std::chrono::duration_cast<std::chrono::milliseconds>(now).count();
 }
 
-inline void sleep_ms(int ms) noexcept {
+void sleep_ms(int ms) noexcept {
     if (ms <= 0)
         return;
     struct timespec ts;
@@ -23,5 +25,3 @@ inline void sleep_ms(int ms) noexcept {
 }
 
 } // namespace dart::platform
-
-#endif // DART_SYSTEM_MONOTONIC_CLOCK_CPP

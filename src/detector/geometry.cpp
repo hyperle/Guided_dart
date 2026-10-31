@@ -1,10 +1,12 @@
-#ifndef DART_SRC_DETECTOR_GEOMETRY_CPP
-#define DART_SRC_DETECTOR_GEOMETRY_CPP
-
+module;
 #include <algorithm>
 #include <cstdint>
 
-namespace dart::detection {
+export module dart.detection.geometry;
+
+
+
+export namespace dart::detection {
 
 struct Point {
     float x = 0.0F;
@@ -18,15 +20,15 @@ struct Rect {
     std::uint32_t height = 0;
 };
 
-inline Rect FullWindow(std::uint32_t width, std::uint32_t height) noexcept {
+Rect FullWindow(std::uint32_t width, std::uint32_t height) noexcept {
     return {0, 0, width, height};
 }
 
-inline bool IsFullWindow(Rect window, std::uint32_t width, std::uint32_t height) noexcept {
+bool IsFullWindow(Rect window, std::uint32_t width, std::uint32_t height) noexcept {
     return window.x == 0 && window.y == 0 && window.width == width && window.height == height;
 }
 
-inline Rect UniteWindows(Rect a, Rect b) noexcept {
+Rect UniteWindows(Rect a, Rect b) noexcept {
     if (b.width == 0 || b.height == 0)
         return a;
     const auto x = std::min(a.x, b.x);
@@ -37,5 +39,3 @@ inline Rect UniteWindows(Rect a, Rect b) noexcept {
 }
 
 } // namespace dart::detection
-
-#endif // DART_SRC_DETECTOR_GEOMETRY_CPP

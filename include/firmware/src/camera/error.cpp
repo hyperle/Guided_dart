@@ -1,6 +1,4 @@
-#ifndef DART_INCLUDE_FIRMWARE_APP_SRC_CAMERA_ERROR_CPP
-#define DART_INCLUDE_FIRMWARE_APP_SRC_CAMERA_ERROR_CPP
-
+module;
 #include <array>
 #include <charconv>
 #include <cstddef>
@@ -11,7 +9,11 @@
 
 #include "camera/error_codes.h"
 
-namespace dart::camera {
+export module dart.camera.error;
+
+
+
+export namespace dart::camera {
 
 class ErrorTextSink {
 public:
@@ -42,7 +44,7 @@ private:
     bool has_field_;
 };
 
-inline ErrorTextSink::ErrorTextSink(char* buffer, std::size_t capacity) noexcept
+ErrorTextSink::ErrorTextSink(char* buffer, std::size_t capacity) noexcept
     : buffer_(buffer)
     , capacity_(capacity)
     , size_(0)
@@ -52,7 +54,7 @@ inline ErrorTextSink::ErrorTextSink(char* buffer, std::size_t capacity) noexcept
         buffer_[0] = '\0';
 }
 
-inline void ErrorTextSink::append(std::string_view text) noexcept {
+void ErrorTextSink::append(std::string_view text) noexcept {
     if (text.empty())
         return;
     if (buffer_ == nullptr || capacity_ == 0 || size_ >= capacity_) {
@@ -70,7 +72,7 @@ inline void ErrorTextSink::append(std::string_view text) noexcept {
         truncated_ = true;
 }
 
-inline void ErrorTextSink::begin_field(std::string_view key) noexcept {
+void ErrorTextSink::begin_field(std::string_view key) noexcept {
     if (has_field_)
         append(" ");
     has_field_ = true;
@@ -78,12 +80,12 @@ inline void ErrorTextSink::begin_field(std::string_view key) noexcept {
     append("=");
 }
 
-inline void ErrorTextSink::append_field(std::string_view key, std::string_view value) noexcept {
+void ErrorTextSink::append_field(std::string_view key, std::string_view value) noexcept {
     begin_field(key);
     append(value);
 }
 
-inline void ErrorTextSink::append_unsigned(std::uint64_t value) noexcept {
+void ErrorTextSink::append_unsigned(std::uint64_t value) noexcept {
     char text[24] = {};
     const auto result = std::to_chars(text, text + sizeof(text), value);
     if (result.ec == std::errc{})
@@ -92,7 +94,7 @@ inline void ErrorTextSink::append_unsigned(std::uint64_t value) noexcept {
         append("?");
 }
 
-inline void ErrorTextSink::append_signed(std::int64_t value) noexcept {
+void ErrorTextSink::append_signed(std::int64_t value) noexcept {
     char text[24] = {};
     const auto result = std::to_chars(text, text + sizeof(text), value);
     if (result.ec == std::errc{})
@@ -101,30 +103,30 @@ inline void ErrorTextSink::append_signed(std::int64_t value) noexcept {
         append("?");
 }
 
-inline void ErrorTextSink::append_field(std::string_view key, std::uint64_t value) noexcept {
+void ErrorTextSink::append_field(std::string_view key, std::uint64_t value) noexcept {
     begin_field(key);
     append_unsigned(value);
 }
 
-inline void ErrorTextSink::append_field(std::string_view key, std::int64_t value) noexcept {
+void ErrorTextSink::append_field(std::string_view key, std::int64_t value) noexcept {
     begin_field(key);
     append_signed(value);
 }
 
-inline void ErrorTextSink::append_field(std::string_view key, std::uint32_t value) noexcept {
+void ErrorTextSink::append_field(std::string_view key, std::uint32_t value) noexcept {
     append_field(key, static_cast<std::uint64_t>(value));
 }
 
-inline void ErrorTextSink::append_field(std::string_view key, std::int32_t value) noexcept {
+void ErrorTextSink::append_field(std::string_view key, std::int32_t value) noexcept {
     append_field(key, static_cast<std::int64_t>(value));
 }
 
-inline void ErrorTextSink::append_field(std::string_view key, bool value) noexcept {
+void ErrorTextSink::append_field(std::string_view key, bool value) noexcept {
     begin_field(key);
     append(value ? "true" : "false");
 }
 
-inline void ErrorTextSink::append_hex_field(std::string_view key, std::uint64_t value) noexcept {
+void ErrorTextSink::append_hex_field(std::string_view key, std::uint64_t value) noexcept {
     begin_field(key);
     char text[18] = {};
     const auto result = std::to_chars(text, text + sizeof(text), value, 16);
@@ -134,7 +136,7 @@ inline void ErrorTextSink::append_hex_field(std::string_view key, std::uint64_t 
         append("?");
 }
 
-inline void ErrorTextSink::append_float_field(std::string_view key, float value) noexcept {
+void ErrorTextSink::append_float_field(std::string_view key, float value) noexcept {
     begin_field(key);
     char text[32] = {};
     const auto result =
@@ -283,7 +285,7 @@ private:
     CallContext context_;
 };
 
-inline ErrorKind CameraError::classify(std::int32_t code) noexcept {
+ErrorKind CameraError::classify(std::int32_t code) noexcept {
     if (code < 0 && code >= -DART_CAMERA_CODE_ERRNO_MAX)
         return ErrorKind::kPlatform;
     if (code <= DART_CAMERA_CODE_VENDOR_MAX)
@@ -310,7 +312,7 @@ inline ErrorKind CameraError::classify(std::int32_t code) noexcept {
     }
 }
 
-inline CameraError::Description CameraError::description() const noexcept {
+CameraError::Description CameraError::description() const noexcept {
     switch (kind_) {
     case ErrorKind::kArgument:
         return {"camera.argument", "invalid camera argument or configuration"};
@@ -342,7 +344,7 @@ inline CameraError::Description CameraError::description() const noexcept {
     return {"camera.hardware", "camera hardware operation failed"};
 }
 
-inline void CameraError::append_context(ErrorTextSink& sink) const noexcept {
+void CameraError::append_context(ErrorTextSink& sink) const noexcept {
     sink.append_field("code", static_cast<std::int64_t>(code_));
     sink.append_field("op", operation_name(context_.operation));
     if (context_.native_hint != 0) {
@@ -480,5 +482,3 @@ static_assert(
     "camera site codes must be unique");
 
 } // namespace dart::camera
-
-#endif // DART_INCLUDE_FIRMWARE_APP_SRC_CAMERA_ERROR_CPP
