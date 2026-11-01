@@ -81,7 +81,8 @@ Detect/Track 分工要求 `_dart_detect.TRACK_FEATURE_VERSION >= 1`。
 | `DETECTOR_CONFIG["workspace.min_contrast"]` | `--min-contrast` | 候选均值减背景均值的下限，默认 12 个灰度级 |
 | `MIRROR` | `Controls::mirror` | 0 无、1 左右、2 上下、3 两者；软件镜像 |
 | `SERVO_INITIAL_US` | `--servo-initial` / `Channel::initial_pulse_us` | 四路机械零点的绝对脉宽，µs，允许小数 |
-| `SERVO_MIN_US` / `SERVO_MAX_US` | `--servo-min` / `--servo-max` | µs；零点超出范围时直接报错 |
+| `SERVO_MAX_DELTA_US` | `--servo-max-delta` / `Config::max_delta_us` | 单个 µs 数值；原生应用合成增量的绝对值上限，默认 500 |
+| `SERVO_MIN_US` / `SERVO_MAX_US` | 仅 Python 零点校验 | 不再导出为原生应用的 min/max 参数 |
 | `PWM_FREQUENCY_HZ` | `dart::pwm::kFrequencyHz` | 固定 333 Hz |
 | `SERVO_ENABLED` | 调试时逐路选择 | 仅 Python 标定开关；原生应用启用全部四路 |
 | `SERVO_RETURN_MS` | 仅 Python 退出清理 | 停止前发送零点脉宽的时长，默认 500 ms，至少 20 ms |
@@ -218,7 +219,7 @@ assert PIXEL_FORMAT == "gray8"
 例如调好后控制台输出：
 
 ```text
---exp 400 --threshold 50 --min-contrast 12 --servo-initial 1520.000,1520.000,1520.000,1520.000 --servo-min 1420.000,1420.000,1420.000,1420.000 --servo-max 1620.000,1620.000,1620.000,1620.000
+--exp 400 --threshold 50 --min-contrast 12 --servo-initial 1520.000,1520.000,1520.000,1520.000 --servo-max-delta 500.000
 ```
 
 可追加到 `dart_app` 的启动参数；相同参数也可填入表中 C++ 配置字段。

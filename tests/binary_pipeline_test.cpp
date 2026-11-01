@@ -210,6 +210,7 @@ public:
             channel.horizontal_us_per_pixel = i % 2 == 0 ? 1.0F : -1.0F;
             channel.vertical_us_per_pixel = i < 2 ? 2.0F : -2.0F;
         }
+        args.servo.max_delta_us = 100;
         if (compact)
             args.record_format = recorder::ImageFormat::kDbv;
         else
@@ -230,7 +231,7 @@ public:
             assert(pwm_writes_ >= 1);
             // Tracker retains the sampled acquisition centroid (103,103)
             // inside its deadband. Automatic aim is (160,120).
-            const pwm::Pulses expected{1487, 1611, 1439, 1563};
+            const pwm::Pulses expected{1419, 1543, 1507, 1631};
             for (std::size_t i = 0; i < expected.size(); ++i)
                 assert(std::abs(last_pwm_[i] - expected[i]) < 0.01F);
         }

@@ -42,13 +42,27 @@ public:
         assert(app::recording_config(*parse({"--threshold", "60"}), 640, 480).pbm_threshold == 60);
         assert(parsed->pwm_on && !parsed->aim_explicit && parsed->servo_timeout_ms == 200);
         const auto servo = parse({"--pwm", "on", "--aim", "310.5,235", "--servo-initial",
-            "1510,1520,1530,1540", "--servo-horizontal", "1,-2,0,0.25", "--servo-vertical",
+            "1510,1520,1530,1540", "--servo-max-delta", "200",
+            "--servo-horizontal", "1,-2,0,0.25", "--servo-vertical",
             "-1,0,2,-0.5", "--servo-timeout-ms", "300"});
         assert(servo && servo->aim_explicit && servo->aim.x == 310.5F && servo->aim.y == 235);
         assert(servo->servo.channels[3].initial_pulse_us == 1540);
         assert(servo->servo.channels[1].horizontal_us_per_pixel == -2);
         assert(servo->servo.channels[3].vertical_us_per_pixel == -0.5F);
         assert(servo->servo_timeout_ms == 300);
+        assert(parsed->servo.max_delta_us == 500 && servo->servo.max_delta_us == 200);
+        assert(parse({"--servo-max-delta", "0"})->servo.max_delta_us == 0);
+        assert(parse({"--servo-max-delta", "500.5"})->servo.max_delta_us == 500.5F);
+        assert(parse({"--servo-max-delta", "1000"})->servo.max_delta_us == 1000);
+        assert(parse({"--servo-max-delta", "500", "--servo-initial", "1445,1490,1150,1475"}));
+        for (const auto* bad : {"-1", "nan", "inf", "1e50", "1,2", "2x", ""})
+            assert(!parse({"--servo-max-delta", bad}));
+        assert(!parse({"--servo-max-delta"}));
+        assert(!parse({"--servo-max-delta", "1150"})); // One zero would reach 0 us.
+        assert(!parse({"--servo-initial", "500,1490,1150,1475"}));
+        assert(!parse({"--servo-initial", "2600,1490,1150,1475"})); // Above the PWM period.
+        assert(!parse({"--servo-max-delta", "0", "--servo-initial", "0.0005,1490,1150,1475"}));
+        assert(parse({"--servo-max-delta", "0", "--servo-initial", "3000,1490,1150,1475"}));
         assert(!parse({"--pwm", "off"})->pwm_on);
         for (const auto* bad : {"1,2,3", "1,2,3,4,5", "1,2,3,", "1,,2,3", "nan,0,0,0",
                                 "0,inf,0,0", "0,0,0,1e50", "0,0,0,2x"})
@@ -57,7 +71,7 @@ public:
         assert(!parse({"--aim", "-1,20"}));
         assert(!parse({"--aim", "1,2,3"}));
         assert(!parse({"--servo-timeout-ms", "0"}));
-        assert(!parse({"--servo-initial", "1300,1520,1520,1520"}));
+        assert(parse({"--servo-initial", "1300,1520,1520,1520"})); // Limits follow the new zeros.
         assert(!parse({"--servo-min", "0,1420,1420,1420"}));
         assert(!parse({"--servo-max", "3100,1620,1620,1620"}));
         assert(app::recording_config(*parsed, 640, 480).max_storage_bytes == 2'000'000'000);

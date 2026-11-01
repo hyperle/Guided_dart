@@ -15,11 +15,12 @@ public:
         assert(OdrConsumer::check());
         control::ServoMapping::Config config{};
         config.channels = {{
-            {1510.0F, 1400.0F, 1640.0F, 1.0F, 0.5F},
-            {1520.0F, 1400.0F, 1640.0F, -2.0F, 1.0F},
-            {1530.0F, 1400.0F, 1640.0F, 3.0F, -1.5F},
-            {1540.0F, 1400.0F, 1640.0F, -4.0F, -2.0F},
+            {1510.0F, 1.0F, 0.5F},
+            {1520.0F, -2.0F, 1.0F},
+            {1530.0F, 3.0F, -1.5F},
+            {1540.0F, -4.0F, -2.0F},
         }};
+        config.max_delta_us = 120.0F;
         const control::ServoMapping mapping{config};
         assert(mapping.valid_config());
         const auto initial = mapping.pulses();
@@ -41,10 +42,10 @@ public:
         assert(horizontal->source == detection::TargetKind::kArmor);
         assert(vertical->source == detection::TargetKind::kArmor);
         assert((horizontal->delta_us == Values{20.0F, -40.0F, 60.0F, -80.0F}));
-        assert((vertical->delta_us == Values{10.0F, 20.0F, -30.0F, -40.0F}));
+        assert((vertical->delta_us == Values{-10.0F, -20.0F, 30.0F, 40.0F}));
         const auto output = mapping.pulses(horizontal->delta_us, vertical->delta_us);
         assert(output);
-        assert((output->pulse_us == Values{1540.0F, 1500.0F, 1560.0F, 1420.0F}));
+        assert((output->pulse_us == Values{1520.0F, 1460.0F, 1620.0F, 1500.0F}));
         assert(output->saturated == Flags{});
         // Identical observations produce offsets, without integrating every call.
         assert(
@@ -54,7 +55,7 @@ public:
         assert((mapping.horizontal_increment(armor, light, preset)->delta_us
                 == Values{-20.0F, 40.0F, -60.0F, 80.0F}));
         assert((mapping.vertical_increment(armor, light, preset)->delta_us
-                == Values{-10.0F, -20.0F, 30.0F, 40.0F}));
+                == Values{10.0F, 20.0F, -30.0F, -40.0F}));
         armor.center = preset;
         assert(mapping.horizontal_increment(armor, light, preset)->delta_us == Values{});
         assert(mapping.vertical_increment(armor, light, preset)->delta_us == Values{});
@@ -64,7 +65,7 @@ public:
         assert(fallback && fallback->source == detection::TargetKind::kLight);
         assert((fallback->delta_us == Values{10.0F, -20.0F, 30.0F, -40.0F}));
         assert((mapping.vertical_increment(armor, light, preset)->delta_us
-                == Values{-5.0F, -10.0F, 15.0F, 20.0F}));
+                == Values{5.0F, 10.0F, -15.0F, -20.0F}));
         light.valid = false;
         const auto missing = mapping.horizontal_increment(armor, light, preset);
         assert(missing && missing->source == detection::TargetKind::kNone);
@@ -85,10 +86,10 @@ public:
         const auto combined = mapping.pulses(
             Values{200.0F, -200.0F, 0.25F, 100.0F}, Values{-150.0F, 0.0F, 0.25F, 100.0F});
         assert(combined);
-        assert((combined->pulse_us == Values{1560.0F, 1400.0F, 1530.5F, 1640.0F}));
-        assert((combined->delta_us == Values{50.0F, -120.0F, 0.5F, 100.0F}));
+        assert((combined->pulse_us == Values{1560.0F, 1400.0F, 1530.5F, 1660.0F}));
+        assert((combined->delta_us == Values{50.0F, -120.0F, 0.5F, 120.0F}));
         assert((combined->saturated == Flags{false, true, false, true}));
-        const auto boundaries = mapping.pulses(Values{-110.0F, 120.0F, -130.0F, 100.0F});
+        const auto boundaries = mapping.pulses(Values{-120.0F, 120.0F, -120.0F, 120.0F});
         assert(boundaries && boundaries->saturated == Flags{});
 
         const float nan = std::numeric_limits<float>::quiet_NaN();
@@ -118,14 +119,14 @@ public:
 
         for (std::size_t i = 0; i < control::ServoMapping::kChannelCount; ++i) {
             for (const auto bad : std::array<control::ServoMapping::Channel, 8>{{
-                     {nan, 1400.0F, 1640.0F, 1.0F, 1.0F},
-                     {1520.0F, nan, 1640.0F, 1.0F, 1.0F},
-                     {1520.0F, 1400.0F, infinity, 1.0F, 1.0F},
-                     {1520.0F, 0.0F, 1640.0F, 1.0F, 1.0F},
-                     {1399.0F, 1400.0F, 1640.0F, 1.0F, 1.0F},
-                     {1641.0F, 1400.0F, 1640.0F, 1.0F, 1.0F},
-                     {1520.0F, 1400.0F, 1640.0F, infinity, 1.0F},
-                     {1520.0F, 1400.0F, 1640.0F, 1.0F, nan},
+                     {nan, 1.0F, 1.0F},
+                     {infinity, 1.0F, 1.0F},
+                     {0.0F, 1.0F, 1.0F},
+                     {-1.0F, 1.0F, 1.0F},
+                     {119.0F, 1.0F, 1.0F},
+                     {120.0F, 1.0F, 1.0F},
+                     {1520.0F, infinity, 1.0F},
+                     {1520.0F, 1.0F, nan},
                  }}) {
                 auto bad_config = config;
                 bad_config.channels[i] = bad;
@@ -137,6 +138,78 @@ public:
                 assert(!invalid.pulses());
             }
         }
+
+        for (const float limit : {nan, infinity, -infinity, -1.0F}) {
+            auto invalid = config;
+            invalid.max_delta_us = limit;
+            assert(!control::ServoMapping{invalid}.valid_config());
+            assert(!control::ServoMapping{invalid}.pulses());
+        }
+        auto frozen = config;
+        frozen.max_delta_us = 0;
+        const auto held = control::ServoMapping{frozen}.pulses(Values{100, -100, 0, 1});
+        assert(held && held->pulse_us == initial->pulse_us && held->delta_us == Values{});
+        assert((held->saturated == Flags{true, true, false, true}));
+        auto fractional = config;
+        fractional.max_delta_us = 120.5F;
+        const auto rounded = control::ServoMapping{fractional}.pulses(Values{200, -200, 120.5F, -120.5F});
+        assert((rounded && rounded->delta_us == Values{120.5F, -120.5F, 120.5F, -120.5F}));
+        assert((rounded->saturated == Flags{true, true, false, false}));
+
+        // The deployed limit is relative to each independent zero, after adding
+        // both axes. Large opposing axis contributions must cancel first.
+        control::ServoMapping::Config deployed{};
+        deployed.channels = {{{1445, 10, 10}, {1490, -10, 10},
+                              {1150, -10, -10}, {1475, 10, -10}}};
+        assert(deployed.max_delta_us == 500);
+        const control::ServoMapping limited{deployed};
+        armor.valid = true;
+        armor.center = {420, 140};
+        const auto x = limited.horizontal_increment(armor, {}, preset);
+        const auto y = limited.vertical_increment(armor, {}, preset);
+        const auto diagonal = limited.pulses(x->delta_us, y->delta_us);
+        assert((diagonal && diagonal->pulse_us == Values{1445, 990, 1150, 1975}));
+        assert((diagonal->delta_us == Values{0, -500, 0, 500}));
+        assert((diagonal->saturated == Flags{false, true, false, true}));
+        const auto positive = limited.pulses(Values{1000, -1000, -1000, 1000});
+        const auto negative = limited.pulses(Values{-1000, 1000, 1000, -1000});
+        assert((positive && positive->delta_us == Values{500, -500, -500, 500}));
+        assert((negative && negative->delta_us == Values{-500, 500, 500, -500}));
+        deployed.channels[0].initial_pulse_us = 1800;
+        const auto shifted = control::ServoMapping{deployed}.pulses(Values{1000, 0, 0, 0});
+        assert(shifted && shifted->pulse_us[0] == 2300 && shifted->delta_us[0] == 500);
+
+        // Image axes stay independent when the vertical gain signs change.
+        control::ServoMapping::Config axes{};
+        axes.channels = {{{1445, 1, 1}, {1490, -1, 1},
+                          {1150, -1, -1}, {1475, 1, -1}}};
+        axes.max_delta_us = 150;
+        const control::ServoMapping image_axes{axes};
+        armor.center = {340, 240};
+        const auto right = image_axes.horizontal_increment(armor, {}, preset);
+        assert((right && right->delta_us == Values{20, -20, -20, 20}));
+        assert(image_axes.vertical_increment(armor, {}, preset)->delta_us == Values{});
+        armor.center = {320, 260};
+        assert(image_axes.horizontal_increment(armor, {}, preset)->delta_us == Values{});
+        assert((image_axes.vertical_increment(armor, {}, preset)->delta_us
+                == Values{20, 20, -20, -20}));
+        armor.center = {320, 220};
+        assert((image_axes.vertical_increment(armor, {}, preset)->delta_us
+                == Values{-20, -20, 20, 20}));
+        // A custom aim uses target.y - aim.y, rather than a hardcoded 240.
+        armor.center = {100, 100};
+        assert((image_axes.vertical_increment(armor, {}, {100, 80})->delta_us
+                == Values{20, 20, -20, -20}));
+        for (auto& channel : axes.channels)
+            channel.vertical_us_per_pixel = -channel.vertical_us_per_pixel;
+        const control::ServoMapping reversed_vertical{axes};
+        armor.center = {340, 240};
+        assert(reversed_vertical.horizontal_increment(armor, {}, preset)->delta_us
+               == right->delta_us);
+        assert(reversed_vertical.vertical_increment(armor, {}, preset)->delta_us == Values{});
+        armor.center = {320, 260};
+        assert((reversed_vertical.vertical_increment(armor, {}, preset)->delta_us
+                == Values{-20, -20, 20, 20}));
 
         const control::ServoMapping defaults;
         armor.center = {340.0F, 220.0F};

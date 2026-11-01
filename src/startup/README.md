@@ -74,9 +74,8 @@ dart_app [选项]
   --vision on|off  识别开关（默认 on）
   --pwm on|off     纯视觉 PWM 输出（默认 on；vision off 时停用）
   --aim X,Y        全图预设像素（默认实际图像中心）
-  --servo-initial A,B,C,D     四路初始脉宽 µs（默认各 1520）
-  --servo-min A,B,C,D         四路最小脉宽 µs（默认各 1420）
-  --servo-max A,B,C,D         四路最大脉宽 µs（默认各 1620）
+  --servo-initial A,B,C,D     四路初始脉宽 µs（默认 1490,1448,1475,1150）
+  --servo-max-delta N        各路合成增量绝对值上限 µs（默认 500；0 固定初始位置）
   --servo-horizontal A,B,C,D  左右增益 µs/像素（默认各 0）
   --servo-vertical A,B,C,D    上下增益 µs/像素（默认各 0）
   --servo-timeout-ms N       无有效视觉指令时回初始位置（默认 200 ms）

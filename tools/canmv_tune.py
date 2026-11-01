@@ -93,9 +93,10 @@ PRINT_DETECTOR_CPP_CONFIG = True      # 启动时输出可移植的 C++ 配置�
 
 PWM_ENABLED = True
 # 数组顺序固定为 CH1/PWM1/IO61、CH2/PWM2/IO7、CH3/PWM3/IO8、CH4/PWM5/IO59。
-SERVO_INITIAL_US = (1505.0, 1450.0, 1480.0, 1160.0)  # --servo-initial：机械零点，µs    （3n 2n 1n 4n）
-SERVO_MIN_US = (1000.0, 1000.0, 1000.0, 1000.0)      # --servo-min：校验下限，µs
-SERVO_MAX_US = (2000.0, 2000.0, 2000.0, 2000.0)      # --servo-max：校验上限，µs
+SERVO_INITIAL_US = (1445.0, 1490.0, 1150.0, 1475.0)  # --servo-initial：机械零点，µs    （2n 3n 4n 1n）
+SERVO_MIN_US = (500.0, 500.0, 500.0, 500.0)      # 仅脚本零点校验下限，µs
+SERVO_MAX_US = (2500.0, 2500.0, 2500.0, 2500.0)      # 仅脚本零点校验上限，µs
+SERVO_MAX_DELTA_US = 500.0            # --servo-max-delta：导出到原生应用的合成增量限幅
 SERVO_ENABLED = (True, True, True, True)              # 可只启用正在标定的一路
 PWM_FREQUENCY_HZ = 333                # 与 dart::pwm::kFrequencyHz 一致
 SERVO_RETURN_MS = 500                # 停止时输出预设零点的时长，至少 20 ms；按实际回位速度调整
@@ -132,6 +133,8 @@ def _validate():
         raise ValueError("RT-Smart PWM frequency is fixed at 333 Hz")
     if not isinstance(SERVO_RETURN_MS, int) or SERVO_RETURN_MS < 20:
         raise ValueError("SERVO_RETURN_MS: integer >= 20 ms")
+    if not math.isfinite(SERVO_MAX_DELTA_US) or SERVO_MAX_DELTA_US < 0:
+        raise ValueError("SERVO_MAX_DELTA_US: finite and >= 0")
     for values in (SERVO_INITIAL_US, SERVO_MIN_US, SERVO_MAX_US, SERVO_ENABLED):
         if len(values) != 4:
             raise ValueError("Servo arrays must contain CH1..CH4 in order")
@@ -141,6 +144,10 @@ def _validate():
             0 < low <= initial <= high <= 1000000.0 / PWM_FREQUENCY_HZ
         ):
             raise ValueError("CH%d: require 0 < min <= initial <= max <= period (us)" % (i + 1))
+        if (initial - SERVO_MAX_DELTA_US) * 1000 < 1 or (
+            initial + SERVO_MAX_DELTA_US
+        ) * 1000 > 1000000000 // PWM_FREQUENCY_HZ:
+            raise ValueError("CH%d: initial +/- max delta must fit the PWM period" % (i + 1))
     if not isinstance(ACQUIRE_TIMEOUT_MS, int) or not 0 <= ACQUIRE_TIMEOUT_MS <= 1000:
         raise ValueError("ACQUIRE_TIMEOUT_MS: integer 0..1000")
     if MAX_CONSECUTIVE_TIMEOUTS < 1 or STATUS_INTERVAL_MS < 1 or RUN_SECONDS < 0:
@@ -257,9 +264,9 @@ def _print_parameters():
         return ",".join("%.3f" % value for value in values)
 
     print("RT-Smart arguments (zero calibration; vision gains remain zero):")
-    print("--exp %d --threshold %d --min-contrast %g --servo-initial %s --servo-min %s --servo-max %s" % (
-        EXPOSURE_LINES, GRAY_THRESHOLD, DETECTOR_CONFIG.get("workspace.min_contrast", 12.0), csv(SERVO_INITIAL_US),
-        csv(SERVO_MIN_US), csv(SERVO_MAX_US)
+    print("--exp %d --threshold %d --min-contrast %g --servo-initial %s --servo-max-delta %.3f" % (
+        EXPOSURE_LINES, GRAY_THRESHOLD, DETECTOR_CONFIG.get("workspace.min_contrast", 12.0),
+        csv(SERVO_INITIAL_US), SERVO_MAX_DELTA_US
     ))
     print("C++: Controls::mirror = %d; PWM = %d Hz; grayscale candidate threshold = %d" % (
         MIRROR, PWM_FREQUENCY_HZ, GRAY_THRESHOLD

@@ -34,8 +34,10 @@ public:
             return;
         }
         for (const auto& channel : args_.servo.channels) {
-            if (channel.min_pulse_us * 1000.0 < 1.0
-                || channel.max_pulse_us * 1000.0 > pwm::kPeriodNs) {
+            const double zero = channel.initial_pulse_us;
+            const double limit = args_.servo.max_delta_us;
+            if ((zero - limit) * 1000.0 < 1.0
+                || (zero + limit) * 1000.0 > pwm::kPeriodNs) {
                 error({"pulse_range", -1, -1});
                 return;
             }
@@ -62,15 +64,16 @@ public:
         active_ = true;
         log_.line(
             "level=INFO module=servo op=start mode=vision frequency_hz=%u update_ms=10 "
-            "timeout_ms=%u aim=%.3f,%.3f initial_us=%.3f,%.3f,%.3f,%.3f\n",
-            pwm::kFrequencyHz, args_.servo_timeout_ms, aim_.x, aim_.y,
+            "timeout_ms=%u max_delta_us=%.3f aim=%.3f,%.3f initial_us=%.3f,%.3f,%.3f,%.3f "
+            "error_x=target_x-aim_x error_y=target_y-aim_y\n",
+            pwm::kFrequencyHz, args_.servo_timeout_ms, args_.servo.max_delta_us, aim_.x, aim_.y,
             initial->pulse_us[0], initial->pulse_us[1], initial->pulse_us[2], initial->pulse_us[3]);
         for (std::size_t i = 0; i < args_.servo.channels.size(); ++i) {
             const auto& channel = args_.servo.channels[i];
             log_.line(
-                "level=INFO module=servo op=config channel=%u min_us=%.3f max_us=%.3f "
+                "level=INFO module=servo op=config channel=%u initial_us=%.3f max_delta_us=%.3f "
                 "horizontal_us_per_px=%.5g vertical_us_per_px=%.5g\n",
-                static_cast<unsigned>(i + 1), channel.min_pulse_us, channel.max_pulse_us,
+                static_cast<unsigned>(i + 1), channel.initial_pulse_us, args_.servo.max_delta_us,
                 channel.horizontal_us_per_pixel, channel.vertical_us_per_pixel);
         }
     }

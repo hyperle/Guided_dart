@@ -24,6 +24,7 @@ class CalibrationTest(unittest.TestCase):
         self.script.SERVO_INITIAL_US = (1523.0, 1520.0, 1520.0, 1520.0)
         self.script.SERVO_MIN_US = (1420.0,) * 4
         self.script.SERVO_MAX_US = (1620.0,) * 4
+        self.script.SERVO_MAX_DELTA_US = 500.0
         self.script.SERVO_ENABLED = (True,) * 4
         self.script.DETECTION_ENABLED = False
         self.events = []
@@ -211,6 +212,21 @@ class CalibrationTest(unittest.TestCase):
             self.run_script()
         self.assertFalse(self.pwms)
         self.assertFalse(any(item[0] == "camera_open" for item in self.events))
+
+    def test_export_uses_one_increment_limit(self):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.script._print_parameters()
+        tokens = output.getvalue().split()
+        self.assertIn("--servo-max-delta", tokens)
+        self.assertEqual(tokens[tokens.index("--servo-max-delta") + 1], "500.000")
+        self.assertNotIn("--servo-min", tokens)
+        self.assertNotIn("--servo-max", tokens)
+        for invalid in (-1, float("nan"), float("inf"), 1600):
+            with self.subTest(limit=invalid):
+                self.script.SERVO_MAX_DELTA_US = invalid
+                with self.assertRaises(ValueError):
+                    self.script._validate()
 
     def test_black_frame_is_valid_and_interrupt_closes_all_outputs(self):
         self.run_script()

@@ -20,15 +20,18 @@ public:
     // CH1..CH4 correspond to PWM1/2/3/5 on the tested Dart V1 board.
     struct Channel {
         float initial_pulse_us = 1520.0F;
-        float min_pulse_us = 1420.0F;
-        float max_pulse_us = 1620.0F;
         // UNVALIDATED: zero disables that axis until its signed gain is set.
         float horizontal_us_per_pixel = 0.0F;
         float vertical_us_per_pixel = 0.0F;
     };
 
     struct Config {
-        std::array<Channel, kChannelCount> channels{};
+        // Mechanical zeros calibrated in tools/canmv_tune.py (CH1..CH4).
+        std::array<Channel, kChannelCount> channels{{
+            {1490.0F}, {1448.0F}, {1475.0F}, {1150.0F},
+        }};
+        // One symmetric limit for each channel's combined offset from zero.
+        float max_delta_us = 500.0F;
     };
 
     enum class Error { kInvalidConfig, kInvalidCoordinate, kInvalidIncrement };
@@ -48,7 +51,7 @@ public:
     explicit ServoMapping(const Config& config) noexcept;
     bool valid_config() const noexcept;
 
-    // Image coordinates: x right, y down. Positive requests mean right/up.
+    // Image coordinates: x right, y down. Errors are target minus preset.
     std::expected<Increment, Error> horizontal_increment(
         const detection::Target& armor, const detection::Target& light,
         detection::Point preset) const noexcept;
@@ -75,13 +78,13 @@ ServoMapping::ServoMapping() noexcept : ServoMapping(Config{}) {}
 ServoMapping::ServoMapping(const Config& config) noexcept : config_(config) {}
 
 bool ServoMapping::valid_config() const noexcept {
+    if (!std::isfinite(config_.max_delta_us) || config_.max_delta_us < 0.0F)
+        return false;
     for (const auto& channel : config_.channels) {
-        if (!std::isfinite(channel.initial_pulse_us) || !std::isfinite(channel.min_pulse_us)
-            || !std::isfinite(channel.max_pulse_us)
+        if (!std::isfinite(channel.initial_pulse_us)
             || !std::isfinite(channel.horizontal_us_per_pixel)
-            || !std::isfinite(channel.vertical_us_per_pixel) || channel.min_pulse_us <= 0.0F
-            || channel.min_pulse_us > channel.initial_pulse_us
-            || channel.initial_pulse_us > channel.max_pulse_us)
+            || !std::isfinite(channel.vertical_us_per_pixel)
+            || channel.initial_pulse_us <= config_.max_delta_us)
             return false;
     }
     return true;
@@ -118,7 +121,7 @@ std::expected<ServoMapping::Increment, ServoMapping::Error> ServoMapping::increm
     result.source = armor.valid ? detection::TargetKind::kArmor : detection::TargetKind::kLight;
 
     const double error_px = horizontal ? static_cast<double>(target->center.x) - preset.x
-                                       : static_cast<double>(preset.y) - target->center.y;
+                                       : static_cast<double>(target->center.y) - preset.y;
     for (std::size_t i = 0; i < kChannelCount; ++i) {
         const auto& channel = config_.channels[i];
         const double gain = horizontal ? channel.horizontal_us_per_pixel
@@ -141,12 +144,11 @@ std::expected<ServoMapping::Output, ServoMapping::Error> ServoMapping::pulses(
         if (!std::isfinite(horizontal_delta_us[i]) || !std::isfinite(vertical_delta_us[i]))
             return std::unexpected(Error::kInvalidIncrement);
         const auto& channel = config_.channels[i];
-        const double requested = static_cast<double>(channel.initial_pulse_us)
-                               + horizontal_delta_us[i] + vertical_delta_us[i];
-        const double bounded = std::clamp(
-            requested, static_cast<double>(channel.min_pulse_us),
-            static_cast<double>(channel.max_pulse_us));
-        result.pulse_us[i] = static_cast<float>(bounded);
+        const double requested = static_cast<double>(horizontal_delta_us[i])
+                               + vertical_delta_us[i];
+        const double limit = config_.max_delta_us;
+        const double bounded = std::clamp(requested, -limit, limit);
+        result.pulse_us[i] = static_cast<float>(channel.initial_pulse_us + bounded);
         result.delta_us[i] = result.pulse_us[i] - channel.initial_pulse_us;
         result.saturated[i] = requested != bounded;
     }

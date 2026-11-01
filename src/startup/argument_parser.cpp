@@ -126,9 +126,8 @@ void usage(const char* argv0) {
     std::printf("  --vision on|off  识别开关（默认 on）\n");
     std::printf("  --pwm on|off     纯视觉四路舵机输出（默认 on；vision off 时停用）\n");
     std::printf("  --aim X,Y        全图预设像素坐标（默认实际图像中心）\n");
-    std::printf("  --servo-initial A,B,C,D  四路初始脉宽 µs（默认各 1520）\n");
-    std::printf("  --servo-min A,B,C,D      四路最小脉宽 µs（默认各 1420）\n");
-    std::printf("  --servo-max A,B,C,D      四路最大脉宽 µs（默认各 1620）\n");
+    std::printf("  --servo-initial A,B,C,D  四路初始脉宽 µs（默认 1490,1448,1475,1150）\n");
+    std::printf("  --servo-max-delta N     各路合成增量绝对值上限 µs（默认 500；0 保持初始位置）\n");
     std::printf("  --servo-horizontal A,B,C,D  左右增益 µs/像素（默认各 0）\n");
     std::printf("  --servo-vertical A,B,C,D    上下增益 µs/像素（默认各 0）\n");
     std::printf("  --servo-timeout-ms N  视觉数据超时回初始位置（默认 200，须大于 0）\n");
@@ -179,8 +178,17 @@ export std::expected<Arguments, int> parse_args(int argc, char* argv[]) {
             return std::unexpected<int>(0);
         }
         std::string_view value;
-        if (a == "--aim" || a == "--servo-initial" || a == "--servo-min"
-            || a == "--servo-max" || a == "--servo-horizontal" || a == "--servo-vertical") {
+        if (a == "--servo-max-delta") {
+            std::array<float, 1> number{};
+            if (!need_value(value) || !parse_floats(value, number) || number[0] < 0.0F) {
+                std::fprintf(stderr, "%s: --servo-max-delta 需要非负有限数值（µs）\n", argv[0]);
+                return std::unexpected<int>(2);
+            }
+            args.servo.max_delta_us = number[0];
+            continue;
+        }
+        if (a == "--aim" || a == "--servo-initial"
+            || a == "--servo-horizontal" || a == "--servo-vertical") {
             std::array<float, 4> numbers{};
             std::array<float, 2> point{};
             if (!need_value(value)
@@ -196,8 +204,6 @@ export std::expected<Arguments, int> parse_args(int argc, char* argv[]) {
                 for (std::size_t channel = 0; channel < numbers.size(); ++channel) {
                     auto& config = args.servo.channels[channel];
                     if (a == "--servo-initial") config.initial_pulse_us = numbers[channel];
-                    else if (a == "--servo-min") config.min_pulse_us = numbers[channel];
-                    else if (a == "--servo-max") config.max_pulse_us = numbers[channel];
                     else if (a == "--servo-horizontal") config.horizontal_us_per_pixel = numbers[channel];
                     else config.vertical_us_per_pixel = numbers[channel];
                 }
@@ -391,13 +397,21 @@ export std::expected<Arguments, int> parse_args(int argc, char* argv[]) {
     }
 
     if (!control::ServoMapping{args.servo}.valid_config() || args.servo_timeout_ms == 0) {
-        std::fprintf(stderr, "%s: 舵机配置需要 0 < min <= initial <= max，超时须大于 0\n", argv[0]);
+        std::fprintf(stderr, "%s: 舵机增量上限须非负，初始脉宽须大于增量上限，超时须大于 0\n", argv[0]);
+        for (std::size_t i = 0; i < args.servo.channels.size(); ++i) {
+            const auto& channel = args.servo.channels[i];
+            if (channel.initial_pulse_us <= args.servo.max_delta_us)
+                std::fprintf(stderr, "%s: CH%zu initial_us=%.3f max_delta_us=%.3f\n",
+                             argv[0], i + 1, channel.initial_pulse_us, args.servo.max_delta_us);
+        }
         return std::unexpected<int>(2);
     }
     for (const auto& channel : args.servo.channels) {
-        if (static_cast<double>(channel.min_pulse_us) * 1000.0 < 1.0
-            || static_cast<double>(channel.max_pulse_us) * 1000.0 > pwm::kPeriodNs) {
-            std::fprintf(stderr, "%s: 舵机脉宽必须在 1 ns 到 333 Hz 周期范围内\n", argv[0]);
+        const double initial = channel.initial_pulse_us;
+        const double limit = args.servo.max_delta_us;
+        if ((initial - limit) * 1000.0 < 1.0
+            || (initial + limit) * 1000.0 > pwm::kPeriodNs) {
+            std::fprintf(stderr, "%s: 初始脉宽 ± 增量上限必须在 1 ns 到 333 Hz 周期范围内\n", argv[0]);
             return std::unexpected<int>(2);
         }
     }
