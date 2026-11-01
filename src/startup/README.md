@@ -83,7 +83,7 @@ dart_app [选项]
   --record on|off  录像开关（默认 on）
   --rec-keep N     只保留最近 N 轮录像，0 = 不清理（默认 0）
   --rec-fps N      目标录像帧率，按时间采样（默认 60 FPS）
-  --rec-format F   pgm（灰度，默认）| png（灰度）| dbv / pbm（二值）
+  --rec-format F   pgm（灰度，默认）| png（8 位灰度）| dbv / pbm（二值）
   --rec-dir DIR    录像根目录（默认 /data/app/records）
   --det-csv PATH   识别结果 CSV；off 关闭（默认关闭）
   --threshold N    灰度候选阈值 0..255（默认 50），不改变相机灰度图

@@ -1,5 +1,5 @@
-/sdcard/app/dart_app --exp 400 --vision on --pwm on --record on --rec-fps 60 --rec-keep 0 --rec-format pgm --raw-layout packed10-lsb --threshold 50 --rec-dir /data/app/records --det-csv /data/app/records/detection.csv --log /data/app/logs/dart_app.log &
-
+# /sdcard/app/dart_app --exp 800 --vision off --pwm off --record on --rec-fps 30 --rec-format png --raw-layout packed10-lsb --threshold 50 --rec-dir /data/app/records --det-csv /data/app/records/detection.csv --log /data/app/logs/dart_app.log &
+/sdcard/app/dart_app --exp 1200 --record on --rec-format png --rec-fps 15 --vision off --pwm off --log /data/app/logs/png30.log &
 # ============================================================================
 # launcher 开机自启动清单 —— 本文件是**源码母版**（runtime/launcher/startup.list）
 #

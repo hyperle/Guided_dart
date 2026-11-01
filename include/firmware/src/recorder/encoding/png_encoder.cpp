@@ -11,7 +11,7 @@
 
 namespace dart::recorder {
 
-// One grayscale bit per pixel, filter None, fast DEFLATE. All working memory
+// One grayscale byte per pixel, filter None, fast DEFLATE. All working memory
 // and the compressor state are allocated once, outside the capture loop.
 class PngEncoder final {
 public:
@@ -19,15 +19,16 @@ public:
         if (initialized_)
             (void)::deflateEnd(&stream_);
     }
-    bool prepare(std::uint32_t width, std::uint32_t height, std::uint8_t threshold) noexcept {
+    bool prepare(std::uint32_t width, std::uint32_t height) noexcept {
         if (initialized_)
             (void)::deflateEnd(&stream_);
         stream_ = {};
         initialized_ = false;
         width_ = width;
         height_ = height;
-        threshold_ = threshold;
-        row_bytes_ = (static_cast<std::size_t>(width) + 7U) / 8U + 1U;
+        if (width == 0 || height == 0)
+            return false;
+        row_bytes_ = static_cast<std::size_t>(width) + 1U; // filter byte + grayscale row
         raw_bytes_ = row_bytes_ * height;
         if (::deflateInit2(&stream_, Z_BEST_SPEED, Z_DEFLATED, 15, 8, Z_DEFAULT_STRATEGY) != Z_OK)
             return false;
@@ -54,7 +55,6 @@ private:
     z_stream stream_{};
     bool initialized_ = false;
     std::uint32_t width_ = 0, height_ = 0;
-    std::uint8_t threshold_ = 128;
     std::size_t row_bytes_ = 0, raw_bytes_ = 0, capacity_ = 0;
     std::unique_ptr<std::uint8_t[]> raw_, png_;
 };
@@ -64,23 +64,9 @@ inline std::span<const std::byte> PngEncoder::encode(std::span<const std::byte> 
         return {};
     const auto* gray = reinterpret_cast<const std::uint8_t*>(pixels.data());
     for (std::uint32_t y = 0; y < height_; ++y) {
-        const auto* row = gray + static_cast<std::size_t>(y) * width_;
         auto* out = raw_.get() + static_cast<std::size_t>(y) * row_bytes_;
-        *out++ = 0;                     // PNG filter None. In grayscale PNG, bit 1 means white.
-        std::uint32_t x = 0;
-        for (; x + 8U <= width_; x += 8U) {
-            *out++ = static_cast<std::uint8_t>(
-                ((row[x] >= threshold_) << 7U) | ((row[x + 1] >= threshold_) << 6U)
-                | ((row[x + 2] >= threshold_) << 5U) | ((row[x + 3] >= threshold_) << 4U)
-                | ((row[x + 4] >= threshold_) << 3U) | ((row[x + 5] >= threshold_) << 2U)
-                | ((row[x + 6] >= threshold_) << 1U) | (row[x + 7] >= threshold_));
-        }
-        if (x < width_) {
-            std::uint8_t tail = 0;
-            for (unsigned bit = 0; x < width_; ++x, ++bit)
-                tail |= static_cast<std::uint8_t>((row[x] >= threshold_) << (7U - bit));
-            *out = tail;
-        }
+        *out++ = 0; // PNG filter None.
+        std::memcpy(out, gray + static_cast<std::size_t>(y) * width_, width_);
     }
     if (::deflateReset(&stream_) != Z_OK)
         return {};
@@ -94,7 +80,7 @@ inline std::span<const std::byte> PngEncoder::encode(std::span<const std::byte> 
     std::memcpy(png_.get(), "\x89PNG\r\n\x1a\n", 8);
     big_endian(png_.get() + 16, width_);
     big_endian(png_.get() + 20, height_);
-    png_[24] = 1;                       // bit depth
+    png_[24] = 8;                       // bit depth
     std::memset(png_.get() + 25, 0, 4); // grayscale, DEFLATE, filters, no interlace
     chunk(png_.get() + 8, "IHDR", 13);
     chunk(png_.get() + 33, "IDAT", compressed);

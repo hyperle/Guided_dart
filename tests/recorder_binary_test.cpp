@@ -104,7 +104,7 @@ class RecorderBinaryTest final {
         recorder::BinaryDecoder decoder;
         recorder::PngEncoder png;
         assert(encoder.prepare(640, 480, 128) && decoder.prepare(640, 480));
-        assert(png.prepare(640, 480, 128));
+        assert(png.prepare(640, 480));
         std::vector<std::byte> background(640 * 480), pixels;
         std::uint32_t random = 0x12345678;
         for (auto& pixel : background) {

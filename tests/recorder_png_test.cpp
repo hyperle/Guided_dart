@@ -29,9 +29,9 @@ extern "C" int __wrap_fsync(int fd) {
 class RecorderPngTest final {
     static void decode(
         std::span<const std::byte> png, std::span<const std::byte> pixels, unsigned width,
-        unsigned height, unsigned threshold) {
+        unsigned height) {
         // Independent libpng decoder checks the container, DEFLATE, CRCs,
-        // grayscale polarity, row padding and every pixel.
+        // 8-bit grayscale values, row padding and every pixel.
         png_image image{};
         image.version = PNG_IMAGE_VERSION;
         assert(png_image_begin_read_from_memory(&image, png.data(), png.size()));
@@ -40,7 +40,7 @@ class RecorderPngTest final {
         std::vector<unsigned char> decoded(PNG_IMAGE_SIZE(image));
         assert(png_image_finish_read(&image, nullptr, decoded.data(), 0, nullptr));
         for (std::size_t i = 0; i < pixels.size(); ++i)
-            assert(decoded[i] == (std::to_integer<unsigned>(pixels[i]) >= threshold ? 255 : 0));
+            assert(decoded[i] == std::to_integer<unsigned>(pixels[i]));
         png_image_free(&image);
     }
     static std::vector<std::byte> read(const std::filesystem::path& path) {
@@ -53,19 +53,17 @@ class RecorderPngTest final {
     }
     static void encoder() {
         for (const unsigned width : {1U, 7U, 8U, 9U, 17U, 640U}) {
-            for (const unsigned threshold : {0U, 1U, 128U, 255U}) {
-                recorder::PngEncoder png;
-                assert(png.prepare(width, 7, threshold));
-                std::vector<std::byte> pixels(width * 7);
-                for (unsigned frame = 0; frame < 3; ++frame) {
-                    for (std::size_t i = 0; i < pixels.size(); ++i)
-                        pixels[i] = std::byte((i * 73 + frame * 127) & 255);
-                    decode(png.encode(pixels), pixels, width, 7, threshold);
-                }
+            recorder::PngEncoder png;
+            assert(png.prepare(width, 7));
+            std::vector<std::byte> pixels(width * 7);
+            for (unsigned frame = 0; frame < 3; ++frame) {
+                for (std::size_t i = 0; i < pixels.size(); ++i)
+                    pixels[i] = std::byte((i * 73 + frame * 127) & 255);
+                decode(png.encode(pixels), pixels, width, 7);
             }
         }
         recorder::PngEncoder png;
-        assert(png.prepare(640, 480, 128));
+        assert(png.prepare(640, 480));
         std::vector<std::byte> pixels(640 * 480);
         for (unsigned pattern = 0; pattern < 3; ++pattern) {
             std::uint32_t random = 0x12345678;
@@ -87,8 +85,8 @@ class RecorderPngTest final {
                                 std::chrono::steady_clock::now() - begin)
                                 .count()
                           / 100;
-            assert(!encoded.empty() && encoded.size() < 40'000);
-            decode(encoded, pixels, 640, 480, 128);
+            assert(!encoded.empty() && encoded.size() < pixels.size());
+            decode(encoded, pixels, 640, 480);
             std::printf(
                 "PNG pattern=%u bytes=%zu encode_us=%lld\n", pattern, encoded.size(),
                 static_cast<long long>(us));
@@ -110,7 +108,7 @@ class RecorderPngTest final {
         for (std::size_t i = 0; i < patterned.size(); ++i)
             patterned[i] = ((i * 71U + i / 640) % 251) < 128 ? std::byte{255} : std::byte{0};
         recorder::PngEncoder encoder;
-        assert(encoder.prepare(640, 480, 128));
+        assert(encoder.prepare(640, 480));
         const auto first_size = encoder.encode(black).size();
         const auto second_size = encoder.encode(patterned).size();
         assert(first_size != second_size);
@@ -180,7 +178,7 @@ class RecorderPngTest final {
             assert(event.file_offset == 0);
             const auto path = std::filesystem::path{rec.directory()} / event.image_name.data();
             assert(std::filesystem::file_size(path) == event.file_bytes);
-            decode(read(path), event.image_index == 1 ? black : patterned, 640, 480, 128);
+            decode(read(path), event.image_index == 1 ? black : patterned, 640, 480);
         }
         for (const auto& file : std::filesystem::recursive_directory_iterator(rec.directory())) {
             assert(file.path().extension() != ".tmp");

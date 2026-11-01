@@ -11,7 +11,7 @@ Y8，后台线程默认写入灰度 PGM 连续流，也支持独立灰度 PNG �
 8 位灰度。显式选择 `--rec-format dbv|pbm` 时，录像器按 `--threshold` 生成二值副本，
 该副本不反馈给识别器，也无法在回放时恢复灰度。DBV 的无损指打包后的二值位图。
 灰度 PGM 在 640×480 下每帧约 307 KB，60 FPS 时约 18.4 MB/s，500 MB 上限约容纳
-27 秒；实际保存速度与时长取决于输入和写盘。可用 PNG 减少体积，其压缩耗时需上板测量。
+27 秒；实际保存速度与时长取决于输入和写盘。可用 8 位灰度 PNG 减少体积，其压缩耗时需上板测量。
 
 ## 类与消费方式
 
@@ -30,7 +30,7 @@ INTERFACE 目标取得相机 C 数据面、线程和 zlib 依赖。类外方法�
 | `encoding/binary_format.cpp` | `BinaryFormat`，DBV1 文件头、变长记录前缀与边界检查 |
 | `encoding/binary_encoder.cpp` | `BinaryEncoder`，1-bit 打包、完整帧/差分/稀疏差分自适应压缩 |
 | `encoding/binary_decoder.cpp` | `BinaryDecoder`，按记录还原位图，供播放器和回归使用 |
-| `encoding/png_encoder.cpp` | `PngEncoder`，1-bit 灰度打包、快速 DEFLATE 和 PNG 封装 |
+| `encoding/png_encoder.cpp` | `PngEncoder`，8-bit 灰度、快速 DEFLATE 和 PNG 封装 |
 | `storage/event_writer.cpp` | `EventWriter`，事件 CSV、缓冲与刷新 |
 | `error.cpp` | `RecorderError`，错误状态、系统错误码与路径 |
 | `config.cpp` | 录像配置、事件与事件回调的共享契约 |
@@ -128,7 +128,7 @@ logs/frames.csv
 缺失 CSV 时仍可从文件头和记录结构重建图片索引，但无法恢复源帧时间及检测对应关系。
 编码缓冲和 zlib 状态一次分配后复用，内存不随录像增长。
 
-PNG 兼容模式保持原有 1-bit、level 1、每 32 张分组和逐图关闭行为。
+PNG 使用 8-bit 灰度、level 1、每 32 张分组和逐图关闭行为，旧 1-bit PNG 仍可回放。
 
 `Config::max_file_bytes` 默认且最多为 **500 MB = 500,000,000 字节**，PNG 模式按
 **本轮所有 PNG 文件实际大小的总和**计算，包括 PNG 头和压缩数据，不包含 CSV/目录分配开销。

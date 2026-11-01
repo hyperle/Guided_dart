@@ -30,7 +30,7 @@ public:
     bool prepare(std::size_t frame_bytes) noexcept {
         frame_bytes_ = frame_bytes;
         if (config_.image_format == ImageFormat::kPng)
-            return png_.prepare(config_.width, config_.height, config_.pbm_threshold);
+            return png_.prepare(config_.width, config_.height);
         if (config_.image_format == ImageFormat::kDbv) {
             file_buffer_.reset(new (std::nothrow) char[kFileBufferBytes]);
             return file_buffer_
