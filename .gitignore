@@ -25,3 +25,7 @@ records/
 docs/*.md
 # 板子地址等本地配置（脚本短命令读取，不入库）
 .script/board.env
+
+# Native Wi-Fi host receiver build and local credentials/output
+/tools/wifi_receiver/target/
+/tools/wifi_receiver/output/

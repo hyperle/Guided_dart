@@ -46,7 +46,7 @@
 | [`include/firmware/src/pwm/`](include/firmware/src/pwm/README.md) | 四路 PWM 接口、独立输出任务与 K230 引脚适配 | `dart_pwm` |
 | `include/firmware/src/{board,system,logging,storage}/` | 板级组装、进程资源、日志与目录操作 | `dart_board` / `dart_platform` |
 | `.script/` | 构建、部署、板端清理和相机回归检查；`install-rtos` 可注册短命令 | — |
-| [`tools/`](tools/README.md) | 主机播放器、IMU 日志工具与独立 RAW 相机诊断探针 | 独立构建的工具 |
+| [`tools/`](tools/README.md) | Rust Wi-Fi 接收/视频编码、主机播放器、IMU 日志工具与独立 RAW 相机诊断探针 | 独立构建的工具 |
 
 `dart_entry.cpp` 将板级工厂注入 `startup/run.cpp`，启动流程调用视觉、录像与诊断模块；
 设备初始化和系统资源操作由 `include/` 的实现承担。可选 IMU 采样已独立运行，
