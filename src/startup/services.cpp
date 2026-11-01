@@ -24,9 +24,10 @@ int run_services(
     platform::PwmFactory pwm_factory = nullptr) noexcept {
     log.line(
         "level=INFO module=app op=start version=4 exposure=fixed exp_lines=%u "
-        "vision=%d pwm=%d record=%d record_auto=%d rec_fps=%u rec_keep=%u seconds=%u imu=%d "
+        "vision=%d pwm=%d record=%d record_auto=%d rec_fps=%u rec_timeout_ms=%u rec_keep=%u seconds=%u imu=%d "
         "capture=mcm_raw10 output=gray8 raw_layout=%u threshold=%u\n",
-        args.exposure_lines, args.vision_on, args.pwm_on, args.record_on, args.record_auto, args.record_fps, args.record_keep,
+        args.exposure_lines, args.vision_on, args.pwm_on, args.record_on, args.record_auto,
+        args.record_fps, args.record_timeout_ms, args.record_keep,
         args.seconds, imu_session != nullptr, static_cast<unsigned>(args.raw10_layout),
         args.threshold);
     camera::Controls controls{};

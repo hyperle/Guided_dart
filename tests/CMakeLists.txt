@@ -37,6 +37,13 @@ target_compile_options(recorder_storage_test PRIVATE -Werror -UNDEBUG)
 target_link_options(recorder_storage_test PRIVATE -Wl,--wrap=statvfs -Wl,--wrap=fsync)
 add_test(NAME recorder_storage COMMAND recorder_storage_test)
 
+add_executable(recorder_timeout_test recorder_timeout_test.cpp)
+target_link_libraries(recorder_timeout_test PRIVATE dart_recording)
+target_compile_options(recorder_timeout_test PRIVATE -Werror -UNDEBUG)
+target_link_options(recorder_timeout_test PRIVATE -Wl,--wrap=fsync)
+add_test(NAME recorder_timeout COMMAND recorder_timeout_test)
+set_tests_properties(recorder_timeout PROPERTIES TIMEOUT 20)
+
 find_package(PNG REQUIRED)
 add_executable(recorder_png_test recorder_png_test.cpp)
 target_link_libraries(recorder_png_test PRIVATE dart_recording PNG::PNG)

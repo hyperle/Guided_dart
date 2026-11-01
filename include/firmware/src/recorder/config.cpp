@@ -16,6 +16,7 @@ enum class EventDecision : std::uint8_t {
     kBusy,
     kStopped,
     kInvalidFrame,
+    kTimedOut,
 };
 
 class FrameEvent {
@@ -48,6 +49,9 @@ public:
     /* Target images per second, sampled using the monotonic receipt timestamp.
      * Checked before queue availability; busy slots still drop without waiting. */
     std::uint32_t fps = 60;
+    /* Discard copied frames that wait this long before the writer starts them.
+     * Zero uses one target frame period (16,667 us at 60 FPS). */
+    std::chrono::milliseconds frame_timeout{0};
     /* Total image bytes per session, including headers. Smaller caps are useful for
      * short runs; the 500 MB ceiling cannot be disabled or raised. */
     std::uint64_t max_file_bytes = kMaxFileBytes;

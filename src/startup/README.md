@@ -43,7 +43,7 @@ camera->acquire(timeout) -> FrameLease（独立的 0..255 灰度 Y8 缓冲）
   -> servo.observe(result)             装甲板优先/灯回退 -> 两轴增量 -> 合成限幅
         PWM Session                   独立输出任务；过期或无目标回各路初始脉宽
   -> recorder.try_submit(std::move(lease))
-        kAccepted     -> 已拷贝到固定队列；录像线程默认写灰度 PGM，可选灰度 PNG / 二值 DBV、PBM
+        kAccepted     -> 已拷贝到固定队列；写线程丢弃超时帧，其余写灰度 PGM / PNG 或二值 DBV / PBM
         其他          -> 采集线程自己 release()
   -> recorder.drain_releases()          提交前后调用：已拷贝帧的租约在采集线程释放，
                                         保证相机 ACL 的调用始终串行
@@ -82,6 +82,7 @@ dart_app [选项]
   --record on|off  录像开关（默认 on）
   --rec-keep N     只保留最近 N 轮录像，0 = 不清理（默认 0）
   --rec-fps N      目标录像帧率，按时间采样（默认 60 FPS）
+  --rec-timeout-ms N  待写帧超时丢弃，0 = 一帧周期（默认 0，60 FPS 时约 16.7 ms）
   --rec-format F   pgm（灰度，默认）| png（灰度）| dbv / pbm（二值）
   --rec-dir DIR    录像根目录（默认 /data/app/records）
   --det-csv PATH   识别结果 CSV；off 关闭（默认关闭）
@@ -160,7 +161,7 @@ SPI 时钟 1 MHz、超时 20 ms、1 kHz ODR/轮询、±16 g / ±2000 °/s 与零
 ```
 ts_ms=... level=INFO module=app op=status elapsed_s=10 frames=298 fps=29.8 no_frame=2
   lease_exhausted=0 target=37 detect_err=0 rec_input=298 rec_acc=75 rec_down=223 rec_busy=0
-  rec_queued=1 rec_pending=0 rec_written=74 rec_event_dropped=0 release_err=0 run_hw=512
+  rec_timed_out=0 rec_queued=1 rec_pending=0 rec_written=74 rec_event_dropped=0 release_err=0 run_hw=512
 ```
 
 ## 退出契约

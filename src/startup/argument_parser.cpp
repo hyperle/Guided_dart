@@ -35,6 +35,7 @@ public:
     std::uint32_t record_trigger_ms = 0;
     std::uint32_t record_duration_ms = 0;
     std::uint32_t record_fps = recorder::Config{}.fps;
+    std::uint32_t record_timeout_ms = 0;
     std::uint32_t record_keep = 0;
     recorder::ImageFormat record_format = recorder::ImageFormat::kPgm;
     camera::Raw10Layout raw10_layout = camera::Raw10Layout::kPackedLsb;
@@ -137,6 +138,7 @@ void usage(const char* argv0) {
     std::printf("  --rec-duration-ms N    触发后录像时长，0 = 持续请求（默认 0）\n");
     std::printf(
         "  --rec-fps N      目标录像帧率，按时间采样（默认 %u FPS）\n", recorder::Config{}.fps);
+    std::printf("  --rec-timeout-ms N  待写帧超时丢弃，0 = 一帧周期（默认 0，最大 60000）\n");
     std::printf("  --rec-keep N     只保留最近 N 轮录像，0 = 不清理（默认 0）\n");
     std::printf("  --rec-format F   pgm（灰度，默认）| png（灰度）| dbv / pbm（二值）\n");
     std::printf(
@@ -238,7 +240,8 @@ export std::expected<Arguments, int> parse_args(int argc, char* argv[]) {
             args.min_contrast = number[0];
             continue;
         }
-        if (a == "--seconds" || a == "--exp" || a == "--rec-fps" || a == "--rec-keep"
+        if (a == "--seconds" || a == "--exp" || a == "--rec-fps" || a == "--rec-timeout-ms"
+            || a == "--rec-keep"
             || a == "--threshold" || a == "--status-ms" || a == "--acquire-ms"
             || a == "--max-acquire-errors" || a == "--rec-trigger-accel"
             || a == "--rec-trigger-ms" || a == "--rec-duration-ms" || a == "--servo-timeout-ms") {
@@ -267,6 +270,12 @@ export std::expected<Arguments, int> parse_args(int argc, char* argv[]) {
                 args.seconds = static_cast<std::uint32_t>(n);
             else if (a == "--exp") {
                 args.exposure_lines = static_cast<std::uint32_t>(n);
+            } else if (a == "--rec-timeout-ms") {
+                if (n > 60'000) {
+                    std::fprintf(stderr, "%s: --rec-timeout-ms 必须在 0..60000\n", argv[0]);
+                    return std::unexpected<int>(2);
+                }
+                args.record_timeout_ms = static_cast<std::uint32_t>(n);
             } else if (a == "--rec-fps") {
                 if (n == 0 || n > 1000000) {
                     std::fprintf(stderr, "%s: --rec-fps 必须在 1..1000000\n", argv[0]);

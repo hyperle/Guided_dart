@@ -161,7 +161,7 @@ public:
                     "level=INFO module=app op=status elapsed_s=%lld frames=%llu "
                     "fps=%.1f no_frame=%llu lease_exhausted=%llu target=%llu "
                     "detect_err=%llu rec_input=%llu rec_acc=%llu rec_down=%llu "
-                    "rec_busy=%llu rec_queued=%u rec_pending=%u rec_written=%llu "
+                    "rec_busy=%llu rec_timed_out=%llu rec_queued=%u rec_pending=%u rec_written=%llu "
                     "rec_event_dropped=%llu release_err=%llu run_hw=%u\n",
                     static_cast<long long>(elapsed_ms / 1000),
                     static_cast<unsigned long long>(counters.frames),
@@ -175,7 +175,8 @@ public:
                     static_cast<unsigned long long>(stats.input),
                     static_cast<unsigned long long>(stats.accepted),
                     static_cast<unsigned long long>(stats.downsampled),
-                    static_cast<unsigned long long>(stats.busy), stats.queued,
+                    static_cast<unsigned long long>(stats.busy),
+                    static_cast<unsigned long long>(stats.timed_out), stats.queued,
                     stats.release_pending, static_cast<unsigned long long>(stats.written),
                     static_cast<unsigned long long>(stats.event_dropped),
                     static_cast<unsigned long long>(counters.release_errors),
@@ -400,7 +401,7 @@ public:
             "no_frame=%llu lease_exhausted=%llu acquire_errors=%llu "
             "target_hits=%llu detect_calls=%llu detect_errors=%llu "
             "rec_accepted=%llu rec_downsampled=%llu rec_busy=%llu rec_invalid=%llu "
-            "rec_written=%llu rec_bytes=%llu rec_queue_hw=%u rec_event_dropped=%llu "
+            "rec_written=%llu rec_timed_out=%llu rec_bytes=%llu rec_queue_hw=%u rec_event_dropped=%llu "
             "rec_copy_fail=%llu rec_write_fail=%llu rec_lease_release_fail=%llu "
             "release_ok=%llu release_errors=%llu run_hw=%u\n",
             static_cast<unsigned long long>(counters.frames),
@@ -415,6 +416,7 @@ public:
             static_cast<unsigned long long>(counters.rec_busy),
             static_cast<unsigned long long>(counters.rec_invalid),
             static_cast<unsigned long long>(stats.written),
+            static_cast<unsigned long long>(stats.timed_out),
             static_cast<unsigned long long>(stats.bytes), stats.queue_high_water,
             static_cast<unsigned long long>(stats.event_dropped),
             static_cast<unsigned long long>(stats.copy_fail),

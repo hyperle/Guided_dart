@@ -1,4 +1,5 @@
 #include <expected>
+#include <chrono>
 #include <cstdio>
 #include <string_view>
 
@@ -29,6 +30,18 @@ public:
         auto parsed = app::parse_args(1, defaults);
         assert(parsed && parsed->record_on && parsed->exposure_lines == 400);
         assert(parsed->record_fps == 60 && parsed->record_keep == 0);
+        assert(parsed->record_timeout_ms == 0);
+        assert(app::recording_config(*parsed, 640, 480).frame_timeout.count() == 0);
+        const auto timeout = parse({"--rec-fps", "60", "--rec-timeout-ms", "100"});
+        assert(timeout && timeout->record_fps == 60 && timeout->record_timeout_ms == 100);
+        assert(app::recording_config(*timeout, 640, 480).frame_timeout
+               == std::chrono::milliseconds{100});
+        assert(parse({"--rec-timeout-ms", "0"})->record_timeout_ms == 0);
+        assert(parse({"--rec-timeout-ms", "60000"})->record_timeout_ms == 60000);
+        assert(!parse({"--rec-timeout-ms", "60001"}));
+        assert(!parse({"--rec-timeout-ms", "-1"}));
+        assert(!parse({"--rec-timeout-ms", "1.5"}));
+        assert(!parse({"--rec-timeout-ms"}));
         assert(parsed->record_format == recorder::ImageFormat::kPgm && parsed->threshold == 50);
         assert(parsed->min_contrast == 12);
         assert(parse({"--min-contrast", "0"})->min_contrast == 0);

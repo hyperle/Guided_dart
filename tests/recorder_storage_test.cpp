@@ -276,6 +276,7 @@ private:
         config.width = 8;
         config.height = 1;
         config.queue_slots = 8;
+        config.frame_timeout = std::chrono::milliseconds{5000};
         config.flush_period = std::chrono::milliseconds{60'000};
         recorder::Recorder rec{config};
         assert(rec.start());

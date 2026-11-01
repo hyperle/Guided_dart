@@ -44,6 +44,7 @@ public:
         std::uint64_t written = 0;
         std::uint64_t downsampled = 0;
         std::uint64_t busy = 0;
+        std::uint64_t timed_out = 0;
         std::uint64_t stopped = 0;
         std::uint64_t invalid = 0;
         std::uint64_t copy_fail = 0;
@@ -103,6 +104,7 @@ private:
     struct ImageSlot {
         std::unique_ptr<std::byte[]> pixels{};
         FrameEvent event{};
+        std::chrono::steady_clock::time_point queued_at{};
     };
 
     static constexpr std::uint64_t kMaxFrameDimension = 16384;
@@ -154,8 +156,6 @@ private:
     std::uint32_t release_head_ = 0;
     std::uint32_t release_tail_ = 0;
     std::uint32_t release_count_ = 0;
-    std::uint64_t next_image_index_ = 1;
-    std::uint64_t reserved_file_bytes_ = 0;
     mutable std::mutex image_mutex_;
     std::condition_variable image_cv_;
     pthread_t image_thread_{};
@@ -179,6 +179,7 @@ private:
     std::atomic<std::uint64_t> written_{0};
     std::atomic<std::uint64_t> downsampled_{0};
     std::atomic<std::uint64_t> busy_{0};
+    std::atomic<std::uint64_t> timed_out_{0};
     std::atomic<std::uint64_t> stopped_{0};
     std::atomic<std::uint64_t> invalid_{0};
     std::atomic<std::uint64_t> copy_fail_{0};
@@ -215,6 +216,7 @@ bool Recorder::validate_config() noexcept {
         || config_.queue_slots > kMaxQueueSlots || config_.event_slots == 0
         || config_.event_slots > kMaxEventSlots || config_.output_directory.empty()
         || config_.output_directory.size() >= kMaxPath || config_.flush_period.count() < 0
+        || config_.frame_timeout.count() < 0 || config_.frame_timeout.count() > 60'000
         || config_.keep_sessions > 9999 || config_.max_file_bytes == 0
         || config_.max_file_bytes > Config::kMaxFileBytes) {
         set_error(
@@ -277,13 +279,11 @@ bool Recorder::start() noexcept {
         std::lock_guard<std::mutex> lock(image_mutex_);
         image_head_ = image_tail_ = image_count_ = 0;
         release_head_ = release_tail_ = release_count_ = 0;
-        next_image_index_ = 1;
-        reserved_file_bytes_ = 0;
         next_sample_tick_.store(0, std::memory_order_relaxed);
         accepting_ = true;
     }
     // Statistics describe this file session, including its independent budget.
-    input_ = accepted_ = copied_ = written_ = downsampled_ = busy_ = stopped_ = invalid_ = 0;
+    input_ = accepted_ = copied_ = written_ = downsampled_ = busy_ = timed_out_ = stopped_ = invalid_ = 0;
     copy_fail_ = write_fail_ = lease_release_fail_ = bytes_ = copy_total_us_ = 0;
     pack_total_us_ = io_total_us_ = io_max_us_ = space_total_us_ = 0;
     open_total_us_ = write_total_us_ = close_total_us_ = 0;
@@ -454,18 +454,6 @@ Admission Recorder::try_submit(camera::FrameLease&& lease) noexcept {
             !accepting_ ? Admission::kStopped : Admission::kBusy,
             !accepting_ ? EventDecision::kStopped : EventDecision::kBusy);
     }
-    // Reserve space for queued frames as well as frames already written. The
-    // final complete frame stops admission; no overflowing frame is accepted.
-    const auto record_bytes =
-        config_.variable_record_size() ? 0 : images_.record_bytes();
-    if (!config_.variable_record_size()
-        && record_bytes > session_.file_limit_bytes() - reserved_file_bytes_) {
-        accepting_ = false;
-        limit_reached_.store(true, std::memory_order_release);
-        lock.unlock();
-        image_cv_.notify_all();
-        return finish(Admission::kStopped, EventDecision::kStopped);
-    }
     ImageSlot& slot = image_slots_[image_tail_];
     const auto copy_begin = std::chrono::steady_clock::now();
     const bool copied = images_.copy_image({slot.pixels.get(), frame_bytes_}, *view_ptr);
@@ -482,15 +470,7 @@ Admission Recorder::try_submit(camera::FrameLease&& lease) noexcept {
     copied_.fetch_add(1, std::memory_order_relaxed);
     slot.event = event;
     slot.event.decision = EventDecision::kAccepted;
-    slot.event.image_index = next_image_index_++;
-    if (!config_.variable_record_size()) {
-        slot.event.file_offset = reserved_file_bytes_;
-        slot.event.file_bytes = record_bytes;
-        reserved_file_bytes_ += record_bytes;
-        (void)std::snprintf(
-            slot.event.image_name.data(), slot.event.image_name.size(), "img/recording.%s",
-            config_.image_format == ImageFormat::kPbm ? "pbm" : "pgm");
-    }
+    slot.queued_at = copy_begin;
     release_slots_[release_tail_] = std::move(lease);
     release_tail_ = (release_tail_ + 1U) % image_capacity_;
     ++release_count_;
@@ -498,15 +478,7 @@ Admission Recorder::try_submit(camera::FrameLease&& lease) noexcept {
     ++image_count_;
     const auto high = std::max(queue_high_water_.load(std::memory_order_relaxed), image_count_);
     queue_high_water_.store(high, std::memory_order_relaxed);
-    event = slot.event;
-    if (!config_.variable_record_size()
-        && record_bytes > session_.file_limit_bytes() - reserved_file_bytes_) {
-        accepting_ = false;
-        limit_reached_.store(true, std::memory_order_release);
-    }
     lock.unlock();
-    if (!config_.variable_record_size())
-        (void)events_.enqueue(event);
     accepted_.fetch_add(1, std::memory_order_relaxed);
     image_cv_.notify_one();
     return Admission::kAccepted;
@@ -546,6 +518,9 @@ void* Recorder::image_thread_entry(void* context) noexcept {
 }
 
 void Recorder::image_loop() noexcept {
+    const auto timeout = config_.frame_timeout.count() == 0
+        ? std::chrono::microseconds{(1'000'000U + config_.fps - 1U) / config_.fps}
+        : std::chrono::duration_cast<std::chrono::microseconds>(config_.frame_timeout);
     bool write_failed = false;
     for (;;) {
         ImageSlot* slot = nullptr;
@@ -557,7 +532,16 @@ void Recorder::image_loop() noexcept {
             slot = &image_slots_[image_head_];
         }
         FrameEvent event = slot->event;
-        if (!write_failed) {
+        if (write_failed) {
+            event.decision = EventDecision::kStopped;
+        } else if (std::chrono::steady_clock::now() - slot->queued_at >= timeout) {
+            event.decision = EventDecision::kTimedOut;
+            timed_out_.fetch_add(1, std::memory_order_relaxed);
+        } else {
+            // Output indices and offsets describe saved images only. Expired
+            // queue entries consume neither file budget nor playback indices.
+            event.image_index = written_.load(std::memory_order_relaxed) + 1U;
+            event.file_offset = bytes_.load(std::memory_order_relaxed);
             if (images_.write_image({slot->pixels.get(), frame_bytes_}, event.image_index)) {
                 pack_total_us_.fetch_add(images_.pack_us(), std::memory_order_relaxed);
                 io_total_us_.fetch_add(images_.io_us(), std::memory_order_relaxed);
@@ -570,20 +554,26 @@ void Recorder::image_loop() noexcept {
                     std::memory_order_relaxed);
                 written_.fetch_add(1, std::memory_order_relaxed);
                 bytes_.fetch_add(images_.record_bytes(), std::memory_order_relaxed);
+                event.file_bytes = images_.record_bytes();
                 if (config_.variable_record_size()) {
                     event.file_offset = images_.file_offset();
-                    event.file_bytes = images_.record_bytes();
                     (void)std::snprintf(
                         event.image_name.data(), event.image_name.size(), "%s",
                         images_.image_name());
+                } else {
+                    (void)std::snprintf(
+                        event.image_name.data(), event.image_name.size(), "img/recording.%s",
+                        config_.image_format == ImageFormat::kPbm ? "pbm" : "pgm");
                 }
-                if (config_.variable_record_size()
-                    && bytes_.load(std::memory_order_relaxed) == session_.file_limit_bytes()) {
+                const auto remaining =
+                    session_.file_limit_bytes() - bytes_.load(std::memory_order_relaxed);
+                if (remaining == 0
+                    || (!config_.variable_record_size() && remaining < images_.record_bytes())) {
                     limit_reached_.store(true, std::memory_order_release);
                     write_failed = true;
                 }
             } else {
-                if (config_.variable_record_size() && errno == EFBIG) {
+                if (errno == EFBIG) {
                     limit_reached_.store(true, std::memory_order_release);
                 } else {
                     write_fail_.fetch_add(1, std::memory_order_relaxed);
@@ -593,14 +583,11 @@ void Recorder::image_loop() noexcept {
                 }
                 event.decision = EventDecision::kStopped;
                 event.image_index = 0;
+                event.file_offset = 0;
                 write_failed = true;
             }
-        } else {
-            event.decision = EventDecision::kStopped;
-            event.image_index = 0;
         }
-        if (config_.variable_record_size())
-            (void)events_.enqueue(event);
+        (void)events_.enqueue(event);
         {
             std::lock_guard<std::mutex> lock(image_mutex_);
             image_head_ = (image_head_ + 1U) % image_capacity_;
@@ -640,6 +627,7 @@ Recorder::Stats Recorder::stats() const noexcept {
     result.written = written_.load(std::memory_order_relaxed);
     result.downsampled = downsampled_.load(std::memory_order_relaxed);
     result.busy = busy_.load(std::memory_order_relaxed);
+    result.timed_out = timed_out_.load(std::memory_order_relaxed);
     result.stopped = stopped_.load(std::memory_order_relaxed);
     result.invalid = invalid_.load(std::memory_order_relaxed);
     result.copy_fail = copy_fail_.load(std::memory_order_relaxed);

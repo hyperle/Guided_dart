@@ -34,11 +34,12 @@ public:
             (void)std::setvbuf(event_file_, event_buffer_.get(), _IOFBF, kEventBufferBytes);
         std::fprintf(
             event_file_,
-            "# recorder format=2 width=%u height=%u fps=%u max_file_bytes=%llu "
+            "# recorder format=2 width=%u height=%u fps=%u frame_timeout_ms=%lld max_file_bytes=%llu "
             "file_limit_bytes=%llu session=%s\n"
             "input_index,source_sequence,source_pts,source_pts_timebase_validated,received_us,"
             "decision,image_index,image_file,file_offset,file_bytes\n",
             config_.width, config_.height, config_.fps,
+            static_cast<long long>(config_.frame_timeout.count()),
             static_cast<unsigned long long>(config_.max_file_bytes),
             static_cast<unsigned long long>(session.file_limit_bytes()), session.directory());
         if (std::fflush(event_file_) != 0 || ::fsync(::fileno(event_file_)) != 0) {
@@ -102,6 +103,7 @@ std::string_view EventWriter::decision_text(EventDecision decision) noexcept {
     case EventDecision::kBusy: return "busy";
     case EventDecision::kStopped: return "stopped";
     case EventDecision::kInvalidFrame: return "invalid_frame";
+    case EventDecision::kTimedOut: return "timed_out";
     }
     return "unknown";
 }
