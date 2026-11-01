@@ -115,10 +115,15 @@ PWM 初始化或写入失败只停用 PWM，不停止识别、录像及可选 IM
 | `--servo-vertical A,B,C,D` | 各路上下增益，单位 µs/像素，默认各 0 |
 | `--servo-timeout-ms N` | 视觉指令有效时长，默认 200 ms，必须大于 0 |
 
-数值列表用逗号分隔，不含空格，允许负增益和小数。配置同时校验机械限幅关系和
-333 Hz 周期；图像范围在相机启动后校验。状态日志 `module=servo` 给出预设点、
-各路参数、实际下发脉宽、饱和计数、超时计数与设备错误。
-`runtime/launcher/startup.list` 已启用此链路；不能同时运行 `pwm_swing`。
+四路列表用逗号分隔，不含空格，允许负增益和小数；增量限幅只接收一个非负数值。
+旧的 `--servo-min` / `--servo-max` 已移除。状态日志 `module=servo` 给出预设点、
+`max_delta_us`、各路初始值、实际下发脉宽、饱和与超时计数。
+
+启动清单用 `--servo-initial` 设置零点，用 `--servo-horizontal` / `--servo-vertical`
+设置各路增益，增量限幅以清单当前的 `--servo-max-delta` 参数为准。
+以下以 500 µs 增量上限说明：零点为 `1445,1490,1150,1475` µs 时，四路有效脉宽分别为
+945～1945、990～1990、650～1650、975～1975 µs。
+具体零点、增益、录像与其它服务以清单当前参数为准；不能同时运行 `pwm_swing`。
 
 ## 板端零点标定
 
@@ -155,9 +160,9 @@ msh> /sdcard/app/dart_app --seconds 8 --record off --pwm on --servo-initial 1490
 bash .script/deploy-rtos list     # 或直接改板端 /sdcard/app/startup_final.list
 ```
 
-清单只在 launcher 下次启动时读取，改动要重启才生效。每行最多 31 个 token，
-现有 `dart_app` 行 26 个，加 `--servo-initial` 后 28 个；若还要加 `--servo-min/--servo-max`，
-先删掉与默认值相同的 `--rec-format dbv`、`--rec-keep 0` 或 `--raw-layout packed10-lsb`。
+清单只在 launcher 下次启动时读取，改动要重启才生效。追加参数前检查最多 32 个 token
+（含路径和末尾 `&`）与 511 字符行长。参数在相机、PWM 和应用日志初始化前校验；
+失败时查看 `/data/app/logs/dart_app.console.log` 中的初始值与增量上限。
 
 零点只决定中位。增量限幅 `--servo-max-delta`、左右/上下方向的符号和比例仍需分别标定。
 

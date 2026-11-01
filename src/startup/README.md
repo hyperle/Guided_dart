@@ -108,8 +108,9 @@ dart_app [选项]
 曝光/阈值默认值均为 UNVALIDATED，要用真实板端样本标定，见 [`docs/DEBUG_GUIDE.md`](../../docs/DEBUG_GUIDE.md) §5。
 PWM 默认增益为零，目标偏移不会改变脉宽。标定后通过上述参数启用各路修正，
 数值列表不含空格，通道顺序和映射符号见 [舵机控制](../control/README.md)。
-纯视觉控制不依赖 IMU，`dart_app` 默认关闭 IMU。当前启动清单暂停 `dart_app`，
-改为上电运行独立的 [IMU 硬件直读测试](../../runtime/imu/README.md)，先唤醒传感器、等待 50 ms 再读取。
+纯视觉控制不依赖 IMU，`dart_app` 默认关闭 IMU。当前启动清单启用视觉四路 PWM，
+零点、方向、增益和增量限幅以清单当前参数为准；关闭 IMU、Wi-Fi，
+启用 60 FPS 录像，待写超时丢弃。
 
 ## 故障隔离
 

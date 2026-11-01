@@ -47,16 +47,26 @@ deploy-rtos pwm_swing
 接线、333 Hz / 1420～1620 µs 参数和波形验收见
 [`pwm_swing` 说明](../tools/pwm_swing/README.md)。
 
-当前启动清单为 IMU 示波器直读测试，SPI1 / CS IO14，先唤醒 IMU、等待 50 ms 再读数：
+当前启动清单为 `dart_app` 完整视觉控制：识别、全图坐标、两轴映射与四路 PWM，
+启用录像，IMU 和 Wi-Fi 关闭。零点、方向、增益和增量限幅以清单参数为准，说明见 [舵机控制说明](../src/control/README.md)。
 
 ```bash
-build-rtos imu_raw_probe
-deploy-rtos imu_raw_probe
+build-rtos dart_app
+build-rtos launcher
+deploy-rtos dart_app
+deploy-rtos launcher
 deploy-rtos list
-# 重启已部署 launcher 的板子后开始循环读数。
+# 重启后由 launcher 加载 startup_final.list。
 ```
 
-读取命令、波形和恢复视觉版本见 [IMU 测试说明](../runtime/imu/README.md)。
+坐标写入 `/data/app/records/detection.csv`，实际下发脉宽在
+`/data/app/logs/dart_app.log` 的 `module=servo` 状态行。
+IMU 直读程序仅保留为手动测试，读取命令及波形见 [IMU 测试说明](../runtime/imu/README.md)。
+
+固件的开机命令必须实际指向 launcher。若仍为 `/sdcard/micropython &`，
+仅部署 `app/launcher` 不会启动应用；本轮用原生 launcher ELF 补到该旧入口，
+断电重上电后核对 `launcher.log` 和 `dart_app.log`，详见
+[旧固件入口说明](../runtime/launcher/README.md#保留旧固件自启路径的原生入口)。
 
 需要指定其它板子时，可通过环境变量或 `.script/board.env` 配置：
 

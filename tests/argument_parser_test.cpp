@@ -4,7 +4,9 @@
 #include <string_view>
 
 #include <cassert>
+#include <fstream>
 #include <initializer_list>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -24,6 +26,40 @@ class ArgumentParserTest final {
         return app::parse_args(static_cast<int>(arguments.size()), arguments.data());
     }
 public:
+    // Validate the deployed command with the production parser, before any
+    // camera/PWM resources are opened. Unit defaults cannot catch stale bounds.
+    static int validate_startup_list(const char* path) {
+        std::ifstream input{path};
+        if (!input) {
+            std::fprintf(stderr, "Cannot read startup list: %s\n", path);
+            return 1;
+        }
+        unsigned applications = 0, line_number = 0;
+        for (std::string line; std::getline(input, line);) {
+            ++line_number;
+            std::istringstream words{line};
+            std::vector<std::string> tokens;
+            for (std::string word; words >> word;)
+                tokens.push_back(word);
+            if (tokens.empty() || !std::string_view{tokens.front()}.ends_with("/dart_app"))
+                continue;
+            ++applications;
+            if (line.size() >= 512 || tokens.size() > 32)
+                return 1; // Match the launcher's line/token limits, including &.
+            if (tokens.back() == "&" || tokens.back() == "&!")
+                tokens.pop_back();
+            std::vector<char*> arguments;
+            for (auto& token : tokens)
+                arguments.push_back(token.data());
+            const auto parsed = app::parse_args(static_cast<int>(arguments.size()), arguments.data());
+            if (!parsed) {
+                std::fprintf(stderr, "%s:%u: dart_app startup arguments rejected\n", path, line_number);
+                return parsed.error();
+            }
+        }
+        return applications == 1 ? 0 : 1;
+    }
+
     static void run() {
         char program[] = "dart_app";
         char* defaults[] = {program};
@@ -221,4 +257,9 @@ public:
 
 } // namespace dart::tests
 
-int main() { dart::tests::ArgumentParserTest::run(); }
+int main(int argc, char* argv[]) {
+    if (argc == 2)
+        return dart::tests::ArgumentParserTest::validate_startup_list(argv[1]);
+    assert(argc == 1);
+    dart::tests::ArgumentParserTest::run();
+}

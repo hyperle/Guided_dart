@@ -53,9 +53,12 @@
 纯视觉控制通过独立 PWM 任务消费每帧的两轴映射结果，不依赖 IMU。`launcher` 负责进程启动与监督。应用说明见
 [`src/startup/README.md`](src/startup/README.md)。
 
-当前启动清单只启用 `imu_raw_probe`，上电通过 SPI1 / CS IO14 唤醒 IMU，
-等待 50 ms 后循环读取寄存器；部署、波形和恢复视觉版本见 [IMU 直读测试](runtime/imu/README.md)。
-`dart_app` 纯视觉 PWM 与录像启动行暂时注释。标定参数与故障处理见 [舵机控制说明](src/control/README.md)。独立的
+当前启动清单启用 `dart_app` 的“识别 → 全图坐标 → 两轴映射 → 四路 PWM”链路，
+由清单的 `--servo-max-delta` 指定各路相对零点的合成增量上限。
+零点、两轴增益与录像策略以清单当前参数为准；待写帧超过配置的一帧周期即丢弃。坐标在 `/data/app/records/detection.csv`，实际下发脉宽在
+`/data/app/logs/dart_app.log` 的 `module=servo` 状态行。
+IMU 历史测试见 [IMU 直读测试](runtime/imu/README.md)，
+标定参数与故障处理见 [舵机控制说明](src/control/README.md)。独立的
 [`PWM 测试`](tools/pwm_swing/README.md) 保留为手动工具，与 `dart_app` 的 PWM 输出互斥。
 
 硬件资源是独占的：**同一时刻只能有一个进程持有 VICAP/VB**，所以"识别"和"录像"

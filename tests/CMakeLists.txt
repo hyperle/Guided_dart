@@ -19,6 +19,9 @@ foreach(_test recorder_session recorder_binary detector_behavior detector_tracki
     add_test(NAME ${_test} COMMAND ${_test}_test)
 endforeach()
 
+add_test(NAME startup_arguments
+    COMMAND argument_parser_test "${PROJECT_SOURCE_DIR}/runtime/launcher/startup.list")
+
 target_link_options(imu_session_test PRIVATE -Wl,--wrap=fwrite)
 
 add_executable(servo_mapping_test servo_mapping_test.cpp)

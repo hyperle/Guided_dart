@@ -34,7 +34,8 @@
 # 一次上电只放一条，换配置就改这一行。
 # ----------------------------------------------------------------------------
 
-# ---- 本轮启用项：v9 启动审计（--startup-audit），修正两处初始化规范问题 ----
+# ---- IMU 历史诊断（本轮停用，保留手动复现说明）----
+# v9 启动审计（--startup-audit）修正两处初始化规范问题：
 # v8（--gyro-core）结论见 records/imu-gyro-core-v8/README.md：器件为正品 IIM-42652、
 # 初始化正确，但陀螺仪测量通路自复位起未产生任何一帧，属器件/板级问题。
 #
@@ -66,8 +67,8 @@
 #   - 陀螺仪在感测寄存器与 FIFO 两条通路都只给 -32768，属器件级故障。
 # 需要复现计量时手动运行（先停掉本行进程）：
 #   /sdcard/app/imu_raw_probe /data/app/logs/imu_met_v12_probe.log --metrology
-# 当前只做六轴 LN 唤醒 + 原始寄存器轮询。
-/sdcard/app/imu_raw_probe /data/app/logs/imu_poll_v12.log &
+# 六轴 LN 唤醒 + 原始寄存器轮询（本轮停用）：
+# /sdcard/app/imu_raw_probe /data/app/logs/imu_poll_v12.log &
 
 # ---- 四路舵机 PWM 测试（停用；需要时单独部署并手动运行）----
 # 333 Hz，1520 us 中心，1420..1620 us 正弦摆动；每次开机运行一轮，约 43 秒。
@@ -75,13 +76,25 @@
 # 日志：/data/app/logs/pwm_swing.console.log。
 # /sdcard/app/pwm_swing &
 
-# ---- 纯视觉舵机输出 + 录像（IMU 硬件测试期间停用）----
+# ---- 本轮启用：识别 → 全图坐标 → 两轴映射 → 四路 PWM ----
+# 数组顺序为 CH1～CH4，方向由下方两轴增益的正负号确定。
+# 两轴比例和方向以本行的 --servo-horizontal / --servo-vertical 参数为准。
+# 像素误差均为目标减瞄准点：640x480 默认 horizontal=x-320、vertical=y-240。
+# 本清单零点为 1445,1490,1150,1475 µs；合成增量限幅以 --servo-max-delta 为准。
+# --servo-max-delta 只限制相对初始位置的合成增量，修改零点无需同步修改绝对上下限。
+# 预设点自动取实际图像中心；无目标/超时回零点。IMU、Wi-Fi 关闭。
+# 录像目标 60 FPS；待写帧超过一帧周期（约 16.7 ms）丢弃，不补写过期帧。
+# 坐标：/data/app/records/detection.csv（valid/cx/cy）；
+# 输出：/data/app/logs/dart_app.log（module=servo，pulse_us 为实际下发值）。
+/sdcard/app/dart_app --exp 400 --vision on --pwm on --record on --rec-fps 60 --imu off --wifi off --threshold 50 --servo-initial 1445,1490,1150,1475 --servo-max-delta 150 --servo-horizontal -1.0,-1.0,1.0,1.0 --servo-vertical 1.0,-1.0,-1.0,1.0 --det-csv /data/app/records/detection.csv --log /data/app/logs/dart_app.log &
+
+# ---- 纯视觉舵机输出 + 录像（备用配置，本轮停用）----
 # PWM 由 dart_app 独占，不能与 pwm_swing 同时运行。
-# 默认预设点为实际图像中心，两轴增益为 0，四路保持各自初始脉宽。
+# 下方备用命令未指定两轴增益，因此四路保持各自初始脉宽。
 # 方向/比例标定后可追加 --servo-horizontal A,B,C,D 和 --servo-vertical A,B,C,D。
 # 零点标定（四路 initial_us）：见 src/control/README.md「板端零点标定」。
 #   标定时先注释本行再重启，避免自启实例与手跑实例抢 VICAP/PWM；也可直接改本行
-#   的 --servo-initial 后重启。本行现 26 个 token，上限 31。
+#   的 --servo-initial 后重启；注意每行参数 token 上限。
 # 日志:  /data/app/logs/dart_app.log（状态与耗时两行共用一次 fsync；launcher 另写
 #        /data/app/logs/launcher.log 与 dart_app.console.log）
 # 录像:  /data/app/records/rec_NNNN/img/recording.pgm（灰度连续流，目标 60 FPS）
@@ -99,7 +112,8 @@
 #   --min-contrast 12         候选均值至少比周围背景高 12 灰度级（默认值，无需追加）。
 #   --record on --rec-fps 60   目标每秒保存 60 帧灰度 PGM，按接收时间采样，与采集帧率独立；
 #                              写盘在录像线程，输入不足或写盘忙时实际帧率会降低，
-#                              队列满即丢并计数（rec_busy），不阻塞采集。
+#                              队列满即丢（rec_busy），待写超时丢弃（rec_timed_out），不阻塞采集。
+#   --rec-timeout-ms 0        默认按一帧周期设超时，60 FPS 时为 16,667 µs；可显式设置毫秒数。
 #   --rec-keep 0             每次启动新建 rec_NNNN，保留复位前的录像目录。
 #   本轮 PGM 最多 500 MB（500,000,000 字节，含每帧文件头）；下一张放不下时停止录像，
 #   640x480、60 FPS 时约 18.4 MB/s、约 27 秒达上限；写盘实际速度需重新验证。
@@ -129,7 +143,7 @@
 # /sdcard/app/dart_app --exp 2560 --vision on --record off --seconds 90 &
 
 # 只录像不识别（量采集+写盘开销的基线）:
-# /sdcard/app/dart_app --exp 2560 --vision off --record on --rec-fps 30 --seconds 90 &
+# /sdcard/app/dart_app --exp 2560 --vision off --record on --rec-fps 60 --seconds 90 &
 
 # 二值化取证（DBV 自适应压缩，仅导出候选阈值位图，不保存识别用的灰度细节）:
 # /sdcard/app/dart_app --exp 2560 --record on --rec-format dbv --threshold 128 --seconds 90 &
