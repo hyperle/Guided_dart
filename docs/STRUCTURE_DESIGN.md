@@ -80,6 +80,7 @@ include/firmware/src/    下层公开接口与实现库
   board/                    具体设备工厂和板级初始化
   system/                   时钟、停止信号与 launcher 退出标记
   logging/、storage/        日志、通用 CSV 写入与目录操作
+  streaming/                有界灰度复制、C11 JPEG、压缩/上传线程与 SDIO ACL
   recorder/                 录像服务：图像队列、相机租约与生命周期
     async/                  元数据有界队列与写线程
     encoding/               内存 PNG 编码

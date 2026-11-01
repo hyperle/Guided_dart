@@ -14,6 +14,10 @@ import dart.imu.k230.iim42652;
 #ifdef DART_APP_PWM_K230
 import dart.pwm.k230.output;
 #endif
+#ifdef DART_APP_WIFI_K230
+import dart.streaming.k230.transport;
+#endif
+import dart.streaming.interface;
 import dart.camera.k230.camera;
 import dart.logging.logger;
 import dart.runtime.imu.session;
@@ -21,6 +25,14 @@ import dart.storage.directories;
 import dart.system.device_services;
 
 export namespace dart::board {
+
+std::unique_ptr<streaming::ITransport> create_wifi_transport() noexcept {
+#ifdef DART_APP_WIFI_K230
+    return std::unique_ptr<streaming::ITransport>{new (std::nothrow) streaming::k230::Transport};
+#else
+    return nullptr;
+#endif
+}
 
 std::expected<std::unique_ptr<pwm::IPwm>, pwm::Error> create_pwm() noexcept {
 #ifdef DART_APP_PWM_K230

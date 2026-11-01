@@ -23,6 +23,9 @@ export class Arguments {
 public:
     std::uint32_t seconds = 0; /* 0 = 跑到信号 */
     std::uint32_t exposure_lines = 400;
+    bool wifi_on = false;
+    char wifi_config[512] = "/data/app/wifi.conf";
+    char wifi_pause_file[512] = "/sdcard/app/control/stream.pause";
     bool vision_on = true;
     bool pwm_on = true;
     control::ServoMapping::Config servo{};
@@ -124,6 +127,9 @@ void usage(const char* argv0) {
     std::printf("  --seconds N      有界运行秒数，0 = 跑到 SIGINT/SIGTERM（默认 0）\n");
     std::printf("  --exp LINES      固定曝光行数（默认 400；0 保留传感器初始曝光）\n");
     std::printf("  --raw-layout F   packed10-lsb（默认，K230 实板验证）\n");
+    std::printf("  --wifi on|off    JPEG Wi-Fi 回传开关（默认 off）\n");
+    std::printf("  --wifi-config P  Wi-Fi 配置文件（默认 /data/app/wifi.conf）\n");
+    std::printf("  --wifi-pause-file P  回传暂停标记（默认 /sdcard/app/control/stream.pause）\n");
     std::printf("  --vision on|off  识别开关（默认 on）\n");
     std::printf("  --pwm on|off     纯视觉四路舵机输出（默认 on；vision off 时停用）\n");
     std::printf("  --aim X,Y        全图预设像素坐标（默认实际图像中心）\n");
@@ -295,7 +301,7 @@ export std::expected<Arguments, int> parse_args(int argc, char* argv[]) {
             continue;
         }
         if (a == "--vision" || a == "--record" || a == "--imu" || a == "--imu-ignore-id"
-            || a == "--pwm") {
+            || a == "--pwm" || a == "--wifi") {
             if (!need_value(value)) {
                 std::fprintf(
                     stderr, "%s: %.*s 缺少参数\n", argv[0], static_cast<int>(a.size()), a.data());
@@ -312,7 +318,9 @@ export std::expected<Arguments, int> parse_args(int argc, char* argv[]) {
                     a.data());
                 return std::unexpected<int>(2);
             }
-            if (a == "--vision")
+            if (a == "--wifi")
+                args.wifi_on = flag;
+            else if (a == "--vision")
                 args.vision_on = flag;
             else if (a == "--pwm")
                 args.pwm_on = flag;
@@ -370,13 +378,25 @@ export std::expected<Arguments, int> parse_args(int argc, char* argv[]) {
             }
             continue;
         }
-        if (a == "--rec-dir" || a == "--det-csv" || a == "--log" || a == "--imu-log") {
+        if (a == "--rec-dir" || a == "--det-csv" || a == "--log" || a == "--imu-log"
+            || a == "--wifi-config" || a == "--wifi-pause-file") {
             if (!need_value(value)) {
                 std::fprintf(
                     stderr, "%s: %.*s 缺少参数\n", argv[0], static_cast<int>(a.size()), a.data());
                 return std::unexpected<int>(2);
             }
-            if (a == "--imu-log") {
+            if (a == "--wifi-pause-file") {
+                if (value.empty()
+                    || !copy_path(args.wifi_pause_file, sizeof(args.wifi_pause_file), value)) {
+                    std::fprintf(stderr, "%s: --wifi-pause-file 路径为空或过长\n", argv[0]);
+                    return std::unexpected<int>(2);
+                }
+            } else if (a == "--wifi-config") {
+                if (value.empty() || !copy_path(args.wifi_config, sizeof(args.wifi_config), value)) {
+                    std::fprintf(stderr, "%s: --wifi-config 路径为空或过长\n", argv[0]);
+                    return std::unexpected<int>(2);
+                }
+            } else if (a == "--imu-log") {
                 if (value.empty() || !copy_path(args.imu_log, sizeof(args.imu_log), value)) {
                     std::fprintf(stderr, "%s: --imu-log 路径为空或过长\n", argv[0]);
                     return std::unexpected<int>(2);

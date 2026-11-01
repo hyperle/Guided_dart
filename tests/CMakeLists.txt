@@ -141,3 +141,32 @@ add_test(NAME launcher_restart
     COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/launcher_restart_test.sh" $<TARGET_FILE:launcher>)
 add_test(NAME launcher_write_control
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/launcher_write_control_test.py" $<TARGET_FILE:launcher>)
+
+find_package(JPEG REQUIRED)
+add_executable(streaming_jpeg_test streaming_jpeg_test.c)
+target_link_libraries(streaming_jpeg_test PRIVATE dart_streaming_data JPEG::JPEG)
+target_compile_options(streaming_jpeg_test PRIVATE -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+add_test(NAME streaming_jpeg COMMAND streaming_jpeg_test)
+add_executable(streaming_session_test streaming_session_test.cpp)
+target_link_libraries(streaming_session_test PRIVATE dart_streaming)
+target_compile_options(streaming_session_test PRIVATE -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+add_test(NAME streaming_session COMMAND streaming_session_test)
+add_executable(wifi_link_probe wifi_link_probe.c)
+target_link_libraries(wifi_link_probe PRIVATE dart_streaming_data)
+target_compile_options(wifi_link_probe PRIVATE -Wall -Wextra -Wpedantic -Werror)
+
+set(_netmgmt_hal_include "${K230_SDK_ROOT}/src/rtsmart/libs/rtsmart_hal/components/netmgmt")
+if(EXISTS "${_netmgmt_hal_include}/hal_netmgmt.h")
+    add_executable(wifi_radio_test wifi_radio_test.c
+        "${PROJECT_SOURCE_DIR}/include/firmware/src/streaming/k230/radio.c")
+    target_include_directories(wifi_radio_test PRIVATE "${PROJECT_SOURCE_DIR}/include/firmware/src")
+    target_include_directories(wifi_radio_test SYSTEM PRIVATE "${_netmgmt_hal_include}")
+    target_compile_options(wifi_radio_test PRIVATE -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    add_test(NAME wifi_radio COMMAND wifi_radio_test)
+endif()
+
+add_executable(streaming_control_test streaming_control_test.cpp)
+target_link_libraries(streaming_control_test PRIVATE dart_streaming dart_recording)
+target_compile_options(streaming_control_test PRIVATE -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+add_test(NAME streaming_control COMMAND streaming_control_test)
+set_tests_properties(streaming_control PROPERTIES TIMEOUT 30)

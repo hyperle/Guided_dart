@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# 回传独立开关：关闭回传编码与 Wi-Fi 发送，不控制录像和日志。
+# 只发请求；板端回传管理线程异步停止/回收，主采集线程不等待。
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/_rtos-common.sh"
+[[ $# == 1 && ( "$1" == on || "$1" == off ) ]] || die "用法：stream-rtos on|off"
+rtos_resolve_transport
+control="${RTOS_DIR}/control"
+pause="${control}/stream.pause"
+rtos_assert_safe_path "${pause}"
+if [[ "$1" == off ]]; then
+    # Create only this marker, preserving manually supplied regular files too.
+    case "${RTOS_MODE}" in
+    scp) rtos_ssh "mkdir -p '${control}'" ;;
+    mtp) gio mkdir -p "${control}" 2>/dev/null || rtos_list_entries "${control}" >/dev/null ;;
+    card) mkdir -p "${control}" ;;
+    esac
+    entries="$(rtos_list_entries "${control}")" || die "无法读取回传开关"
+    found=0
+    while IFS=$'\t' read -r kind name; do
+        [[ "${name}" != stream.pause ]] || found=1
+    done <<< "${entries}"
+    if [[ "${found}" == 0 ]]; then
+        case "${RTOS_MODE}" in
+        scp) rtos_ssh "mkdir -p '${pause}'" ;;
+        mtp) gio mkdir -p "${pause}" 2>/dev/null || rtos_list_entries "${pause}" >/dev/null ;;
+        card) mkdir -p "${pause}" ;;
+        esac
+    fi
+    info "已请求关闭回传编码与 Wi-Fi 发送；板端状态 paused 且 buffers=0 表示回收完成。"
+    exit 0
+fi
+# Do not create directories when no switch exists. Only remove this component's
+# marker; write.pause and all other control files belong to their own owners.
+entries="$(rtos_list_entries "${RTOS_DIR}")" || die "无法读取程序目录"
+have_control=0
+while IFS=$'\t' read -r kind name; do
+    [[ "${kind}" != d || "${name}" != control ]] || have_control=1
+done <<< "${entries}"
+[[ "${have_control}" == 1 ]] || { info "当前没有回传暂停开关。"; exit 0; }
+entries="$(rtos_list_entries "${control}")" || die "无法读取回传开关"
+for_kind=''
+while IFS=$'\t' read -r kind name; do
+    [[ "${name}" != stream.pause ]] || for_kind="${kind}"
+done <<< "${entries}"
+if [[ "${for_kind}" == d ]]; then
+    # Non-recursive removal preserves unexpected contents rather than deleting
+    # files somebody else may have placed in a manually created pause marker.
+    case "${RTOS_MODE}" in
+    scp) rtos_ssh "rmdir '${pause}'" ;;
+    mtp) gio remove "${pause}" ;;
+    card) rmdir "${pause}" ;;
+    esac
+elif [[ -n "${for_kind}" ]]; then
+    rtos_remove "${pause}"
+fi
+info "已解除回传暂停；仅当 dart_app 以 --wifi on 启动时恢复，其他组件不变。"

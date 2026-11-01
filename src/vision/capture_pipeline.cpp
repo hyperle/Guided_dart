@@ -19,6 +19,8 @@ import dart.logging.logger;
 import dart.recorder.recorder;
 import dart.runtime.imu.session;
 import dart.system.device_services;
+import dart.streaming.interface;
+import dart.streaming.session;
 import dart.system.monotonic_clock;
 import dart.system.run_control;
 import dart.system.write_control;
@@ -69,7 +71,8 @@ public:
         const Arguments& args, std::unique_ptr<camera::ICamera> cam, platform::RunControl& control,
         logging::Logger& log, imu::Session* imu_session = nullptr,
         platform::WriteControl* writes = nullptr,
-        platform::PwmFactory pwm_factory = nullptr) noexcept {
+        platform::PwmFactory pwm_factory = nullptr,
+        streaming::TransportFactory wifi_factory = nullptr) noexcept {
         bool vision_on = args.vision_on;
         bool record_on = args.record_on;
         log.line(
@@ -121,6 +124,19 @@ public:
             "level=INFO module=app op=camera_start result=ok state=%u\n",
             static_cast<unsigned>(cam->state()));
 
+        streaming::Session wifi;
+        const bool wifi_started = args.wifi_on
+            && wifi.start_controlled(args.wifi_config, max_width, max_height, wifi_factory,
+                                     args.wifi_pause_file);
+        if (args.wifi_on) {
+            const auto error = wifi.error();
+            log.line(
+                "level=%s module=wifi op=start result=%s code=%u native=%d "
+                "transport=http mode=controlled state=%s\n",
+                wifi_started ? "INFO" : "ERROR", wifi_started ? "ok" : "disabled",
+                static_cast<unsigned>(error.code), error.native, streaming::state_text(wifi.state()));
+        }
+
         VisualServo servo{args, log};
         if (vision_on)
             servo.start(pwm_factory, max_width, max_height);
@@ -150,6 +166,32 @@ public:
                 const auto stats = rec.stats();
                 log.begin_batch();
                 servo.status();
+                if (wifi_started) {
+                    const auto net = wifi.stats();
+                    const auto lifecycle_error = wifi.error();
+                    log.line(
+                        "level=INFO module=wifi op=status connected=%d accepted=%llu "
+                        "encoded=%llu uploaded=%llu bytes=%llu raw_replaced=%llu "
+                        "jpeg_replaced=%llu busy=%llu invalid=%llu jpeg_errors=%llu "
+                        "stale_dropped=%llu downsampled=%llu "
+                        "network_errors=%llu native=%d state=%s active=%d buffers=%llu "
+                        "lifecycle_code=%u lifecycle_native=%d\n",
+                        net.connected, static_cast<unsigned long long>(net.accepted),
+                        static_cast<unsigned long long>(net.encoded),
+                        static_cast<unsigned long long>(net.uploaded),
+                        static_cast<unsigned long long>(net.bytes),
+                        static_cast<unsigned long long>(net.raw_replaced),
+                        static_cast<unsigned long long>(net.jpeg_replaced),
+                        static_cast<unsigned long long>(net.busy),
+                        static_cast<unsigned long long>(net.invalid),
+                        static_cast<unsigned long long>(net.jpeg_errors),
+                        static_cast<unsigned long long>(net.stale_dropped),
+                        static_cast<unsigned long long>(net.downsampled),
+                        static_cast<unsigned long long>(net.network_errors), net.last_native,
+                        streaming::state_text(wifi.state()), wifi.accepting(),
+                        static_cast<unsigned long long>(net.buffer_bytes),
+                        static_cast<unsigned>(lifecycle_error.code), lifecycle_error.native);
+                }
                 if (writes != nullptr)
                     log.line(
                         "level=INFO module=app op=write_control recording=%d logging=%d "
@@ -325,6 +367,8 @@ public:
 
             /* 所有权：只有 kAccepted 会把租约转给 Recorder。 */
             const auto pipeline_begin = std::chrono::steady_clock::now();
+            if (wifi_started)
+                (void)wifi.try_submit(view);
             // The worker may finish while acquire/detection runs. Reclaim those
             // leases before admission so completed writes do not look busy.
             (void)rec.drain_releases();
@@ -374,6 +418,14 @@ public:
             static_cast<unsigned long long>(counters.frames));
 
         servo.stop();
+        wifi.stop();
+        if (wifi_started) {
+            const auto net = wifi.stats();
+            log.line("level=INFO module=wifi op=stop uploaded=%llu bytes=%llu network_errors=%llu\n",
+                     static_cast<unsigned long long>(net.uploaded),
+                     static_cast<unsigned long long>(net.bytes),
+                     static_cast<unsigned long long>(net.network_errors));
+        }
 
         if (record_on) {
             rec.stop();

@@ -43,6 +43,16 @@ public:
         assert(!parse({"--rec-timeout-ms", "1.5"}));
         assert(!parse({"--rec-timeout-ms"}));
         assert(parsed->record_format == recorder::ImageFormat::kPgm && parsed->threshold == 50);
+        assert(!parsed->wifi_on);
+        assert(std::string_view{parsed->wifi_pause_file} == "/sdcard/app/control/stream.pause");
+        assert(std::string_view{parse({"--wifi-pause-file", "/tmp/stream.pause"})->wifi_pause_file}
+               == "/tmp/stream.pause");
+        assert(!parse({"--wifi-pause-file", ""}));
+        assert(!parse({"--wifi-pause-file"}));
+        assert(parse({"--wifi", "on", "--wifi-config", "/tmp/test.conf"})->wifi_on);
+        assert(!parse({"--wifi", "invalid"}));
+        assert(!parse({"--wifi-config", ""}));
+        assert(!parse({"--wifi-config"}));
         assert(parsed->min_contrast == 12);
         assert(parse({"--min-contrast", "0"})->min_contrast == 0);
         assert(parse({"--min-contrast", "255"})->min_contrast == 255);

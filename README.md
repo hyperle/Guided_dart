@@ -140,6 +140,12 @@ dart/
 └── CMakeLists.txt                     # 顶层构建骨架
 ```
 
+原生 Wi-Fi 图像回传复用 `dart_app` 的采集帧，通过两个线程完成 JPEG 压缩与 HTTP 上传，
+与识别和本地录像并行。板端用 `--wifi on --wifi-config /data/app/wifi.conf` 启用；
+运行时可用 `bash .script/stream-rtos off|on` 单独停用/恢复回传编码与发送，
+采集线程不等待其初始化或退出；电脑端运行 [`tools/wifi_receiver`](tools/wifi_receiver/README.md) 的 Rust 服务，
+由 FFmpeg 输出网页 H.264/HLS 和 MP4。默认关闭回传，配置示例及完整步骤见该工具说明。
+
 ## 3. 工具链与 SDK（一次性）
 
 ```bash

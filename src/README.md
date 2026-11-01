@@ -14,12 +14,14 @@
 | [`control/`](control/README.md) | 四路独立初始位置、左右/上下像素到 PWM 增量映射与合成限幅 |
 
 `startup/` 通过注入的设备工厂调用下层服务，不处理硬件配置和 POSIX 资源。
-`vision/` 决定帧如何交给识别和录像；`recording/` 决定何时启停录像，
+`vision/` 决定帧如何交给识别、录像和 Wi-Fi 回传；`recording/` 决定何时启停录像，
 不拥有写线程或编码器；`diagnostics/` 定义业务记录内容，不管理文件缓冲与同步。
 `vision/visual_servo.cpp` 调用 `control/` 合成绝对脉宽并发布给下层 PWM 任务，
 不直接访问引脚、设备寄存器或系统线程；控制不依赖 IMU。
 检测器只导入 `dart.camera.frame_view`，构建目标只依赖 `dart_camera_types`；
 不持有相机、不创建设备、不操作帧租约。
+Wi-Fi 只在采集线程调用下层 `streaming::Session::try_submit`，压缩、网络和恢复线程
+实现位于 [`streaming/`](../include/firmware/src/streaming/README.md)，由板级工厂注入传输接口。
 所有 L4 模块均不包含 K230/MPP 或 POSIX 实现头文件。
 
 `src/CMakeLists.txt` 声明 `dart_detection`、`dart_control` 和 `dart_application` 静态模块库，

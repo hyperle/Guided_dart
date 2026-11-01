@@ -1,0 +1,15 @@
+# Native dart_app settings. Copy to /data/app/wifi.conf and fill real values.
+# Lines are key=value, without quotes or spaces around '='. Unknown/duplicate
+# keys are rejected. A blank SSID reuses a preconfigured Wi-Fi association.
+ssid=YOUR_2_4_GHZ_SSID
+password=YOUR_PASSWORD
+# Reachable PC IPv4 address; HTTP port matches the Rust receiver.
+host=192.168.1.100
+port=8080
+token=REPLACE_WITH_THE_SAME_TOKEN_AS_THE_RECEIVER
+width=320
+height=240
+fps=15
+quality=50
+connect_timeout_ms=2000
+io_timeout_ms=2000

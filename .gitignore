@@ -29,3 +29,4 @@ docs/*.md
 # Native Wi-Fi host receiver build and local credentials/output
 /tools/wifi_receiver/target/
 /tools/wifi_receiver/output/
+/tools/wifi/wifi.conf

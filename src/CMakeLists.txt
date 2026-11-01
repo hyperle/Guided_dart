@@ -10,7 +10,7 @@ file(GLOB_RECURSE _application_modules CONFIGURE_DEPENDS
     "startup/*.cpp" "vision/*.cpp" "recording/*.cpp" "diagnostics/*.cpp")
 dart_add_modules(dart_application ${_application_modules})
 target_link_libraries(dart_application PUBLIC dart_detection dart_control dart_recording
-    dart_imu_logging dart_pwm dart_platform dart_device_services)
+    dart_imu_logging dart_pwm dart_platform dart_device_services dart_streaming)
 
 if(DART_CAMERA_K230)
     add_executable(dart_app dart_entry.cpp)

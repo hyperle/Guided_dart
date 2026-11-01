@@ -9,8 +9,15 @@ CMake >= 3.28、Ninja >= 1.11，以及 GCC >= 14 或 Clang >= 19 + clang-tools�
 | `build-rtos` | 交叉编译板端可执行文件 | `-r`（清 build-cross 重编）/ `--host`（host 编译检查）/ `launcher` / `dart_app` / `pwm_swing` / `imu_raw_probe` |
 | `deploy-rtos` | 把产物上板到 `/sdcard/app/` | `launcher` / `dart_app` / `pwm_swing` / `imu_raw_probe` / `list`（只推清单）；可加 `--keep-logs` |
 | `clean-rtos-data` | 设置暂停后清除两个分区上的空闲日志与录像，跳过写入中的项 | `--dry-run` / `--keep-paused` / `logs` / `records` |
+| `stream-rtos` | 运行时关闭/恢复回传编码和 Wi-Fi 发送，不等待板端应答 | `off` 暂停 / `on` 解除暂停；仅 `--wifi on` 启动的应用会恢复 |
 | `write-rtos` | 暂停或恢复录像与日志写入，不等待板端应答 | `off` 暂停 / `on` 解除暂停 |
 | `clean-rtos` | 清除板端内容（**保留目录本身**；固件自带的 `examples/` 默认不动） | `launcher` / `dart_app` / `list` / `logs` / `records` / `examples` |
+
+`stream-rtos off` 仅创建 `/sdcard/app/control/stream.pause`，由回传管理线程异步关闭
+编码与发送并回收自身像素缓冲。日志 `module=wifi state=paused active=0 buffers=0`
+表示完成回收；`state=stopping active=0` 表示已停止接收新帧，仍在等待旧调用结束。
+`stream-rtos on` 清除此标记，重新加载回传配置并恢复；它不改变 `write.pause`，
+也不控制本地录像、日志或其他任务。共享网卡关联保留，避免断开其他使用者。
 
 清理不等待板端停写应答；成功后释放本次暂停，有跳过项或失败时保持暂停。
 处理完成后可运行 `write-rtos on` 恢复。详见 [写入控制](../runtime/WRITE_CONTROL.md)。

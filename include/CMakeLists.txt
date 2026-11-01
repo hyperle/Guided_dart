@@ -237,9 +237,40 @@ else()
 endif()
 target_link_libraries(dart_recording PUBLIC dart_camera_acl dart_platform Threads::Threads dart_zlib)
 
+# JPEG CPU data plane and bounded streaming workers. Device selection is injected.
+add_library(dart_streaming_data STATIC
+    "${_dart_src}/streaming/jpeg.c" "${_dart_src}/streaming/http.c")
+target_include_directories(dart_streaming_data PUBLIC "${_dart_include}" "${_dart_src}")
+target_compile_features(dart_streaming_data PUBLIC c_std_11)
+target_compile_options(dart_streaming_data PRIVATE -Wall -Wextra -Wpedantic)
+target_link_libraries(dart_streaming_data PUBLIC m)
+dart_add_modules(dart_streaming "${_dart_src}/streaming/interface.cpp"
+    "${_dart_src}/streaming/session.cpp")
+target_link_libraries(dart_streaming PUBLIC dart_camera_types dart_streaming_data Threads::Threads)
+option(DART_WIFI_K230 "Build the SDIO Wi-Fi streaming transport" ${DART_CAMERA_K230})
+if(DART_WIFI_K230)
+    if(NOT CMAKE_CROSSCOMPILING OR NOT CMAKE_SYSTEM_PROCESSOR MATCHES "riscv")
+        message(FATAL_ERROR "DART_WIFI_K230 requires a RISC-V cross toolchain")
+    endif()
+    add_library(dart_wifi_radio STATIC "${_dart_src}/streaming/k230/radio.c")
+    target_link_libraries(dart_wifi_radio PRIVATE k230_rtos_app)
+    target_include_directories(dart_wifi_radio PRIVATE "${_dart_src}")
+    target_include_directories(dart_wifi_radio SYSTEM PRIVATE
+        "${_hal_root}/include"
+        "${K230_SDK_ROOT}/src/rtsmart/libs/rtsmart_hal/components/netmgmt")
+    target_compile_options(dart_wifi_radio PRIVATE -Wall -Wextra -Wpedantic)
+    dart_add_modules(dart_streaming_k230 "${_dart_src}/streaming/k230/transport.cpp")
+    target_link_libraries(dart_streaming_k230 PUBLIC dart_streaming
+        PRIVATE dart_wifi_radio k230_rtos_app netmgmt)
+endif()
+
 # The composition root imports actual backends only when they are enabled.
 dart_add_modules(dart_board "${_dart_src}/board/k230.cpp")
-target_link_libraries(dart_board PUBLIC dart_device_services dart_imu_logging)
+target_link_libraries(dart_board PUBLIC dart_device_services dart_imu_logging dart_streaming)
+if(DART_WIFI_K230)
+    target_compile_definitions(dart_board PRIVATE DART_APP_WIFI_K230=1)
+    target_link_libraries(dart_board PUBLIC dart_streaming_k230)
+endif()
 if(DART_PWM_K230)
     target_compile_definitions(dart_board PRIVATE DART_APP_PWM_K230=1)
     target_link_libraries(dart_board PUBLIC dart_pwm_k230)

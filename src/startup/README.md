@@ -10,6 +10,7 @@
 | 设备组装 | `src/dart_entry.cpp` 注入工厂，`startup/` 调用服务 | `board/k230.cpp`、`camera/`、`imu/`、`spi/` |
 | 视觉流程 | `vision/capture_pipeline.cpp` 管理采集顺序、识别和帧分发 | `camera/` 管理帧池与硬件资源 |
 | 纯视觉舵机 | `vision/visual_servo.cpp` 调用 `control/` 两轴映射与限幅 | `pwm/` 管理独立输出任务、超时与 K230 HAL |
+| Wi-Fi 回传 | `vision/capture_pipeline.cpp` 提交同一帧，启动流程接收传输工厂 | `streaming/` 管理固定缓冲、JPEG 压缩和 Wi-Fi 发送线程 |
 | 录像 | `recording/frame_recording.cpp` 映射参数、决定启停并排空租约 | `recorder/` 管理队列、线程、编码和文件 |
 | 诊断 | `diagnostics/` 定义相机错误字段和检测 CSV 行 | `logging/` 管理文件缓冲和同步 |
 | 进程时限与退出 | `startup/run.cpp` 决定调用顺序 | `system/` 管理信号、时钟和 launcher 退出标记 |
@@ -42,6 +43,7 @@ camera->acquire(timeout) -> FrameLease（独立的 0..255 灰度 Y8 缓冲）
   -> detector.Detect(lease.view())      灰度候选提取与背景对比度过滤；同步借用像素
   -> servo.observe(result)             装甲板优先/灯回退 -> 两轴增量 -> 合成限幅
         PWM Session                   独立输出任务；过期或无目标回各路初始脉宽
+  -> wifi.try_submit(lease.view())      可选有界复制 -> JPEG 线程 -> Wi-Fi 发送线程
   -> recorder.try_submit(std::move(lease))
         kAccepted     -> 已拷贝到固定队列；写线程丢弃超时帧，其余写灰度 PGM / PNG 或二值 DBV / PBM
         其他          -> 采集线程自己 release()
@@ -71,6 +73,9 @@ dart_app [选项]
   --seconds N      有界运行秒数，0 = 跑到 SIGINT/SIGTERM（默认 0）
   --exp LINES      固定曝光行数（默认 400；0 保留传感器初始曝光）
   --raw-layout F   packed10-lsb（默认，K230 实板验证）
+  --wifi on|off    JPEG Wi-Fi 回传开关（默认 off）
+  --wifi-config P  回传配置文件（默认 /data/app/wifi.conf）
+  --wifi-pause-file P  回传独立暂停标记（默认 /sdcard/app/control/stream.pause）
   --vision on|off  识别开关（默认 on）
   --pwm on|off     纯视觉 PWM 输出（默认 on；vision off 时停用）
   --aim X,Y        全图预设像素（默认实际图像中心）
@@ -275,3 +280,10 @@ IMU 继续采样，以及 SPI 创建失败后的清理；当时 SPI1 / CS IO14 �
 metadata 错误均为 0，已回读完整 1280×720 PGM 样本。参数注入已生效，当时的
 逐帧文件写盘链路不能维持 30 FPS。此结果不代表当前连续文件实现的性能。证据见
 `records/board-recorder-fps30-2026-10-15-175445/`（本地目录，不提交 Git）。
+
+Wi-Fi 配置、主机 Rust 服务和视频输出见 [接收端说明](../../tools/wifi_receiver/README.md)。
+回传不会创建第二个相机实例；启动配置错误只关闭 Wi-Fi，网络错误在发送线程退避恢复。
+
+回传通过 `streaming::Session::start_controlled` 将配置读取、工作线程创建/回收放到管理线程。
+`.script/stream-rtos off|on` 独立控制该分支，采集流程不等待组件停用；暂停不触碰
+本地录像、日志开关或共享相机。完成回收以 `state=paused active=0 buffers=0` 确认。

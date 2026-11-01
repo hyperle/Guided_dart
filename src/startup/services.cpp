@@ -12,6 +12,7 @@ import dart.app.vision.capture_pipeline;
 import dart.logging.logger;
 import dart.runtime.imu.session;
 import dart.system.device_services;
+import dart.streaming.interface;
 import dart.system.monotonic_clock;
 import dart.system.run_control;
 
@@ -21,7 +22,8 @@ int run_services(
     const Arguments& args, platform::CameraFactory factory, platform::RunControl& control,
     logging::Logger& log, imu::Session* imu_session = nullptr,
     platform::WriteControl* writes = nullptr,
-    platform::PwmFactory pwm_factory = nullptr) noexcept {
+    platform::PwmFactory pwm_factory = nullptr,
+    streaming::TransportFactory wifi_factory = nullptr) noexcept {
     log.line(
         "level=INFO module=app op=start version=4 exposure=fixed exp_lines=%u "
         "vision=%d pwm=%d record=%d record_auto=%d rec_fps=%u rec_timeout_ms=%u rec_keep=%u seconds=%u imu=%d "
@@ -40,7 +42,7 @@ int run_services(
     } else {
         camera_failed =
             CapturePipeline::execute(args, std::move(created.value()), control, log, imu_session, writes,
-                                     pwm_factory)
+                                     pwm_factory, wifi_factory)
             != 0;
     }
     if (camera_failed) {
