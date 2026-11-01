@@ -122,6 +122,8 @@ target_link_libraries(camera_contract_test PRIVATE dart_odr_consumer)
 target_link_libraries(servo_mapping_test PRIVATE dart_odr_consumer)
 
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
+add_test(NAME canmv_build_config
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test_canmv_build_config.py")
 add_test(NAME rtos_scripts
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test_rtos_scripts.py")
 add_test(NAME cpp_structure_rules

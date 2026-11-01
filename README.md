@@ -3,6 +3,7 @@
 本仓库**与固件无关**：它面向 K230D RT-Smart 用户态业务代码的开发和部署。
 不编译、不烧录固件；板子上必须是已支持 RT-Smart 用户态（lwp）的固件，
 交叉编译出的静态 ELF 才能直接运行。
+特殊的，我们有时在tools文件夹下放一些供micropython固件使用的测试文件，这是为了使用canmv的vscode ide插件。
 
 已落地：相机 C 数据面 + C++ ACL（`include/firmware/src/camera/`）、IMU/SPI
 （`.../imu/`、`.../spi/`）、识别与 ROI（`src/detector/`）、灰度取证录像

@@ -17,6 +17,23 @@ BOARD = "k230d_rtos_dart_v1"
 CONFIG = "k230d_canmv_dart_v1_defconfig"
 
 
+def config_header(config, sdk_header):
+    """Overlay CanMV options without changing the kernel/MPP configuration."""
+    definitions = []
+    for name, value in re.findall(r"^(CONFIG_CANMV_\w+)=(.+)$", config, re.M):
+        if value == "n":
+            continue
+        if value == "m":
+            definitions.append(f"#define {name}_MODULE 1")
+        else:
+            definitions.append(f"#define {name} {1 if value == 'y' else value}")
+    if not re.search(r"^#define CONFIG_CANMV_IDE_SUPPORT 1$", "\n".join(definitions), re.M):
+        raise SystemExit("Enable CONFIG_CANMV_IDE_SUPPORT=y in SDK .config before building")
+    base = re.sub(r"^#define CONFIG_CANMV_\w+[^\n]*\n?", "", sdk_header, flags=re.M)
+    return (base.rstrip() + "\n\n/* CanMV options from the selected SDK .config. */\n"
+            + "\n".join(definitions) + "\n")
+
+
 def build(args):
     sdk = args.sdk.resolve()
     destination = args.build_dir.resolve()
@@ -26,7 +43,10 @@ def build(args):
     original_build = sdk / "output" / CONFIG
     if not (original_build / "canmv/micropython").is_file():
         raise SystemExit("Build the Dart V1 MicroPython SDK once before running this helper")
-    if f'CONFIG_BOARD_CONFIG_NAME="{CONFIG}"' not in (sdk / ".config").read_text():
+    sdk_config = (sdk / ".config").read_text()
+    sdk_header = (sdk / "include/generated/autoconf.h").read_text()
+    private_config = config_header(sdk_config, sdk_header)
+    if f'CONFIG_BOARD_CONFIG_NAME="{CONFIG}"' not in sdk_config:
         raise SystemExit(f"SDK .config must select {CONFIG}")
     abi = json.loads((ROOT / "include/firmware/src/camera/k230/mcm_abi.json").read_text())
     for relative, expected in abi.items():
@@ -42,6 +62,11 @@ def build(args):
     stage = destination / "source"
     staged_port = stage / "port"
     staged_port.mkdir(parents=True, exist_ok=True)
+    config_include = destination / "config-include"
+    config_path = config_include / "generated/autoconf.h"
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    if not config_path.exists() or config_path.read_text() != private_config:
+        config_path.write_text(private_config)
     # Source overlay: build tools may touch core/main.c, so keep core and the
     # target board private. Network sources are private for optional socket fixes.
     # Every other source is only read through a symlink.
@@ -68,7 +93,8 @@ def build(args):
         "$(shell git ", '$(shell git -C "$(SDK_CANMV_SRC_DIR)" ').replace(
         "CANMV_SRC_CXX += $(wildcard kpu/*.cpp)",
         "CANMV_SRC_CXX += $(wildcard $(BOARD_DIR)/*.cpp)\n"
-        "CANMV_SRC_CXX += $(wildcard kpu/*.cpp)"))
+        "CANMV_SRC_CXX += $(wildcard kpu/*.cpp)").replace(
+        "$(SDK_SRC_ROOT_DIR)/include/generated/autoconf.h", str(config_path)))
     shutil.copytree(port / "core", staged_port / "core", dirs_exist_ok=True)
     staged_boards = staged_port / "boards"
     staged_boards.mkdir(exist_ok=True)
@@ -136,6 +162,7 @@ def build(args):
         '  media_owner = NULL; free(media); return DART_CAMERA_OK;\n}\n'
     )
     (board / "mpconfigport.mk").write_text(
+        f'INC += -I{config_include}\n'
         f'CFLAGS_EXTRA += -I{ROOT / "include/firmware/src"}\n'
         'LDFLAGS_EXTRA += -Wl,--wrap=ioctl\n'
         f'INC += -I{ROOT} -I{ROOT / "include/firmware/src"}\n'
@@ -193,6 +220,9 @@ def build(args):
         duplicates = native_qstrs.intersection(re.findall(r"MP_QSTR_\w+", frozen_enum.group(1)))
         if duplicates:
             raise SystemExit("Stale frozen qstr pool: " + ", ".join(sorted(duplicates)))
+    link_map = (output / "micropython.map").read_text()
+    if not re.search(r"^\s+0x[0-9a-fA-F]+\s+ide_dbg_start\s*$", link_map, re.M):
+        raise SystemExit("Built interpreter is missing the USBDBG/IDE service; refusing to publish it")
     artifact = destination / "micropython"
     shutil.copy2(output / "micropython", artifact)
     shutil.copy2(ROOT / "tools/canmv_tune.py", destination / "canmv_tune.py")
@@ -206,6 +236,9 @@ def build(args):
         "hardware_tested": False,
         "wifi_socket_fix": bool(getattr(args, "wifi_socket_fix", False)),
         "sdk": str(sdk),
+        "ide_support": True,
+        "sdk_config_sha256": hashlib.sha256(sdk_config.encode()).hexdigest(),
+        "sdk_autoconf_sha256": hashlib.sha256(sdk_header.encode()).hexdigest(),
         "sources": {str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest()
                     for path in sorted(HERE.glob("*.[ch]")) + sorted(HERE.glob("*.cpp"))
                     + [ROOT / "tools/canmv_tune.py"] + sorted((ROOT / "src/detector").glob("*.cpp"))

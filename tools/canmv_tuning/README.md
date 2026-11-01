@@ -152,6 +152,10 @@ python3 tools/canmv_tuning/build.py
 输出 [`../../build/canmv-tuning/micropython`](../../build/canmv-tuning/micropython)、
 脚本副本和 `BUILD_INFO.json`。可用 `--sdk`、`--toolchain-bin`、`--build-dir` 覆盖路径。
 构建前校验原生后端要求的 VICAP 用户态/内核库哈希；SDK 源码和原固件产物均不改动。
+构建使用私有配置头，将 `.config` 中的 `CONFIG_CANMV_*` 选项覆盖到 SDK 已生成的头文件，
+保留其余内核/MPP 配置；要求 `CONFIG_CANMV_IDE_SUPPORT=y`，并检查最终链接包含 IDE 服务。
+SDK 的 `.config` 与生成头可能不同步，缺少 IDE 服务的解释器仍可响应 REPL，
+但 IDE 会报 `did not respond to any USBDBG handshake command`，不能靠更换串口权限解决。
 新增适配器借用 CanMV 启动时已初始化的 VB；相机仍拥有并释放自己的 RAW 池。
 不要同时创建普通 `Sensor` 或运行另一个相机应用。
 
