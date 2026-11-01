@@ -59,14 +59,16 @@ public:
         }
         active_ = true;
         log_.line(
-            "level=INFO module=servo op=start mode=vision frequency_hz=%u update_ms=10 "
+            logging::Tag::kServo,
+            "level=INFO op=start mode=vision frequency_hz=%u update_ms=10 "
             "timeout_ms=%u aim=%.3f,%.3f initial_us=%.3f,%.3f,%.3f,%.3f\n",
             pwm::kFrequencyHz, args_.servo_timeout_ms, aim_.x, aim_.y,
             initial->pulse_us[0], initial->pulse_us[1], initial->pulse_us[2], initial->pulse_us[3]);
         for (std::size_t i = 0; i < args_.servo.channels.size(); ++i) {
             const auto& channel = args_.servo.channels[i];
             log_.line(
-                "level=INFO module=servo op=config channel=%u min_us=%.3f max_us=%.3f "
+                logging::Tag::kServo,
+                "level=INFO op=config channel=%u min_us=%.3f max_us=%.3f "
                 "horizontal_us_per_px=%.5g vertical_us_per_px=%.5g\n",
                 static_cast<unsigned>(i + 1), channel.min_pulse_us, channel.max_pulse_us,
                 channel.horizontal_us_per_pixel, channel.vertical_us_per_pixel);
@@ -104,7 +106,8 @@ public:
             return;
         const auto stats = session_.stats();
         log_.line(
-            "level=%s module=servo op=status running=%d neutral=%d observations=%llu "
+            logging::Tag::kServo,
+            "level=%s op=status running=%d neutral=%d observations=%llu "
             "writes=%llu timeouts=%llu saturations=%llu mapping_errors=%llu "
             "pulse_us=%.3f,%.3f,%.3f,%.3f\n",
             stats.error.code == 0 ? "INFO" : "ERROR", stats.running, stats.neutral,
@@ -125,7 +128,8 @@ public:
             return;
         session_.stop();
         const auto stats = session_.stats();
-        log_.line("level=%s module=servo op=stop operation=%s channel=%d code=%d\n",
+        log_.line(logging::Tag::kServo,
+                  "level=%s op=stop operation=%s channel=%d code=%d\n",
                   stats.error.code == 0 ? "INFO" : "ERROR", stats.error.operation,
                   stats.error.channel, stats.error.code);
         active_ = false;
@@ -133,7 +137,8 @@ public:
 
 private:
     void error(pwm::Error failure) noexcept {
-        log_.line("level=ERROR module=servo op=error operation=%s channel=%d code=%d "
+        log_.line(logging::Tag::kServo,
+                  "level=ERROR op=error operation=%s channel=%d code=%d "
                   "action=disable_pwm\n", failure.operation, failure.channel, failure.code);
     }
 

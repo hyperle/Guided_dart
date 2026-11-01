@@ -113,14 +113,14 @@ class WriteControlTest final {
         assert(imu.start((logs / "imu.log").c_str(), 1000, true,
                          imu::Session::kDefaultLogLimitBytes, &writes));
         until([&] { return imu.stats().samples >= 10; });
-        log.line("paused\n");
+        log.line(logging::Tag::kApp, "paused\n");
         csv.row("paused\n");
         assert(!std::filesystem::exists(records) && !std::filesystem::exists(logs));
 
         std::filesystem::remove(pause);
         until([&] { return !writes.paused() && rec.started() && imu.stats().log_bytes > 0; });
         submit(rec, 1);
-        log.line("first\n");
+        log.line(logging::Tag::kApp, "first\n");
         csv.row("first\n");
         const auto first_image = records / "rec_0001";
         until([&] { return std::filesystem::exists(logs / "detect.csv"); });
@@ -131,7 +131,7 @@ class WriteControlTest final {
         until([&] { return imu.stats().samples >= before + 10; });
         assert(imu.current().has_reference_frame);
         writes.request_recording(true);
-        log.line("paused again\n");
+        log.line(logging::Tag::kApp, "paused again\n");
         csv.row("paused again\n");
         assert(!open_files_below(root));
         assert(std::filesystem::file_size(logs / "imu_000001.log") == original_size);
@@ -153,7 +153,7 @@ class WriteControlTest final {
         submit(rec, 3);
         assert(!std::filesystem::exists(logs));
         writes.request_logging(true);
-        log.line("resumed\n");
+        log.line(logging::Tag::kApp, "resumed\n");
         csv.row("resumed\n");
         until([&] { return std::filesystem::exists(logs / "imu_000001.log"); });
         rec.stop();

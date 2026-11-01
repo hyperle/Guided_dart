@@ -223,7 +223,8 @@ public:
         const auto log = read(root / "app.log");
         assert(log.find("op=detector_prepare result=ok") != std::string::npos);
         if (pwm_failure)
-            assert(log.find("module=servo op=stop operation=fake_write") != std::string::npos);
+            assert(log.find("[servo]") != std::string::npos
+                   && log.find("op=stop operation=fake_write") != std::string::npos);
         else
             assert(log.find("level=ERROR") == std::string::npos);
         const auto image =
@@ -247,6 +248,80 @@ public:
         }
         std::filesystem::remove_all(root);
     }
+
+    /* With every optional feature off, only the unconditional capture and
+     * shutdown lines may appear; vision and record lines are gated. */
+    static void run_without_features() {
+        char directory[] = "/tmp/dart-binary-pipeline-idle-XXXXXX";
+        assert(::mkdtemp(directory));
+        const auto root = std::filesystem::path{directory};
+        app::Arguments args{};
+        args.seconds = 1;
+        args.status_ms = 100;
+        args.vision_on = false;
+        args.record_on = false;
+        args.raw10_layout = layout_ = camera::Raw10Layout::kLe16Msb;
+        pwm_starts_ = pwm_stops_ = pwm_writes_ = 0;
+        pwm_failure_ = false;
+        assert(app::copy_path(args.log_path, sizeof(args.log_path), (root / "app.log").string()));
+        assert(app::copy_path(args.rec_dir, sizeof(args.rec_dir), (root / "records").string()));
+        platform::RunControl control{args.seconds};
+        logging::Logger log_sink;
+        assert(log_sink.open(args.log_path));
+        assert(app::run_services(args, create, control, log_sink, nullptr, nullptr, create_pwm) == 0);
+        const auto log = read(root / "app.log");
+        assert(pwm_starts_ == 0 && pwm_stops_ == 0);
+        assert(log.find("[app]") != std::string::npos);
+        assert(log.find("op=status elapsed_s=") != std::string::npos);
+        assert(log.find("op=timing ") != std::string::npos);
+        assert(log.find("op=shutdown step=summary ") != std::string::npos);
+        assert(log.find("op=exit result=done") != std::string::npos);
+        assert(log.find("op=detector_prepare") == std::string::npos);
+        assert(log.find("op=csv_open") == std::string::npos);
+        assert(log.find("op=vision_status") == std::string::npos);
+        assert(log.find("op=record_status") == std::string::npos);
+        assert(log.find("op=recorder_start") == std::string::npos);
+        assert(log.find("op=recorder_timing") == std::string::npos);
+        assert(log.find("op=recorder_stop") == std::string::npos);
+        assert(log.find("step=summary_vision") == std::string::npos);
+        assert(log.find("step=summary_record") == std::string::npos);
+        assert(log.find("step=leases_drained") == std::string::npos);
+        std::filesystem::remove_all(root);
+    }
+
+    /* Recording through WriteControl starts asynchronously; the pipeline must
+     * report the recorder_start transition once the session is visible. */
+    static void run_recording_controlled() {
+        char directory[] = "/tmp/dart-binary-pipeline-controlled-XXXXXX";
+        assert(::mkdtemp(directory));
+        const auto root = std::filesystem::path{directory};
+        app::Arguments args{};
+        args.seconds = 1;
+        args.status_ms = 100;
+        args.vision_on = false;
+        args.record_on = true;
+        args.raw10_layout = layout_ = camera::Raw10Layout::kLe16Msb;
+        pwm_starts_ = pwm_stops_ = pwm_writes_ = 0;
+        pwm_failure_ = false;
+        assert(app::copy_path(args.log_path, sizeof(args.log_path), (root / "app.log").string()));
+        assert(app::copy_path(args.rec_dir, sizeof(args.rec_dir), (root / "records").string()));
+        platform::WriteControl writes;
+        assert(writes.start((root / "write.pause").c_str()));
+        platform::RunControl control{args.seconds};
+        logging::Logger log_sink;
+        assert(log_sink.open(args.log_path));
+        assert(app::run_services(args, create, control, log_sink, nullptr, &writes, create_pwm) == 0);
+        const auto log = read(root / "app.log");
+        assert(pwm_starts_ == 0 && pwm_stops_ == 0);
+        assert(log.find("[record]") != std::string::npos);
+        assert(log.find("op=recorder_start result=ok") != std::string::npos);
+        assert(log.find("op=record_status rec_input=") != std::string::npos);
+        assert(log.find("op=shutdown step=summary_record") != std::string::npos);
+        assert(log.find("op=detector_prepare") == std::string::npos);
+        assert(log.find("op=vision_status") == std::string::npos);
+        assert(log.find("step=summary_vision") == std::string::npos);
+        std::filesystem::remove_all(root);
+    }
 };
 
 } // namespace dart::tests
@@ -258,4 +333,6 @@ int main() {
     dart::tests::BinaryPipelineTest::run(false, false, true);
     dart::tests::BinaryPipelineTest::run(false, false, false, true);
     dart::tests::BinaryPipelineTest::run(false, false, false, false, 201);
+    dart::tests::BinaryPipelineTest::run_without_features();
+    dart::tests::BinaryPipelineTest::run_recording_controlled();
 }

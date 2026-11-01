@@ -109,7 +109,7 @@ if (result && result->target.valid) {
 目标附带 `contrast`、`snr`、`stability`，装甲板另有 `brightness_ratio` 和 `gap_contrast`。
 `stability_checked` 明确表示本帧是否实际进行多阈值检查；未检查时 stability 为 0，
 quality 只含本帧 SNR 和配对结构分，不沿用历史稳定性作为本帧证据。
-扫描另含 `phase`、`full_validation`、`stability_checks`；原生应用的 `op=detect_track`
+扫描另含 `phase`、`full_validation`、`stability_checks`；原生应用的 `op=vision_status`
 状态行汇总各阶段及复查次数。保持 240 FPS 的完整链路能力仍需在目标和干扰场景测量。
 扫描附带按灰度差、SNR、稳定性顺序过滤的拒绝计数；首次采样获取包含装甲精扫计数，
 同帧重扫时报告最终扫描的计数。局部稳定性工作区不足同样明确返回错误。

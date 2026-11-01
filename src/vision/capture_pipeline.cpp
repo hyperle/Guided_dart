@@ -69,8 +69,13 @@ public:
         platform::PwmFactory pwm_factory = nullptr) noexcept {
         bool vision_on = args.vision_on;
         bool record_on = args.record_on;
+        /* The switch, not the live session state: start evidence and summary
+         * must survive a failed or stopped recorder. */
+        const bool record_requested = args.record_on;
+        bool recorder_start_reported = false;
         log.line(
-            "level=INFO module=app op=camera_create result=ok capacity=%u frame=%ux%u\n",
+            logging::Tag::kCamera,
+            "level=INFO op=camera_create result=ok capacity=%u frame=%ux%u\n",
             cam->capacity(), cam->frame_info().width, cam->frame_info().height);
 
         detection::RoiDetector::Config detect_config{};
@@ -83,14 +88,16 @@ public:
             auto prepared = detector.Prepare(max_width, max_height);
             if (!prepared) {
                 log.line(
-                    "level=ERROR module=app op=detector_prepare code=%d "
+                    logging::Tag::kVision,
+                    "level=ERROR op=detector_prepare code=%d "
                     "max=%ux%u action=disable_vision\n",
                     static_cast<int>(prepared.error()), max_width, max_height);
                 vision_on = false;
             }
             if (vision_on)
                 log.line(
-                    "level=INFO module=app op=detector_prepare result=ok max=%ux%u "
+                    logging::Tag::kVision,
+                    "level=INFO op=detector_prepare result=ok max=%ux%u "
                     "threshold=%u min_contrast=%g input=gray8\n",
                     max_width, max_height, args.threshold, static_cast<double>(args.min_contrast));
         }
@@ -101,11 +108,13 @@ public:
         DetectionCsv csv;
         if (args.det_csv[0] != '\0' && !csv.open(args.det_csv, writes)) {
             log.line(
-                "level=WARN module=app op=csv_open result=failed path=%s "
+                logging::Tag::kApp,
+                "level=WARN op=csv_open result=failed path=%s "
                 "action=continue\n",
                 args.det_csv);
         } else if (args.det_csv[0] != '\0') {
-            log.line("level=INFO module=app op=csv_open result=ok path=%s\n", args.det_csv);
+            log.line(logging::Tag::kApp, "level=INFO op=csv_open result=ok path=%s\n",
+                     args.det_csv);
         }
 
         auto started = cam->start();
@@ -115,7 +124,8 @@ public:
             return 1;
         }
         log.line(
-            "level=INFO module=app op=camera_start result=ok state=%u\n",
+            logging::Tag::kCamera,
+            "level=INFO op=camera_start result=ok state=%u\n",
             static_cast<unsigned>(cam->state()));
 
         VisualServo servo{args, log};
@@ -123,8 +133,16 @@ public:
             servo.start(pwm_factory, max_width, max_height);
 
         if (record_on) {
-            record_on = writes != nullptr ? rec.start_controlled(*writes)
-                                          : start_recording(rec, recorder_config, log);
+            if (writes != nullptr) {
+                record_on = rec.start_controlled(*writes);
+                if (!record_on) {
+                    log_recorder_failed(rec, log);
+                    recorder_start_reported = true;
+                }
+            } else {
+                record_on = start_recording(rec, recorder_config, log);
+                recorder_start_reported = true;
+            }
         }
 
         Counters counters{};
@@ -149,17 +167,16 @@ public:
                 servo.status();
                 if (writes != nullptr)
                     log.line(
-                        "level=INFO module=app op=write_control recording=%d logging=%d "
+                        logging::Tag::kApp,
+                        "level=INFO op=write_control recording=%d logging=%d "
                         "record_active=%d rec_error=%s record_trigger_ns=%llu\n",
                         writes->recording_enabled(), writes->logging_enabled(), rec.started(),
                         recorder::Recorder::error_text(rec.last_error()).data(),
                         static_cast<unsigned long long>(writes->recording_request_ns()));
                 log.line(
-                    "level=INFO module=app op=status elapsed_s=%lld frames=%llu "
-                    "fps=%.1f no_frame=%llu lease_exhausted=%llu target=%llu "
-                    "detect_err=%llu rec_input=%llu rec_acc=%llu rec_down=%llu "
-                    "rec_busy=%llu rec_queued=%u rec_pending=%u rec_written=%llu "
-                    "rec_event_dropped=%llu release_err=%llu run_hw=%u\n",
+                    logging::Tag::kApp,
+                    "level=INFO op=status elapsed_s=%lld frames=%llu "
+                    "fps=%.1f no_frame=%llu lease_exhausted=%llu release_err=%llu\n",
                     static_cast<long long>(elapsed_ms / 1000),
                     static_cast<unsigned long long>(counters.frames),
                     elapsed_ms > 0 ? static_cast<double>(counters.frames) * 1000.0
@@ -167,26 +184,47 @@ public:
                                    : 0.0,
                     static_cast<unsigned long long>(counters.no_frame),
                     static_cast<unsigned long long>(counters.lease_exhausted),
-                    static_cast<unsigned long long>(counters.target_hits),
-                    static_cast<unsigned long long>(counters.detect_errors),
-                    static_cast<unsigned long long>(stats.input),
-                    static_cast<unsigned long long>(stats.accepted),
-                    static_cast<unsigned long long>(stats.downsampled),
-                    static_cast<unsigned long long>(stats.busy), stats.queued,
-                    stats.release_pending, static_cast<unsigned long long>(stats.written),
-                    static_cast<unsigned long long>(stats.event_dropped),
-                    static_cast<unsigned long long>(counters.release_errors),
-                    detector.run_high_water());
-                log.line(
-                    "level=INFO module=app op=detect_track detect_frames=%llu track_frames=%llu "
-                    "validation_frames=%llu stability_checks=%llu\n",
-                    static_cast<unsigned long long>(counters.detect_frames),
-                    static_cast<unsigned long long>(counters.track_frames),
-                    static_cast<unsigned long long>(counters.validation_frames),
-                    static_cast<unsigned long long>(counters.stability_checks));
+                    static_cast<unsigned long long>(counters.release_errors));
+                if (vision_on)
+                    log.line(
+                        logging::Tag::kVision,
+                        "level=INFO op=vision_status target=%llu detect_err=%llu "
+                        "detect_frames=%llu track_frames=%llu validation_frames=%llu "
+                        "stability_checks=%llu detect_us=%.1f detect_max_us=%llu run_hw=%u\n",
+                        static_cast<unsigned long long>(counters.target_hits),
+                        static_cast<unsigned long long>(counters.detect_errors),
+                        static_cast<unsigned long long>(counters.detect_frames),
+                        static_cast<unsigned long long>(counters.track_frames),
+                        static_cast<unsigned long long>(counters.validation_frames),
+                        static_cast<unsigned long long>(counters.stability_checks),
+                        detect_timing.average_us(),
+                        static_cast<unsigned long long>(detect_timing.max_us),
+                        detector.run_high_water());
+                if (record_on)
+                    log.line(
+                        logging::Tag::kRecord,
+                        "level=INFO op=record_status rec_input=%llu rec_acc=%llu "
+                        "rec_down=%llu rec_busy=%llu rec_queued=%u rec_pending=%u "
+                        "rec_written=%llu rec_event_dropped=%llu\n",
+                        static_cast<unsigned long long>(stats.input),
+                        static_cast<unsigned long long>(stats.accepted),
+                        static_cast<unsigned long long>(stats.downsampled),
+                        static_cast<unsigned long long>(stats.busy), stats.queued,
+                        stats.release_pending, static_cast<unsigned long long>(stats.written),
+                        static_cast<unsigned long long>(stats.event_dropped));
+                if (!recorder_start_reported && record_requested) {
+                    if (rec.started()) {
+                        log_recorder_started(rec, recorder_config, log);
+                        recorder_start_reported = true;
+                    } else if (rec.last_error() != recorder::Error::kNone) {
+                        log_recorder_failed(rec, log);
+                        recorder_start_reported = true;
+                    }
+                }
                 if (stats.written > 0)
                     log.line(
-                        "level=INFO module=app op=recorder_timing bytes=%llu "
+                        logging::Tag::kRecord,
+                        "level=INFO op=recorder_timing bytes=%llu "
                         "copy_us=%.1f pack_us=%.1f io_us=%.1f io_max_us=%llu "
                         "space_us=%.1f open_us=%.1f write_us=%.1f close_us=%.1f\n",
                         static_cast<unsigned long long>(stats.bytes),
@@ -203,8 +241,9 @@ public:
                                            telemetry_begin - timing_begin)
                                            .count();
                 log.line(
-                    "level=INFO module=app op=timing window_ms=%lld fps=%.1f "
-                    "acquire_us=%.1f acquire_max_us=%llu detect_us=%.1f detect_max_us=%llu "
+                    logging::Tag::kApp,
+                    "level=INFO op=timing window_ms=%lld fps=%.1f "
+                    "acquire_us=%.1f acquire_max_us=%llu "
                     "pipeline_us=%.1f pipeline_max_us=%llu telemetry_us=%.1f "
                     "telemetry_max_us=%llu note=acquire_includes_wait\n",
                     static_cast<long long>(window_us / 1000),
@@ -213,8 +252,6 @@ public:
                                   : 0.0,
                     acquire_timing.average_us(),
                     static_cast<unsigned long long>(acquire_timing.max_us),
-                    detect_timing.average_us(),
-                    static_cast<unsigned long long>(detect_timing.max_us),
                     pipeline_timing.average_us(),
                     static_cast<unsigned long long>(pipeline_timing.max_us),
                     telemetry_timing.average_us(),
@@ -223,7 +260,8 @@ public:
                     const auto estimate = imu_session->current();
                     const auto imu_stats = imu_session->stats();
                     log.line(
-                        "level=INFO module=imu op=status timestamp_ns=%llu generation=%llu "
+                        logging::Tag::kImu,
+                        "level=INFO op=status timestamp_ns=%llu generation=%llu "
                         "quality_events=%u accepted=%d integrated=%d reference=%d "
                         "samples=%llu read_errors=%llu dropped=%llu io_errors=%llu "
                         "log_bytes=%llu log_limit_reached=%d\n",
@@ -259,7 +297,8 @@ public:
                 log_camera_error(log, "camera_acquire", "retry", acquired.error());
                 if (consecutive_acquire_errors >= args.max_acquire_errors) {
                     log.line(
-                        "level=ERROR module=app op=camera_acquire "
+                        logging::Tag::kCamera,
+                        "level=ERROR op=camera_acquire "
                         "result=disabled consecutive=%u limit=%u\n",
                         consecutive_acquire_errors, args.max_acquire_errors);
                     capture_failed = true;
@@ -300,7 +339,8 @@ public:
                 if (!detected) {
                     counters.detect_errors++;
                     log.line(
-                        "level=WARN module=app op=detect code=%d sequence=%llu "
+                        logging::Tag::kVision,
+                        "level=WARN op=detect code=%d sequence=%llu "
                         "action=skip_frame\n",
                         static_cast<int>(detected.error()),
                         static_cast<unsigned long long>(view.sequence));
@@ -364,7 +404,8 @@ public:
 
         /* ---------------- 收尾：停止输入 → 停消费者 → 排空 → 摘要 → 释放 SDK ---- */
         log.line(
-            "level=INFO module=app op=shutdown step=input_stop reason=%s "
+            logging::Tag::kApp,
+            "level=INFO op=shutdown step=input_stop reason=%s "
             "frames=%llu\n",
             capture_failed ? "camera_failure" : control.reason(),
             static_cast<unsigned long long>(counters.frames));
@@ -374,11 +415,12 @@ public:
         if (record_on) {
             rec.stop();
             log.line(
-                "level=INFO module=app op=shutdown step=recorder_stopped "
+                logging::Tag::kRecord,
+                "level=INFO op=shutdown step=recorder_stopped "
                 "pending=%u\n",
                 rec.pending_releases());
         }
-        drain_recording_releases(rec, log);
+        drain_recording_releases(rec, log, record_on);
 
         if (cam->state() == camera::State::kStarted) {
             auto stopped = cam->stop();
@@ -386,45 +428,56 @@ public:
                 log_camera_error(log, "camera_stop", "destroy_anyway", stopped.error());
             } else {
                 log.line(
-                    "level=INFO module=app op=shutdown step=camera_stopped "
+                    logging::Tag::kCamera,
+                    "level=INFO op=shutdown step=camera_stopped "
                     "result=ok\n");
             }
         }
 
         const auto stats = rec.stats();
         log.line(
-            "level=INFO module=app op=shutdown step=summary frames=%llu "
+            logging::Tag::kApp,
+            "level=INFO op=shutdown step=summary frames=%llu "
             "no_frame=%llu lease_exhausted=%llu acquire_errors=%llu "
-            "target_hits=%llu detect_calls=%llu detect_errors=%llu "
-            "rec_accepted=%llu rec_downsampled=%llu rec_busy=%llu rec_invalid=%llu "
-            "rec_written=%llu rec_bytes=%llu rec_queue_hw=%u rec_event_dropped=%llu "
-            "rec_copy_fail=%llu rec_write_fail=%llu rec_lease_release_fail=%llu "
-            "release_ok=%llu release_errors=%llu run_hw=%u\n",
+            "release_ok=%llu release_errors=%llu\n",
             static_cast<unsigned long long>(counters.frames),
             static_cast<unsigned long long>(counters.no_frame),
             static_cast<unsigned long long>(counters.lease_exhausted),
             static_cast<unsigned long long>(counters.acquire_errors),
-            static_cast<unsigned long long>(counters.target_hits),
-            static_cast<unsigned long long>(counters.detect_calls),
-            static_cast<unsigned long long>(counters.detect_errors),
-            static_cast<unsigned long long>(counters.rec_accepted),
-            static_cast<unsigned long long>(counters.rec_downsampled),
-            static_cast<unsigned long long>(counters.rec_busy),
-            static_cast<unsigned long long>(counters.rec_invalid),
-            static_cast<unsigned long long>(stats.written),
-            static_cast<unsigned long long>(stats.bytes), stats.queue_high_water,
-            static_cast<unsigned long long>(stats.event_dropped),
-            static_cast<unsigned long long>(stats.copy_fail),
-            static_cast<unsigned long long>(stats.write_fail),
-            static_cast<unsigned long long>(stats.lease_release_fail),
             static_cast<unsigned long long>(counters.release_ok),
-            static_cast<unsigned long long>(counters.release_errors), detector.run_high_water());
+            static_cast<unsigned long long>(counters.release_errors));
+        if (vision_on)
+            log.line(
+                logging::Tag::kVision,
+                "level=INFO op=shutdown step=summary_vision target_hits=%llu "
+                "detect_calls=%llu detect_errors=%llu run_hw=%u\n",
+                static_cast<unsigned long long>(counters.target_hits),
+                static_cast<unsigned long long>(counters.detect_calls),
+                static_cast<unsigned long long>(counters.detect_errors),
+                detector.run_high_water());
+        if (record_requested)
+            log.line(
+                logging::Tag::kRecord,
+                "level=INFO op=shutdown step=summary_record rec_accepted=%llu "
+                "rec_downsampled=%llu rec_busy=%llu rec_invalid=%llu "
+                "rec_written=%llu rec_bytes=%llu rec_queue_hw=%u rec_event_dropped=%llu "
+                "rec_copy_fail=%llu rec_write_fail=%llu rec_lease_release_fail=%llu\n",
+                static_cast<unsigned long long>(counters.rec_accepted),
+                static_cast<unsigned long long>(counters.rec_downsampled),
+                static_cast<unsigned long long>(counters.rec_busy),
+                static_cast<unsigned long long>(counters.rec_invalid),
+                static_cast<unsigned long long>(stats.written),
+                static_cast<unsigned long long>(stats.bytes), stats.queue_high_water,
+                static_cast<unsigned long long>(stats.event_dropped),
+                static_cast<unsigned long long>(stats.copy_fail),
+                static_cast<unsigned long long>(stats.write_fail),
+                static_cast<unsigned long long>(stats.lease_release_fail));
 
         csv.close();
 
         cam.reset(); /* deinit -> destroy -> media destroy */
-        log.line("level=INFO module=app op=shutdown step=camera_destroyed result=ok\n");
-        log.line("level=INFO module=app op=exit result=done\n");
+        log.line(logging::Tag::kCamera, "level=INFO op=shutdown step=camera_destroyed result=ok\n");
+        log.line(logging::Tag::kApp, "level=INFO op=exit result=done\n");
         return capture_failed ? 1 : 0;
     }
 };

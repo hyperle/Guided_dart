@@ -130,7 +130,7 @@ PWM 初始化或写入失败只停用输出，识别和录像继续；取帧错�
 ## 输出
 
 ```
-/data/app/logs/dart_app.log                        结构化日志（状态与耗时两行共用一次 fsync，写完关闭文件）
+/data/app/logs/dart_app.log                        结构化日志（行首 `[tag]` 标明模块；状态批共用一次 fsync，写完关闭文件）
 /data/app/logs/imu_NNNNNN.log                      每轮独立的 IMU 原始样本、积分快照和重积分事件
 /data/app/records/rec_NNNN/img/recording.pgm         单文件灰度连续流（默认）
 /data/app/records/rec_NNNN/logs/frames.csv           每帧一行的放行记录（Recorder 写）
@@ -155,29 +155,47 @@ IMU 需要显式指定硬件接线，例如在确认 SPI0 和 HAL 默认片选�
 SPI 时钟 1 MHz、超时 20 ms、1 kHz ODR/轮询、±16 g / ±2000 °/s 与零陀螺偏置
 均为 UNVALIDATED，实际采样率与写盘吞吐待板端验证。
 
-日志是"结构化单行"，正常否定结果（无目标、ROI 无连通域、候选被拒）**不进日志**，
-只进 CSV 与计数器：
+日志是"结构化单行"，每行以 `[tag]` 开头标明所属模块，正常否定结果（无目标、
+ROI 无连通域、候选被拒）**不进日志**，只进 CSV 与计数器。`[tag]` 取代了旧行的
+`module=` 字段（`ts_ms` 仍紧跟其后），因此可以直接按模块筛选，例如
+`grep '^\[vision\]' dart_app.log`：
 
 ```
-ts_ms=... level=INFO module=app op=status elapsed_s=10 frames=298 fps=29.8 no_frame=2
-  lease_exhausted=0 target=37 detect_err=0 rec_input=298 rec_acc=75 rec_down=223 rec_busy=0
-  rec_queued=1 rec_pending=0 rec_written=74 rec_event_dropped=0 release_err=0 run_hw=512
+[app] ts_ms=... level=INFO op=status elapsed_s=10 frames=298 fps=29.8 no_frame=2
+  lease_exhausted=0 release_err=0
+[vision] ts_ms=... level=INFO op=vision_status target=37 detect_err=0 detect_frames=...
+  track_frames=... validation_frames=... stability_checks=... detect_us=... detect_max_us=...
+  run_hw=512
+[record] ts_ms=... level=INFO op=record_status rec_input=298 rec_acc=75 rec_down=223 rec_busy=0
+  rec_queued=1 rec_pending=0 rec_written=74 rec_event_dropped=0
 ```
+
+标签取值为 `[app]`、`[camera]`、`[vision]`、`[record]`、`[servo]`、`[imu]`、`[log]`，
+日志与该功能是否开启绑定：
+
+- `--vision off` 时不出现 `[vision]` 行；`op=csv_open` 属于 `[app]` 诊断输出，只随
+  `--det-csv` 开关；
+- `--record off` 时不出现 `[record]` 行；录像启动由主线程在状态批里观测到会话建立后
+  补一行 `[record] op=recorder_start result=ok …`（最迟一个 `--status-ms`）；
+- `[servo]` 只在 `--pwm on` 且 `--vision on`、启动成功时出现；`[imu]` 只在
+  `--imu on` 时出现；`[camera]` 与 `[app]` 属于采集和进程本身，始终输出。
 
 ## 退出契约
 
 有界运行（`--seconds`）或 SIGINT/SIGTERM 后，按固定顺序收尾，每一步都留日志：
 
 ```
-step=input_stop      主循环出界（reason=signal|deadline|abort）
-module=servo op=stop 停止输出任务并关闭四路 PWM（启用时）
-step=recorder_stopped  停止录像（先停消费者；此时相机仍持有租约，不能先 stop 相机）
-step=leases_drained   排空 release 队列，租约全部在采集线程释放
-step=camera_stopped   camera.stop()
-step=summary          全部计数器 + Recorder 统计 + 工作区高水位
-step=camera_destroyed 相机析构（deinit → destroy → media destroy）
-step=exit            相机流程结束
-module=imu op=stop   启用时停止 IMU、排空日志队列并同步文件
+[app] step=input_stop      主循环出界（reason=signal|deadline|abort）
+[servo] op=stop           停止输出任务并关闭四路 PWM（启用时）
+[record] step=recorder_stopped  停止录像（先停消费者；此时相机仍持有租约，不能先 stop 相机）
+[record] step=leases_drained   排空 release 队列，租约全部在采集线程释放（录像启动成功时）
+[camera] step=camera_stopped   camera.stop()
+[app] step=summary         采集与释放计数器
+[vision] step=summary_vision  识别计数器与工作区高水位（vision 开启时）
+[record] step=summary_record  Recorder 统计（录像请求开启时）
+[camera] step=camera_destroyed 相机析构（deinit → destroy → media destroy）
+[app] step=exit            相机流程结束
+[imu] op=stop              启用时停止 IMU、排空日志队列并同步文件
 ```
 
 由 launcher 以 `&!` 拉起时，程序清理完相机及可选 IMU 服务后写入 launcher 提供的 `.done`

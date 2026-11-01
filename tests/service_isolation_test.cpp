@@ -147,7 +147,8 @@ class ServiceIsolationTest final {
                 || log.find("result=disabled") != std::string::npos);
             assert(log.find("op=degraded camera=disabled") != std::string::npos);
             if (imu_on)
-                assert(log.find("module=imu op=status samples=") != std::string::npos);
+                assert(log.find("[imu]") != std::string::npos
+                       && log.find("op=status samples=") != std::string::npos);
         }
         if (mode == Failure::kCreate) {
             assert(destroyed_ == 0 && acquires_ == 0);

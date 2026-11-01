@@ -22,21 +22,59 @@ inline const char* admission_text(recorder::Admission admission) noexcept {
     return "unknown";
 }
 
-inline void drain_recording_releases(recorder::Recorder& rec, logging::Logger& log) noexcept {
+inline const char* image_format_text(recorder::ImageFormat format) noexcept {
+    switch (format) {
+    case recorder::ImageFormat::kDbv: return "dbv";
+    case recorder::ImageFormat::kPng: return "png";
+    case recorder::ImageFormat::kPbm: return "pbm";
+    case recorder::ImageFormat::kPgm: return "pgm";
+    }
+    return "pgm";
+}
+
+/* The recorder starts asynchronously through WriteControl, so the owning
+ * caller reports the transition once it can observe a started session. */
+inline void log_recorder_started(
+    recorder::Recorder& rec, const recorder::Config& config, logging::Logger& log) noexcept {
+    const auto stats = rec.stats();
+    log.line(
+        logging::Tag::kRecord,
+        "level=INFO op=recorder_start result=ok dir=%s file=%s fps=%u format=%s "
+        "max_file_bytes=%llu file_limit_bytes=%llu max_storage_bytes=%llu queued=%u\n",
+        rec.directory(), rec.recording_path(), config.fps, image_format_text(config.image_format),
+        static_cast<unsigned long long>(config.max_file_bytes),
+        static_cast<unsigned long long>(rec.file_limit_bytes()),
+        static_cast<unsigned long long>(config.max_storage_bytes), stats.queued);
+}
+
+inline void log_recorder_failed(recorder::Recorder& rec, logging::Logger& log) noexcept {
+    log.line(
+        logging::Tag::kRecord,
+        "level=ERROR op=recorder_start result=failed code=%s system_errno=%d "
+        "path=%s action=disable_recording\n",
+        recorder::Recorder::error_text(rec.last_error()).data(), rec.last_system_error(),
+        rec.last_error_path());
+}
+
+inline void drain_recording_releases(
+    recorder::Recorder& rec, logging::Logger& log, bool report) noexcept {
     for (int attempt = 0; attempt < 500; ++attempt) {
         if (rec.pending_releases() == 0) {
-            log.line(
-                "level=INFO module=app op=shutdown step=leases_drained "
-                "pending=0\n");
+            if (report)
+                log.line(
+                    logging::Tag::kRecord,
+                    "level=INFO op=shutdown step=leases_drained pending=0\n");
             return;
         }
         (void)rec.drain_releases();
         platform::sleep_ms(10);
     }
-    log.line(
-        "level=WARN module=app op=shutdown step=leases_drained pending=%u "
-        "action=continue note=drain_incomplete\n",
-        rec.pending_releases());
+    if (report)
+        log.line(
+            logging::Tag::kRecord,
+            "level=WARN op=shutdown step=leases_drained pending=%u "
+            "action=continue note=drain_incomplete\n",
+            rec.pending_releases());
 }
 
 inline recorder::Config
@@ -60,26 +98,10 @@ inline recorder::Config
 inline bool start_recording(
     recorder::Recorder& rec, const recorder::Config& config, logging::Logger& log) noexcept {
     if (!rec.start()) {
-        log.line(
-            "level=ERROR module=app op=recorder_start result=failed "
-            "code=%s system_errno=%d path=%s action=disable_recording\n",
-            recorder::Recorder::error_text(rec.last_error()).data(), rec.last_system_error(),
-            rec.last_error_path());
+        log_recorder_failed(rec, log);
         return false;
     }
-    const auto stats = rec.stats();
-    log.line(
-        "level=INFO module=app op=recorder_start result=ok dir=%s file=%s fps=%u "
-        "format=%s "
-        "max_file_bytes=%llu file_limit_bytes=%llu max_storage_bytes=%llu queued=%u\n",
-        rec.directory(), rec.recording_path(), config.fps,
-        config.image_format == recorder::ImageFormat::kDbv   ? "dbv"
-        : config.image_format == recorder::ImageFormat::kPng ? "png"
-        : config.image_format == recorder::ImageFormat::kPbm ? "pbm"
-                                                             : "pgm",
-        static_cast<unsigned long long>(config.max_file_bytes),
-        static_cast<unsigned long long>(rec.file_limit_bytes()),
-        static_cast<unsigned long long>(config.max_storage_bytes), stats.queued);
+    log_recorder_started(rec, config, log);
     return true;
 }
 
@@ -88,10 +110,11 @@ inline bool stop_recording_if_finished(
     if (!rec.limit_reached() && rec.last_error() == recorder::Error::kNone)
         return false;
     rec.stop();
-    drain_recording_releases(rec, log);
+    drain_recording_releases(rec, log, true);
     const auto stats = rec.stats();
     log.line(
-        "level=INFO module=app op=recorder_stop reason=%s file=%s "
+        logging::Tag::kRecord,
+        "level=INFO op=recorder_stop reason=%s file=%s "
         "bytes=%llu max_file_bytes=%llu file_limit_bytes=%llu written=%llu code=%s "
         "system_errno=%d action=disable_recording\n",
         rec.last_error() != recorder::Error::kNone       ? "write_error"

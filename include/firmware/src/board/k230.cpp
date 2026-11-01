@@ -59,7 +59,8 @@ inline int with_imu(
     const auto& diagnostic = device.initialization_diagnostic();
     const char* level = initialized ? "INFO" : "ERROR";
     log.line(
-        "level=%s module=imu op=identity id_check=%s id_read=%u expected_id=0x6f "
+        logging::Tag::kImu,
+        "level=%s op=identity id_check=%s id_read=%u expected_id=0x6f "
         "observed_id=0x%02x reset_id_read=%u reset_id=0x%02x\n",
         diagnostic.device_id_check_skipped ? "WARN" : level,
         diagnostic.device_id_check_skipped ? "skipped" : "enforced",
@@ -73,7 +74,8 @@ inline int with_imu(
             raw[2 * i + 1] = hex[diagnostic.raw_probe[i] & 0x0f];
         }
         log.line(
-            "level=%s module=imu op=raw_probe read=%u stage=%s register=0x1d length=14 "
+            logging::Tag::kImu,
+            "level=%s op=raw_probe read=%u stage=%s register=0x1d length=14 "
             "bytes=%s verification=unverified accel_raw=%d,%d,%d gyro_raw=%d,%d,%d\n",
             level, diagnostic.raw_probe_read,
             dart_iim42652_stage_name(diagnostic.raw_probe_stage),
@@ -83,7 +85,8 @@ inline int with_imu(
             diagnostic.last_gyroscope[1], diagnostic.last_gyroscope[2]);
     }
     log.line(
-        "level=%s module=imu op=init_timing result=%d stage=%s "
+        logging::Tag::kImu,
+        "level=%s op=init_timing result=%d stage=%s "
         "start_ns=%llu first_access_ns=%llu reset_ns=%llu configured_ns=%llu "
         "enabled_ns=%llu first_read_ns=%llu ready_ns=%llu finished_ns=%llu polls=%u\n",
         level, diagnostic.result, dart_iim42652_stage_name(diagnostic.stage),
@@ -96,7 +99,8 @@ inline int with_imu(
         static_cast<unsigned long long>(diagnostic.ready_ns),
         static_cast<unsigned long long>(diagnostic.finished_ns), diagnostic.readiness_polls);
     log.line(
-        "level=%s module=imu op=config read=%u intf0=0x%02x intf1=0x%02x "
+        logging::Tag::kImu,
+        "level=%s op=config read=%u intf0=0x%02x intf1=0x%02x "
         "power=0x%02x gyro=0x%02x accel=0x%02x status=0x%02x status_seen=0x%02x "
         "sensor_config_read=%u sensor_config0=0x%02x "
         "accel_raw=%d,%d,%d gyro_raw=%d,%d,%d individual_read=%u gyro_individual=%d,%d,%d\n",
@@ -111,7 +115,8 @@ inline int with_imu(
         diagnostic.individual_gyroscope[1], diagnostic.individual_gyroscope[2]);
     if (!initialized) {
         log.line(
-            "level=ERROR module=imu op=initialize code=%u bus=%d cs=%d "
+            logging::Tag::kImu,
+            "level=ERROR op=initialize code=%u bus=%d cs=%d "
             "id_read=%u expected_id=0x6f observed_id=0x%02x model=%s action=disable_imu\n",
             static_cast<unsigned>(initialized.error()), config.bus, config.chip_select_pin,
             diagnostic.device_id_read, diagnostic.observed_device_id,
@@ -119,18 +124,21 @@ inline int with_imu(
         return service(nullptr);
     }
     log.line(
-        "level=INFO module=imu op=initialize model=%s device_id=0x%02x result=ok\n",
+        logging::Tag::kImu,
+        "level=INFO op=initialize model=%s device_id=0x%02x result=ok\n",
         dart_iim42652_device_name(diagnostic.observed_device_id), diagnostic.observed_device_id);
     if (options.writes == nullptr || options.writes->logging_enabled())
         storage::ensure_parent(options.log_path);
     imu::Session session{device};
     if (!session.start(options.log_path, 1000, true, imu::Session::kDefaultLogLimitBytes,
                        options.writes, options.sample_observer, options.sample_observer_context)) {
-        log.line("level=ERROR module=imu op=start path=%s action=disable_imu\n", options.log_path);
+        log.line(logging::Tag::kImu, "level=ERROR op=start path=%s action=disable_imu\n",
+                 options.log_path);
         return service(nullptr);
     }
     log.line(
-        "level=INFO module=imu op=start bus=%d cs=%d bus_hz=%u timeout_ms=%u "
+        logging::Tag::kImu,
+        "level=INFO op=start bus=%d cs=%d bus_hz=%u timeout_ms=%u "
         "odr=0x%02x accel_range=%u gyro_range=%u gyro_bias_rad_s=0,0,0 "
         "period_us=1000 initial_seed=stationary_identity parameters=UNVALIDATED "
         "log_limit_bytes=%llu path=%s\n",
@@ -142,7 +150,8 @@ inline int with_imu(
     session.stop();
     const auto stats = session.stats();
     log.line(
-        "level=%s module=imu op=stop samples=%llu read_errors=%llu written=%llu "
+        logging::Tag::kImu,
+        "level=%s op=stop samples=%llu read_errors=%llu written=%llu "
         "dropped=%llu io_errors=%llu log_bytes=%llu log_limit_reached=%d path=%s\n",
         stats.io_errors > 0 ? "ERROR" : "INFO", static_cast<unsigned long long>(stats.samples),
         static_cast<unsigned long long>(stats.read_errors),
@@ -153,7 +162,8 @@ inline int with_imu(
         session.log_path());
     return result;
 #else
-    log.line("level=ERROR module=imu op=initialize code=backend_unavailable action=disable_imu\n");
+    log.line(logging::Tag::kImu,
+             "level=ERROR op=initialize code=backend_unavailable action=disable_imu\n");
     return service(nullptr);
 #endif
 }

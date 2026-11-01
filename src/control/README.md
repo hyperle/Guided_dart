@@ -104,7 +104,7 @@ PWM 初始化或写入失败只停用 PWM，不停止识别、录像及可选 IM
 | `--servo-timeout-ms N` | 视觉指令有效时长，默认 200 ms，必须大于 0 |
 
 数值列表用逗号分隔，不含空格，允许负增益和小数。配置同时校验机械限幅关系和
-333 Hz 周期；图像范围在相机启动后校验。状态日志 `module=servo` 给出预设点、
+333 Hz 周期；图像范围在相机启动后校验。状态日志 `[servo]` 给出预设点、
 各路参数、实际下发脉宽、饱和计数、超时计数与设备错误。
 `runtime/launcher/startup.list` 已启用此链路；不能同时运行 `pwm_swing`。
 
@@ -134,7 +134,7 @@ msh> /sdcard/app/dart_app --seconds 8 --record off --pwm on --servo-initial 1520
 - 参数校验要求 `0 < min ≤ initial ≤ max`，且 `max × 1000 ns` 不超过 333 Hz 周期
   （3003 µs）。某路零点落在默认 1420～1620 之外时，同一条命令里放宽该路的 min/max，
   例如 `--servo-min 1450,1390,1420,1420 --servo-max 1590,1700,1620,1620`。
-- 日志 `module=servo op=start ... initial_us=...` 是下发的初始脉宽，状态行的
+- 日志 `[servo] op=start ... initial_us=...` 是下发的初始脉宽，状态行的
   `pulse_us=...` 是输出任务实际写入的四路值，可用来核对没有写错通道。
 
 标定完成后把四路数值写进清单那条 `dart_app` 行的 `--servo-initial`，部署清单并重启：

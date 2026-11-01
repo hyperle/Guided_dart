@@ -90,7 +90,7 @@ public:
             /* Burst far above the token bucket: the file log keeps every line,
              * the console keeps the initial burst and summarizes the rest. */
             for (int i = 0; i < 100; ++i)
-                log.line("level=INFO module=test op=burst i=%d\n", i);
+                log.line(logging::Tag::kApp, "level=INFO op=burst i=%d\n", i);
             log.end_batch();
         }
 
@@ -100,7 +100,7 @@ public:
         assert(console_burst >= logging::kConsoleBurst);
         assert(console_burst < 100);
         assert(count_of(console_text, "op=console_dropped") == 1);
-        assert(count_of(console_text, "module=log") == 1);
+        assert(count_of(console_text, "[log]") == 1);
         /* The exit summary must account for every line the console dropped. */
         assert(console_text.find("count=" + std::to_string(100 - console_burst)) !=
                std::string::npos);
@@ -113,7 +113,7 @@ public:
             logging::Logger log{&writes};
             assert(log.open(log_file.string().c_str()));
             log.set_console(true);
-            log.line("level=INFO module=test op=paused\n");
+            log.line(logging::Tag::kApp, "level=INFO op=paused\n");
             log.end_batch();
             assert(slurp(console_file).find("op=paused") == std::string::npos);
         }
@@ -126,7 +126,7 @@ public:
             logging::Logger log{&writes};
             assert(log.open(log_file.string().c_str()));
             log.set_console(true);
-            log.line("level=INFO module=test op=resumed\n");
+            log.line(logging::Tag::kApp, "level=INFO op=resumed\n");
             log.end_batch();
             assert(slurp(console_file).find("op=resumed") != std::string::npos);
         }

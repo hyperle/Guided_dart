@@ -37,7 +37,8 @@ inline void log_camera_error(
     const auto& context = error.context();
     const auto operation = camera_operation_text(context.operation);
     log.line(
-        "level=ERROR module=camera op=%s code=%.*s native=%d detail=\"%.*s\" "
+        logging::Tag::kCamera,
+        "level=ERROR op=%s code=%.*s native=%d detail=\"%.*s\" "
         "ctx_op=%.*s requested=%u observed=%u state=%u req_state=%u action=%s\n",
         op, static_cast<int>(error.category().size()), error.category().data(), error.code(),
         static_cast<int>(error.message().size()), error.message().data(),

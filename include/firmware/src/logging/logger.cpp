@@ -15,8 +15,25 @@
 
 namespace dart::logging {
 
+/* Feature ownership tag, printed at the start of every line so a reader can
+ * attribute it to one subsystem instead of parsing the body. */
+enum class Tag : std::uint8_t { kApp, kCamera, kVision, kRecord, kServo, kImu, kLog };
+
+inline const char* tag_text(Tag tag) noexcept {
+    switch (tag) {
+    case Tag::kApp: return "app";
+    case Tag::kCamera: return "camera";
+    case Tag::kVision: return "vision";
+    case Tag::kRecord: return "record";
+    case Tag::kServo: return "servo";
+    case Tag::kImu: return "imu";
+    case Tag::kLog: return "log";
+    }
+    return "app";
+}
+
 /* Console mirror rate limit, in lines per second (0 disables the limit).
- * Every periodic line is emitted once per --status-ms (default 1 s, ~6 lines),
+ * Every periodic line is emitted once per --status-ms (default 1 s, ~7 lines),
  * so normal operation never touches the limit. A per-frame failure path can
  * emit ~95 lines/s, which exceeds a 115200 console (11.5 KB/s) and would block
  * the foreground process; 30 lines/s keeps the console near 6.6 KB/s. */
@@ -82,7 +99,7 @@ public:
         flush_console_dropped();
     }
 
-    void line(const char* fmt, ...) noexcept {
+    void line(Tag tag, const char* fmt, ...) noexcept {
         if (writes_ != nullptr && !writes_->logging_enabled()) {
             end_batch();
             return;
@@ -96,7 +113,8 @@ public:
         if (body_n < 0)
             return;
         int out_n = std::snprintf(
-            out, sizeof(out), "ts_ms=%lld %s", static_cast<long long>(platform::mono_ms()), body);
+            out, sizeof(out), "[%s] ts_ms=%lld %s", tag_text(tag),
+            static_cast<long long>(platform::mono_ms()), body);
         if (out_n < 0)
             return;
         if (static_cast<std::size_t>(out_n) >= sizeof(out))
@@ -159,7 +177,7 @@ private:
         char buffer[128];
         const int written = std::snprintf(
             buffer, sizeof(buffer),
-            "ts_ms=%lld level=WARN module=log op=console_dropped count=%llu\n",
+            "[log] ts_ms=%lld level=WARN op=console_dropped count=%llu\n",
             static_cast<long long>(now),
             static_cast<unsigned long long>(console_dropped_));
         if (written > 0)
