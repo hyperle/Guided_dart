@@ -13,6 +13,12 @@ module;
 #include "camera/c_api/camera.h"
 #include "camera/error_codes.h"
 
+// Host tests use the neutral C defaults. A board build must consume the
+// firmware routing configuration rather than silently probing CSI0.
+#if defined(__riscv) && !defined(CONFIG_MPP_SENSOR_DEFAULT_CSI)
+#error "K230 camera adapter requires the SDK generated/autoconf.h CSI configuration"
+#endif
+
 export module dart.camera.k230.camera;
 
 import dart.camera.frame_lease;

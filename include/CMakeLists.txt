@@ -120,7 +120,8 @@ dart_add_modules(dart_camera_acl
 target_include_directories(dart_camera_acl PUBLIC "${_dart_include}")
 target_link_libraries(dart_camera_acl PUBLIC dart_camera_types dart_camera_core)
 if(DART_CAMERA_K230)
-    target_link_libraries(dart_camera_acl PUBLIC dart_camera_k230)
+    # The adapter also needs the firmware CSI routing configuration.
+    target_link_libraries(dart_camera_acl PUBLIC dart_camera_k230 PRIVATE k230_rtos_app)
 endif()
 
 # ---------------------------------------------------------------------------
