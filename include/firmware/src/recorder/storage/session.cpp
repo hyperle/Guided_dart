@@ -1,4 +1,5 @@
-module;
+#include "recorder/storage/session.hpp"
+
 #include <algorithm>
 #include <cerrno>
 #include <cstddef>
@@ -9,106 +10,78 @@ module;
 #include <sys/stat.h>
 #include <unistd.h>
 
-export module dart.recorder.storage.session;
+#include "recorder/config.hpp"
+#include "recorder/error.hpp"
+#include "recorder/storage/storage_space.hpp"
+#include "storage/directories.hpp"
 
-import dart.recorder.config;
-import dart.recorder.error;
-import dart.recorder.storage.storage_space;
-import dart.storage.directories;
+namespace dart::recorder {
 
-export namespace dart::recorder {
+void Session::set_file_error(Error error, const char* path) noexcept {
+    error_.set_file_error(error, path);
+}
 
-class Session final {
-public:
-    static constexpr std::size_t kMaxPath = RecorderError::kMaxPath;
-    Session(const Config& config, RecorderError& error) noexcept
-        : config_(config)
-        , error_(error) {}
-    bool open() noexcept;
-    const char* directory() const noexcept { return session_dir_; }
-    const char* event_path() const noexcept { return event_path_; }
-    const char* image_directory() const noexcept { return image_dir_; }
-    const char* image_path() const noexcept { return image_path_; }
-    std::uint64_t file_limit_bytes() const noexcept { return file_limit_bytes_; }
+bool Session::mkdir_if_needed(const char* path) noexcept {
+    if (::mkdir(path, 0777) == 0)
+        return true;
+    if (errno != EEXIST)
+        return false;
+    struct stat st{};
+    return ::stat(path, &st) == 0 && S_ISDIR(st.st_mode);
+}
 
-private:
-    bool scan_sessions(const char*, std::uint32_t&, std::uint32_t&, std::uint32_t&) noexcept;
-    bool remove_session(const char*, std::uint32_t) noexcept;
-    bool remove_images(const char* path, bool image, unsigned level, bool remove) noexcept;
-    void set_error(Error error) noexcept { error_.set_error(error); }
-    void set_file_error(Error error, const char* path) noexcept {
-        error_.set_file_error(error, path);
-    }
-    const Config& config_;
-    RecorderError& error_;
-    char session_dir_[kMaxPath]{};
-    char image_dir_[kMaxPath]{};
-    char image_path_[kMaxPath]{};
-    char event_path_[kMaxPath]{};
-    std::uint64_t file_limit_bytes_ = 0;
-
-private:
-    static bool mkdir_if_needed(const char* path) noexcept {
-        if (::mkdir(path, 0777) == 0)
-            return true;
-        if (errno != EEXIST)
-            return false;
-        struct stat st{};
-        return ::stat(path, &st) == 0 && S_ISDIR(st.st_mode);
-    }
-
-    static std::uint32_t session_number(const char* name) noexcept {
-        if (std::strlen(name) != 8 || std::memcmp(name, "rec_", 4) != 0)
+std::uint32_t Session::session_number(const char* name) noexcept {
+    if (std::strlen(name) != 8 || std::memcmp(name, "rec_", 4) != 0)
+        return 0;
+    std::uint32_t number = 0;
+    for (int i = 4; i < 8; ++i) {
+        if (name[i] < '0' || name[i] > '9')
             return 0;
-        std::uint32_t number = 0;
-        for (int i = 4; i < 8; ++i) {
-            if (name[i] < '0' || name[i] > '9')
-                return 0;
-            number = number * 10U + static_cast<std::uint32_t>(name[i] - '0');
-        }
-        return number;
+        number = number * 10U + static_cast<std::uint32_t>(name[i] - '0');
     }
+    return number;
+}
 
-    static bool recorder_file_name(const char* name, bool image) noexcept {
-        if (!image)
-            return std::strcmp(name, "frames.csv") == 0;
-        if (std::strcmp(name, "recording.pgm") == 0 || std::strcmp(name, "recording.pbm") == 0
-            || std::strcmp(name, "recording.dbv") == 0)
-            return true;
-        if (std::strlen(name) == 12 && std::strcmp(name + 8, ".png") == 0) {
-            for (unsigned i = 0; i < 8; ++i)
-                if (name[i] < '0' || name[i] > '9')
-                    return false;
-            return true;
-        }
-        if (std::strlen(name) != 18 || std::memcmp(name, "frame_", 6) != 0)
-            return false;
-        for (int i = 6; i < 14; ++i)
-            if (name[i] < '0' || name[i] > '9')
-                return false;
-        return std::strcmp(name + 14, ".pgm") == 0 || std::strcmp(name + 14, ".pbm") == 0
-            || std::strcmp(name + 14, ".png") == 0 || std::strcmp(name + 14, ".tmp") == 0;
-    }
-    static bool part_name(const char* name) noexcept {
-        if (std::strlen(name) != 11 || std::memcmp(name, "part_", 5) != 0)
-            return false;
-        for (unsigned i = 5; i < 11; ++i)
+bool Session::recorder_file_name(const char* name, bool image) noexcept {
+    if (!image)
+        return std::strcmp(name, "frames.csv") == 0;
+    if (std::strcmp(name, "recording.pgm") == 0 || std::strcmp(name, "recording.pbm") == 0
+        || std::strcmp(name, "recording.dbv") == 0)
+        return true;
+    if (std::strlen(name) == 12 && std::strcmp(name + 8, ".png") == 0) {
+        for (unsigned i = 0; i < 8; ++i)
             if (name[i] < '0' || name[i] > '9')
                 return false;
         return true;
     }
-    static bool short_directory(const char* name, char prefix) noexcept {
-        if (std::strlen(name) != 8 || name[0] != prefix)
+    if (std::strlen(name) != 18 || std::memcmp(name, "frame_", 6) != 0)
+        return false;
+    for (int i = 6; i < 14; ++i)
+        if (name[i] < '0' || name[i] > '9')
             return false;
-        for (unsigned i = 1; i < 8; ++i)
-            if (name[i] < '0' || name[i] > '9')
-                return false;
-        return true;
-    }
-};
+    return std::strcmp(name + 14, ".pgm") == 0 || std::strcmp(name + 14, ".pbm") == 0
+        || std::strcmp(name + 14, ".png") == 0 || std::strcmp(name + 14, ".tmp") == 0;
+}
 
-bool
-    Session::remove_images(const char* path, bool image, unsigned level, bool remove) noexcept {
+bool Session::part_name(const char* name) noexcept {
+    if (std::strlen(name) != 11 || std::memcmp(name, "part_", 5) != 0)
+        return false;
+    for (unsigned i = 5; i < 11; ++i)
+        if (name[i] < '0' || name[i] > '9')
+            return false;
+    return true;
+}
+
+bool Session::short_directory(const char* name, char prefix) noexcept {
+    if (std::strlen(name) != 8 || name[0] != prefix)
+        return false;
+    for (unsigned i = 1; i < 8; ++i)
+        if (name[i] < '0' || name[i] > '9')
+            return false;
+    return true;
+}
+
+bool Session::remove_images(const char* path, bool image, unsigned level, bool remove) noexcept {
     struct stat st{};
     if (::lstat(path, &st) != 0) {
         if (errno == ENOENT)

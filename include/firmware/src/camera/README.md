@@ -1,23 +1,23 @@
 # Camera ACL
 
-C++ 通过命名模块 `dart.camera.*` 导入各职责，通过 `dart_camera_acl` 静态库
-取得 C ABI 依赖；不再提供 C++ 头文件。C 数据面保留 `.c` / `.h`。
-各模块独立编译；主机相机契约/适配测试与交叉应用完成最终链接。
+C++ 通过所需 `.hpp` 使用接口、帧类型和适配器，通过 `dart_camera_acl` 静态库
+取得普通实现及 C ABI 依赖。C 数据面保留 `.c` / `.h`。
+头文件按需设置，模板定义保留在头文件中；主机相机契约/适配测试与交叉应用完成最终链接。
 
 | 文件 | 类 / 职责 |
 |---|---|
-| `frame_view.cpp` | `FrameView`，L3 只读帧数据 |
-| `interface.cpp` | `ICamera`、曝光/RAW10 布局、实际尺寸与取帧契约 |
+| `frame_view.hpp` | `FrameView`，L3 只读帧数据 |
+| `interface.hpp` | `ICamera`、曝光/RAW10 布局、实际尺寸与取帧契约 |
 | `frame_lease.cpp` | `FrameLease` 的移动与释放语义，以及后端槽位与受限构造入口 |
 | `error.cpp` | 错误分类、上下文、原生码翻译及有界诊断文本 |
-| `k230/camera.cpp` | `Camera<N>`，K230 生命周期、曝光调整与 C ABI 适配 |
+| `k230/camera.hpp` | `Camera<N>`，K230 生命周期、曝光调整与 C ABI 适配 |
 
 曝光设置通过 `Camera<N>::set_fixed_exposure_lines()` 完成：检查状态、查询后端
 行数范围并钳位，后端负责曝光编码和帧长调整。请求值、范围和实际指令仅在诊断
 上下文中保留，不再构造单独的规划结果或规划器。
 
 ```cpp
-import dart.camera.k230.camera;
+#include "camera/k230/camera.hpp"
 
 auto created = dart::camera::k230::Camera<4>::create();
 if (!created) {
@@ -32,11 +32,14 @@ if (!created) {
 租约析构或移动覆盖时若释放失败，槽位用 `std::optional<CameraError>` 保存错误；
 相机下一次受保护操作先重试释放，再继续工作。无帧和容量耗尽仍是正常取帧结果。
 
-L4 只依赖 `camera/frame_view.cpp` 与 `dart_camera_types`，应用组合根选择具体相机。
+L4 只依赖 `camera/frame_view.hpp` 与 `dart_camera_types`，应用组合根选择具体相机。
 业务采集流程注入 `ICamera`，不请求采集模式、分辨率、帧率、CSI 或缓冲池配置。
 `frame_info()` 只读回实际输出尺寸，供消费者预分配；逐帧尺寸和 stride 来自 `FrameView`。
 `Controls` 提供曝光与 RAW10 DDR 布局；K230 工厂从固件可用模式中选择，CSI 来自
-`CONFIG_MPP_SENSOR_DEFAULT_CSI`。硬件探测失败返回错误，应用停用采集并保留独立服务。
+`CONFIG_MPP_SENSOR_DEFAULT_CSI`。`dart_camera_acl` 向模板消费者传播 `k230_rtos_app` 的 SDK 编译配置，
+C 后端也直接消费它，不能依赖 C 后端的 PRIVATE 配置向上传递。
+RISC-V 模板适配器缺少此宏时编译失败，避免把 CSI2 板卡静默当作 CSI0 探测。
+硬件探测失败返回错误，应用停用采集并保留独立服务。
 代码通过主机回归和交叉链接验证；下面的硬件说明仍需真实板端验证。
 
 ## SC038HGS / Dart V1

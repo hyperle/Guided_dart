@@ -1,4 +1,5 @@
-module;
+#include "tools/video_player/recording.hpp"
+
 #include <QDir>
 #include <QDirIterator>
 #include <QFile>
@@ -15,50 +16,28 @@ module;
 #include <utility>
 #include <vector>
 
-export module dart.tools.video_player.recording;
+#include "recorder/encoding/binary_format.hpp"
+#include "tools/video_player/binary_stream.hpp"
+#include "tools/video_player/csv.hpp"
+#include "tools/video_player/recording_paths.hpp"
+#include "tools/video_player/recording_types.hpp"
 
-import dart.recorder.encoding.binary_format;
-import dart.tools.video_player.binary_stream;
-import dart.tools.video_player.csv;
-import dart.tools.video_player.recording_paths;
-export import dart.tools.video_player.recording_types;
+namespace dart::tools::video_player {
 
-export namespace dart::tools::video_player {
+QString Recording::summary() const {
+    return QStringLiteral(
+               "images=%1 recorder_matches=%2 detection_matches=%3 "
+               "missing_images=%4")
+        .arg(frames_.size())
+        .arg(event_matches_)
+        .arg(detection_matches_)
+        .arg(missing_images_);
+}
 
-class Recording final {
-public:
-    bool load_directory(
-        const QString& directory, const std::optional<QString>& frames_csv,
-        const std::optional<QString>& detection_csv, const QString& extension, QString& error);
-    bool load(
-        const QString& image_directory, const QString& frames_csv, const QString& detection_csv,
-        const QString& extension, QString& error);
-    const std::vector<Frame>& frames() const { return frames_; }
-    const QStringList& notes() const { return notes_; }
-    QString summary() const {
-        return QStringLiteral(
-                   "images=%1 recorder_matches=%2 detection_matches=%3 "
-                   "missing_images=%4")
-            .arg(frames_.size())
-            .arg(event_matches_)
-            .arg(detection_matches_)
-            .arg(missing_images_);
-    }
-    bool complete() const {
-        return event_matches_ == frames_.size() && missing_images_ == 0
-            && detection_matches_ == required_detection_matches_;
-    }
-
-private:
-    bool append_stream(const QFileInfo& file_info, QString& error);
-    bool append_binary(const QFileInfo& file_info, QString& error);
-    std::vector<Frame> frames_;
-    QStringList notes_;
-    std::size_t event_matches_ = 0;
-    std::size_t detection_matches_ = 0;
-    std::size_t missing_images_ = 0;
-    std::size_t required_detection_matches_ = 0;
-};
+bool Recording::complete() const {
+    return event_matches_ == frames_.size() && missing_images_ == 0
+        && detection_matches_ == required_detection_matches_;
+}
 
 bool Recording::load_directory(
     const QString& directory, const std::optional<QString>& frames_csv,
@@ -67,8 +46,9 @@ bool Recording::load_directory(
     error.clear();
     const auto directories = RecordingPaths::directories(directory);
     if (directories.size() > 1 && frames_csv && !frames_csv->isEmpty()) {
-        error = QStringLiteral("Multiple sessions use separate frames.csv files; "
-                               "select one rec_NNNN directory to override its recorder CSV.");
+        error = QStringLiteral(
+            "Multiple sessions use separate frames.csv files; "
+            "select one rec_NNNN directory to override its recorder CSV.");
         return false;
     }
     for (const auto& session : directories) {
@@ -100,7 +80,8 @@ bool Recording::append_binary(const QFileInfo& file_info, QString& error) {
     }
     const auto header = file.read(recorder::BinaryFormat::kHeaderBytes);
     if (header.size() < static_cast<int>(recorder::BinaryFormat::kHeaderBytes)) {
-        notes_ << file_info.absoluteFilePath() + QStringLiteral(": incomplete binary header ignored");
+        notes_ << file_info.absoluteFilePath()
+                      + QStringLiteral(": incomplete binary header ignored");
         return true;
     }
     quint32 width = 0, height = 0;
@@ -116,12 +97,14 @@ bool Recording::append_binary(const QFileInfo& file_info, QString& error) {
         quint32 code = 0;
         const auto prefix = BinaryStream::prefix(file, code);
         if (prefix == 0 || (prefix > 0 && (code >> 2U) > file.size() - file.pos())) {
-            notes_ << file_info.absoluteFilePath() + QStringLiteral(": incomplete final frame ignored");
+            notes_ << file_info.absoluteFilePath()
+                          + QStringLiteral(": incomplete final frame ignored");
             break;
         }
         if (prefix < 0 || !recorder::BinaryFormat::valid(code, packed, key >= 0)) {
             error = QStringLiteral("%1:%2: invalid binary frame header")
-                        .arg(file_info.absoluteFilePath()).arg(offset);
+                        .arg(file_info.absoluteFilePath())
+                        .arg(offset);
             return false;
         }
         const auto kind = code & 3U;
@@ -132,8 +115,8 @@ bool Recording::append_binary(const QFileInfo& file_info, QString& error) {
         Frame frame;
         frame.image_index = index++;
         frame.path = file_info.absoluteFilePath();
-        frame.file_offset = offset == static_cast<qint64>(recorder::BinaryFormat::kHeaderBytes)
-                                ? 0 : offset;
+        frame.file_offset =
+            offset == static_cast<qint64>(recorder::BinaryFormat::kHeaderBytes) ? 0 : offset;
         frame.file_bytes = offset + prefix + (code >> 2U) - frame.file_offset;
         frame.binary_key_offset = key;
         frame.binary_decode_offset = changed;
@@ -256,8 +239,7 @@ bool Recording::load(
                    events, error)) {
         return false;
     } else if (events.empty()) {
-        notes_ << frames_csv
-                      + QStringLiteral(": no data rows; images have no recorder metadata");
+        notes_ << frames_csv + QStringLiteral(": no data rows; images have no recorder metadata");
     }
     std::map<QString, std::vector<const CsvRow*>> by_image;
     const QRegularExpression image_name(QStringLiteral(

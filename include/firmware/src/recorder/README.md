@@ -15,9 +15,9 @@ Y8，后台线程默认写入灰度 PGM 连续流，也支持独立灰度 PNG �
 
 ## 类与消费方式
 
-使用 `import dart.recorder.recorder;`，并链接 `dart_recording`（别名 `dart_recorder`）静态库，
-取得相机 C 数据面、线程和 zlib 依赖。各 `.cpp` 是独立命名模块；只重导出帧契约、配置和错误，
-异步工作器、编码器与存储实现通过内部依赖导入。
+包含 `recorder/recorder.hpp`，并链接 `dart_recording`（别名 `dart_recorder`）静态库，
+取得相机 C 数据面、线程和 zlib 依赖。共享声明按功能放在 `.hpp`，普通实现放在 `.cpp`。
+异步工作器、编码器与存储实现保持原有职责边界。
 
 | 文件 | 职责 |
 |---|---|

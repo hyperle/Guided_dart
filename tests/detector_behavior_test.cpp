@@ -7,7 +7,7 @@
 #include <cmath>
 #include <cstddef>
 
-import dart.detection.roi;
+#include "src/detector/roi.hpp"
 
 namespace dart::tests {
 

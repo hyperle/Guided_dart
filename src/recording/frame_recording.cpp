@@ -1,16 +1,15 @@
-module;
+#include "src/recording/frame_recording.hpp"
+
 #include <chrono>
 #include <cstdint>
 #include <string_view>
 
-export module dart.app.recording.frame_recording;
+#include "logging/logger.hpp"
+#include "recorder/recorder.hpp"
+#include "src/startup/argument_parser.hpp"
+#include "system/monotonic_clock.hpp"
 
-import dart.app.startup.argument_parser;
-import dart.logging.logger;
-import dart.recorder.recorder;
-import dart.system.monotonic_clock;
-
-export namespace dart::app {
+namespace dart::app {
 
 const char* admission_text(recorder::Admission admission) noexcept {
     switch (admission) {

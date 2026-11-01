@@ -1,4 +1,5 @@
-module;
+#include "src/detector/blob_workspace.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
@@ -10,124 +11,16 @@ module;
 #include <span>
 #include <utility>
 
-export module dart.detection.blob_workspace;
+#include "src/detector/geometry.hpp"
+#include "src/detector/interface.hpp"
+#include "src/detector/numeric.hpp"
 
-import dart.detection.geometry;
-export import dart.detection.interface;
-import dart.detection.numeric;
+namespace dart::detection {
 
-export namespace dart::detection {
-
-class Blob {
-public:
-    Point center{};
-    Rect bounds{};
-    std::uint32_t area = 0;
-    float fill = 0.0F;
-    float circularity = 0.0F;
-    float angle = 0.0F;
-    float length = 0.0F;
-    float thickness = 0.0F;
-    float mean_luma = 0.0F;
-    float background_luma = 0.0F;
-    float contrast = 0.0F;
-    float background_stddev = 0.0F;
-    float snr = 0.0F;
-    float stability = 1.0F;
-    float gray_quality = 1.0F;
-    bool stability_checked = false;
-    bool clipped = false;
-};
-
-class BlobWorkspace {
-public:
-    struct Config {
-        static constexpr std::uint32_t kMaxCandidates = 256;
-        std::uint32_t max_runs = 16384;
-        std::uint32_t max_candidates = kMaxCandidates;
-        // Foreground mean minus the surrounding ring mean, in Y8 levels.
-        float min_contrast = 12.0F;
-        std::uint32_t background_margin = 3;
-        float min_snr = 3.0F;
-        std::uint32_t stability_delta = 8;
-        float min_stability = 0.5F;
-    };
-    BlobWorkspace() noexcept;
-    ~BlobWorkspace();
-    BlobWorkspace(const BlobWorkspace&) = delete;
-    BlobWorkspace& operator=(const BlobWorkspace&) = delete;
-
-    std::expected<void, DetectionError> Prepare(
-        std::uint32_t max_width, std::uint32_t max_height, Config config) noexcept;
-    std::expected<void, DetectionError> Prepare(
-        std::uint32_t max_width, std::uint32_t max_height) noexcept {
-        return Prepare(max_width, max_height, Config{});
-    }
-    std::expected<void, DetectionError> Validate(const camera::FrameView& frame) const noexcept;
-    std::expected<std::span<const Blob>, DetectionError> Scan(
-        const camera::FrameView& frame, Rect window, std::uint8_t threshold,
-        std::uint32_t min_area = 2, std::uint32_t sample_step = 1,
-        bool check_stability = true) noexcept;
-    std::expected<bool, DetectionError> ValidateStability(
-        const camera::FrameView& frame, Blob& blob, std::uint8_t threshold,
-        Rect window, std::uint32_t step = 1) noexcept;
-
-    std::uint32_t runs() const noexcept { return run_count_; }
-    std::uint32_t run_high_water() const noexcept { return run_high_water_; }
-    std::uint32_t rejected_contrast() const noexcept { return rejected_contrast_; }
-    std::uint32_t rejected_snr() const noexcept { return rejected_snr_; }
-    std::uint32_t rejected_stability() const noexcept { return rejected_stability_; }
-    std::uint32_t stability_checks() const noexcept { return stability_checks_; }
-
-private:
-    struct Run {
-        std::uint32_t x0 = 0;
-        std::uint32_t x1 = 0;
-        std::uint32_t y = 0;
-        std::uint32_t parent = 0;
-        std::uint32_t rank = 0;
-    };
-
-    struct Component {
-        std::uint64_t area = 0;
-        std::uint64_t sx = 0;
-        std::uint64_t sy = 0;
-        std::uint64_t sxx = 0;
-        std::uint64_t syy = 0;
-        std::uint64_t sxy = 0;
-        std::uint64_t luma = 0;
-        std::uint32_t x0 = 0;
-        std::uint32_t x1 = 0;
-        std::uint32_t y0 = 0;
-        std::uint32_t y1 = 0;
-    };
-
-    std::uint32_t Root(std::uint32_t id) noexcept;
-    void Unite(std::uint32_t a, std::uint32_t b) noexcept;
-    std::expected<void, DetectionError> Extract(
-        const camera::FrameView& frame, Rect window, std::uint8_t threshold,
-        std::uint32_t step) noexcept;
-    std::expected<float, DetectionError> Stability(
-        const camera::FrameView& frame, const Blob& blob, std::uint8_t threshold,
-        Rect scan_window, std::uint32_t step) noexcept;
-
-    std::unique_ptr<Run[]> runs_;
-    std::unique_ptr<Component[]> components_;
-    std::unique_ptr<Blob[]> candidates_;
-    std::uint32_t max_width_ = 0;
-    std::uint32_t max_height_ = 0;
-    std::uint32_t max_runs_ = 0;
-    std::uint32_t max_candidates_ = 0;
-    float min_contrast_ = 0.0F;
-    std::uint32_t background_margin_ = 0;
-    float min_snr_ = 0.0F;
-    std::uint32_t stability_delta_ = 0;
-    float min_stability_ = 0.0F;
-    std::uint32_t run_count_ = 0;
-    std::uint32_t run_high_water_ = 0;
-    std::uint32_t rejected_contrast_ = 0, rejected_snr_ = 0, rejected_stability_ = 0;
-    std::uint32_t stability_checks_ = 0;
-};
+std::expected<void, DetectionError>
+    BlobWorkspace::Prepare(std::uint32_t max_width, std::uint32_t max_height) noexcept {
+    return Prepare(max_width, max_height, Config{});
+}
 
 BlobWorkspace::BlobWorkspace() noexcept = default;
 
@@ -248,8 +141,12 @@ std::expected<std::span<const Blob>, DetectionError> BlobWorkspace::Scan(
                     }
                 }
             };
-            if (y < blob.bounds.y || y >= by1) add(x0, x1);
-            else { add(x0, blob.bounds.x); add(bx1, x1); }
+            if (y < blob.bounds.y || y >= by1)
+                add(x0, x1);
+            else {
+                add(x0, blob.bounds.x);
+                add(bx1, x1);
+            }
         }
         // Mask sparse neighbors at least as bright as this candidate. If they
         // occupy over 1/4 of the ring, keep all samples: a bright/noisy surround
@@ -261,13 +158,20 @@ std::expected<std::span<const Blob>, DetectionError> BlobWorkspace::Scan(
         }
         const double mean = n > 0 ? static_cast<double>(sum) / n : blob.mean_luma;
         blob.background_luma = static_cast<float>(mean);
-        blob.background_stddev = n > 0
-            ? static_cast<float>(std::sqrt(std::max(0.0, static_cast<double>(squares) / n - mean * mean)))
-            : 0.0F;
+        blob.background_stddev =
+            n > 0 ? static_cast<float>(
+                        std::sqrt(std::max(0.0, static_cast<double>(squares) / n - mean * mean)))
+                  : 0.0F;
         blob.contrast = blob.mean_luma - blob.background_luma;
         blob.snr = blob.contrast / (blob.background_stddev + 4.0F);
-        if (blob.contrast < min_contrast_) { ++rejected_contrast_; continue; }
-        if (blob.snr < min_snr_) { ++rejected_snr_; continue; }
+        if (blob.contrast < min_contrast_) {
+            ++rejected_contrast_;
+            continue;
+        }
+        if (blob.snr < min_snr_) {
+            ++rejected_snr_;
+            continue;
+        }
         if (count == max_candidates_)
             return std::unexpected(DetectionError::kWorkspaceExhausted);
         blob.center = {
@@ -279,8 +183,7 @@ std::expected<std::span<const Blob>, DetectionError> BlobWorkspace::Scan(
             static_cast<double>(physical_area)
             / (static_cast<double>(blob.bounds.width) * blob.bounds.height));
         const double elongation = major > 1.0e-9 ? std::sqrt(minor / major) : 0.6;
-        blob.circularity =
-            static_cast<float>(elongation * std::min(1.0, blob.fill / (kPi * 0.25)));
+        blob.circularity = static_cast<float>(elongation * std::min(1.0, blob.fill / (kPi * 0.25)));
         blob.angle = static_cast<float>(0.5 * std::atan2(2.0 * xy, xx - yy));
         blob.length = static_cast<float>(std::sqrt(12.0 * major) * sample_step);
         blob.thickness = static_cast<float>(std::sqrt(12.0 * minor) * sample_step);
@@ -298,8 +201,10 @@ std::expected<std::span<const Blob>, DetectionError> BlobWorkspace::Scan(
         blob.gray_quality = std::clamp(blob.snr / std::max(6.0F, 2.0F * min_snr_), 0.0F, 1.0F);
         if (check_stability) {
             auto accepted = ValidateStability(frame, blob, threshold, window, sample_step);
-            if (!accepted) return std::unexpected(accepted.error());
-            if (!*accepted) continue;
+            if (!accepted)
+                return std::unexpected(accepted.error());
+            if (!*accepted)
+                continue;
         }
         candidates_[kept++] = blob;
     }
@@ -308,16 +213,21 @@ std::expected<std::span<const Blob>, DetectionError> BlobWorkspace::Scan(
 }
 
 std::expected<bool, DetectionError> BlobWorkspace::ValidateStability(
-    const camera::FrameView& frame, Blob& blob, std::uint8_t threshold,
-    Rect window, std::uint32_t step) noexcept {
-    if (stability_delta_ == 0 || min_stability_ == 0.0F) return true;
+    const camera::FrameView& frame, Blob& blob, std::uint8_t threshold, Rect window,
+    std::uint32_t step) noexcept {
+    if (stability_delta_ == 0 || min_stability_ == 0.0F)
+        return true;
     ++stability_checks_;
     auto stability = Stability(frame, blob, threshold, window, step);
-    if (!stability) return std::unexpected(stability.error());
+    if (!stability)
+        return std::unexpected(stability.error());
     blob.stability = *stability;
     blob.stability_checked = true;
     blob.gray_quality *= blob.stability;
-    if (blob.stability < min_stability_) { ++rejected_stability_; return false; }
+    if (blob.stability < min_stability_) {
+        ++rejected_stability_;
+        return false;
+    }
     return true;
 }
 
@@ -375,8 +285,7 @@ std::expected<void, DetectionError> BlobWorkspace::Extract(
         component.area += length;
         component.sx += sx;
         component.sy += length * run.y;
-        component.sxx +=
-            SumSquares(run.x1) - (run.x0 > 0 ? SumSquares(run.x0 - 1) : 0);
+        component.sxx += SumSquares(run.x1) - (run.x0 > 0 ? SumSquares(run.x0 - 1) : 0);
         component.syy += length * run.y * run.y;
         component.sxy += sx * run.y;
         const auto* row = frame.luma.data()
@@ -389,8 +298,8 @@ std::expected<void, DetectionError> BlobWorkspace::Extract(
 }
 
 std::expected<float, DetectionError> BlobWorkspace::Stability(
-    const camera::FrameView& frame, const Blob& blob, std::uint8_t threshold,
-    Rect scan_window, std::uint32_t step) noexcept {
+    const camera::FrameView& frame, const Blob& blob, std::uint8_t threshold, Rect scan_window,
+    std::uint32_t step) noexcept {
     const auto& b = blob.bounds;
     const auto margin = std::max(4U, std::max(b.width, b.height) / 2);
     // Preserve the original sampling lattice, including an off-origin ROI.
@@ -404,27 +313,34 @@ std::expected<float, DetectionError> BlobWorkspace::Stability(
     const auto y1 = b.y + b.height + std::min(frame.height - b.y - b.height, margin);
     const Rect local{x0, y0, x1 - x0, y1 - y0};
     const float base_area = static_cast<float>(blob.area) / (step * step);
-    const auto lower = static_cast<std::uint8_t>(std::min<unsigned>(threshold,
-        std::max<int>(std::max(0, static_cast<int>(threshold) - static_cast<int>(stability_delta_)),
-                      std::min(255, static_cast<int>(blob.background_luma + blob.background_stddev) + 1))));
+    const auto lower = static_cast<std::uint8_t>(std::min<unsigned>(
+        threshold,
+        std::max<int>(
+            std::max(0, static_cast<int>(threshold) - static_cast<int>(stability_delta_)),
+            std::min(255, static_cast<int>(blob.background_luma + blob.background_stddev) + 1))));
     const auto upper = static_cast<std::uint8_t>(std::min(255U, threshold + stability_delta_));
     float stability = 1.0F;
     for (const auto level : {lower, upper}) {
-        if (level == threshold) continue;
+        if (level == threshold)
+            continue;
         auto extracted = Extract(frame, local, level, step);
-        if (!extracted) return std::unexpected(extracted.error());
+        if (!extracted)
+            return std::unexpected(extracted.error());
         // luma is scratch here: count overlap with the original threshold mask.
-        for (std::uint32_t i = 0; i < run_count_; ++i) components_[i].luma = 0;
+        for (std::uint32_t i = 0; i < run_count_; ++i)
+            components_[i].luma = 0;
         for (std::uint32_t i = 0; i < run_count_; ++i) {
             const auto& r = runs_[i];
             const auto y = y0 + r.y * step;
-            if (y < b.y || y >= b.y + b.height) continue;
+            if (y < b.y || y >= b.y + b.height)
+                continue;
             auto& overlap = components_[Root(i)].luma;
             const auto* row = frame.luma.data() + static_cast<std::size_t>(y) * frame.stride;
             for (auto x = r.x0; x <= r.x1; ++x) {
                 const auto px = x0 + x * step;
                 if (px >= b.x && px < b.x + b.width
-                    && std::to_integer<std::uint8_t>(row[px]) >= threshold) ++overlap;
+                    && std::to_integer<std::uint8_t>(row[px]) >= threshold)
+                    ++overlap;
             }
         }
         const Component* match = nullptr;
@@ -432,9 +348,11 @@ std::expected<float, DetectionError> BlobWorkspace::Stability(
         for (std::uint32_t i = 0; i < run_count_; ++i) {
             const auto& c = components_[i];
             total_overlap += c.luma;
-            if (c.luma > 0 && (!match || c.luma > match->luma)) match = &c;
+            if (c.luma > 0 && (!match || c.luma > match->luma))
+                match = &c;
         }
-        if (!match) return 0.0F;
+        if (!match)
+            return 0.0F;
         const auto& c = *match;
         // Expansion out of the local neighborhood is evidence of a merge.
         if (level < threshold
@@ -447,9 +365,12 @@ std::expected<float, DetectionError> BlobWorkspace::Stability(
         const float cx = x0 + static_cast<float>(c.sx) / c.area * step;
         const float cy = y0 + static_cast<float>(c.sy) / c.area * step;
         const float shift = std::hypot(cx - blob.center.x, cy - blob.center.y);
-        const float center_score = 1.0F / (1.0F + shift / std::max(2.0F, 0.25F * std::max(b.width, b.height)));
-        const float connectivity = level > threshold
-            ? std::max(0.0F, 2.0F * static_cast<float>(c.luma) / total_overlap - 1.0F) : 1.0F;
+        const float center_score =
+            1.0F / (1.0F + shift / std::max(2.0F, 0.25F * std::max(b.width, b.height)));
+        const float connectivity =
+            level > threshold
+                ? std::max(0.0F, 2.0F * static_cast<float>(c.luma) / total_overlap - 1.0F)
+                : 1.0F;
         stability = std::min({stability, area_score, center_score, connectivity});
     }
     return stability;

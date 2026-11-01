@@ -17,18 +17,18 @@
 
 #include "camera/c_api/raw10.h"
 
-import dart.app.startup.services;
-import dart.recorder.encoding.binary_decoder;
+#include "src/startup/services.hpp"
+#include "recorder/encoding/binary_decoder.hpp"
 
-import dart.app.startup.argument_parser;
-import dart.camera.interface;
-import dart.logging.logger;
-import dart.pwm.interface;
-import dart.recorder.encoding.binary_format;
+#include "src/startup/argument_parser.hpp"
+#include "camera/interface.hpp"
+#include "logging/logger.hpp"
+#include "pwm/interface.hpp"
+#include "recorder/encoding/binary_format.hpp"
 
-import dart.system.run_control;
-import dart.system.write_control;
-import dart.system.device_services;
+#include "system/run_control.hpp"
+#include "system/write_control.hpp"
+#include "system/device_services.hpp"
 
 namespace dart::tests {
 

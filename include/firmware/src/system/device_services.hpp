@@ -1,16 +1,14 @@
-module;
+#pragma once
+
 #include <expected>
 #include <memory>
 
-export module dart.system.device_services;
+#include "camera/interface.hpp"
+#include "imu/sample.hpp"
+#include "pwm/interface.hpp"
+#include "system/write_control.hpp"
 
-export import dart.camera.interface;
-export import dart.imu.sample;
-export import dart.pwm.interface;
-export import dart.system.write_control;
-
-export namespace dart::platform {
-
+namespace dart::platform {
 // Device selection is supplied by the process entry. Business modules use these
 // callbacks without selecting a board backend or configuring hardware registers.
 using CameraFactory = std::expected<std::unique_ptr<camera::ICamera>, camera::CameraError> (*)(

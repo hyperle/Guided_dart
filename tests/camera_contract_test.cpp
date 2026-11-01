@@ -4,9 +4,9 @@
 #include <utility>
 #include "camera/error_codes.h"
 
-import dart.camera.frame_lease;
+#include "camera/frame_lease.hpp"
 
-import dart.tests.odr_consumer;
+#include "tests/odr_consumer.hpp"
 
 namespace dart::tests {
 

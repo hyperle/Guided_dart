@@ -1,4 +1,5 @@
-module;
+#include "src/control/servo_mapping.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -6,76 +7,15 @@ module;
 #include <expected>
 #include <limits>
 
-export module dart.control.servo_mapping;
+#include "src/detector/result.hpp"
 
-export import dart.detection.result;
+namespace dart::control {
 
-export namespace dart::control {
+ServoMapping::ServoMapping() noexcept
+    : ServoMapping(Config{}) {}
 
-class ServoMapping final {
-public:
-    static constexpr std::size_t kChannelCount = 4;
-    using PwmValues = std::array<float, kChannelCount>;
-
-    // CH1..CH4 correspond to PWM1/2/3/5 on the tested Dart V1 board.
-    struct Channel {
-        float initial_pulse_us = 1520.0F;
-        // UNVALIDATED: zero disables that axis until its signed gain is set.
-        float horizontal_us_per_pixel = 0.0F;
-        float vertical_us_per_pixel = 0.0F;
-    };
-
-    struct Config {
-        // Mechanical zeros calibrated in tools/canmv_tune.py (CH1..CH4).
-        std::array<Channel, kChannelCount> channels{{
-            {1490.0F}, {1448.0F}, {1475.0F}, {1150.0F},
-        }};
-        // One symmetric limit for each channel's combined offset from zero.
-        float max_delta_us = 500.0F;
-    };
-
-    enum class Error { kInvalidConfig, kInvalidCoordinate, kInvalidIncrement };
-
-    struct Increment {
-        PwmValues delta_us{}; // Offset from initial position, never from the previous call.
-        detection::TargetKind source = detection::TargetKind::kNone;
-    };
-
-    struct Output {
-        PwmValues pulse_us{};
-        PwmValues delta_us{}; // Actual offsets after combining both axes and clamping.
-        std::array<bool, kChannelCount> saturated{};
-    };
-
-    ServoMapping() noexcept;
-    explicit ServoMapping(const Config& config) noexcept;
-    bool valid_config() const noexcept;
-
-    // Image coordinates: x right, y down. Errors are target minus preset.
-    std::expected<Increment, Error> horizontal_increment(
-        const detection::Target& armor, const detection::Target& light,
-        detection::Point preset) const noexcept;
-    std::expected<Increment, Error> vertical_increment(
-        const detection::Target& armor, const detection::Target& light,
-        detection::Point preset) const noexcept;
-
-    // No arguments produces the four independent initial positions.
-    // Clamp only after adding both axes, preserving cancellation between them.
-    std::expected<Output, Error> pulses(
-        const PwmValues& horizontal_delta_us = {},
-        const PwmValues& vertical_delta_us = {}) const noexcept;
-
-private:
-    std::expected<Increment, Error> increment(
-        const detection::Target& armor, const detection::Target& light,
-        detection::Point preset, bool horizontal) const noexcept;
-
-    Config config_;
-};
-
-ServoMapping::ServoMapping() noexcept : ServoMapping(Config{}) {}
-
-ServoMapping::ServoMapping(const Config& config) noexcept : config_(config) {}
+ServoMapping::ServoMapping(const Config& config) noexcept
+    : config_(config) {}
 
 bool ServoMapping::valid_config() const noexcept {
     if (!std::isfinite(config_.max_delta_us) || config_.max_delta_us < 0.0F)
@@ -90,15 +30,13 @@ bool ServoMapping::valid_config() const noexcept {
     return true;
 }
 
-std::expected<ServoMapping::Increment, ServoMapping::Error>
-ServoMapping::horizontal_increment(
+std::expected<ServoMapping::Increment, ServoMapping::Error> ServoMapping::horizontal_increment(
     const detection::Target& armor, const detection::Target& light,
     detection::Point preset) const noexcept {
     return increment(armor, light, preset, true);
 }
 
-std::expected<ServoMapping::Increment, ServoMapping::Error>
-ServoMapping::vertical_increment(
+std::expected<ServoMapping::Increment, ServoMapping::Error> ServoMapping::vertical_increment(
     const detection::Target& armor, const detection::Target& light,
     detection::Point preset) const noexcept {
     return increment(armor, light, preset, false);
@@ -124,8 +62,8 @@ std::expected<ServoMapping::Increment, ServoMapping::Error> ServoMapping::increm
                                        : static_cast<double>(target->center.y) - preset.y;
     for (std::size_t i = 0; i < kChannelCount; ++i) {
         const auto& channel = config_.channels[i];
-        const double gain = horizontal ? channel.horizontal_us_per_pixel
-                                       : channel.vertical_us_per_pixel;
+        const double gain =
+            horizontal ? channel.horizontal_us_per_pixel : channel.vertical_us_per_pixel;
         const double delta = error_px * gain;
         if (std::abs(delta) > std::numeric_limits<float>::max())
             return std::unexpected(Error::kInvalidIncrement);
@@ -144,8 +82,7 @@ std::expected<ServoMapping::Output, ServoMapping::Error> ServoMapping::pulses(
         if (!std::isfinite(horizontal_delta_us[i]) || !std::isfinite(vertical_delta_us[i]))
             return std::unexpected(Error::kInvalidIncrement);
         const auto& channel = config_.channels[i];
-        const double requested = static_cast<double>(horizontal_delta_us[i])
-                               + vertical_delta_us[i];
+        const double requested = static_cast<double>(horizontal_delta_us[i]) + vertical_delta_us[i];
         const double limit = config_.max_delta_us;
         const double bounded = std::clamp(requested, -limit, limit);
         result.pulse_us[i] = static_cast<float>(channel.initial_pulse_us + bounded);

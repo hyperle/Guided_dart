@@ -11,8 +11,8 @@
 #include <unistd.h>
 #include <vector>
 
-import dart.camera.frame_view;
-import dart.streaming.session;
+#include "camera/frame_view.hpp"
+#include "streaming/session.hpp"
 
 namespace dart::tests {
 

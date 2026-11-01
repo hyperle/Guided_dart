@@ -18,13 +18,13 @@
 不拥有写线程或编码器；`diagnostics/` 定义业务记录内容，不管理文件缓冲与同步。
 `vision/visual_servo.cpp` 调用 `control/` 合成绝对脉宽并发布给下层 PWM 任务，
 不直接访问引脚、设备寄存器或系统线程；控制不依赖 IMU。
-检测器只导入 `dart.camera.frame_view`，构建目标只依赖 `dart_camera_types`；
+检测器只包含相机的只读帧类型头文件，不依赖具体相机后端；
 不持有相机、不创建设备、不操作帧租约。
 Wi-Fi 只在采集线程调用下层 `streaming::Session::try_submit`，压缩、网络和恢复线程
 实现位于 [`streaming/`](../include/firmware/src/streaming/README.md)，由板级工厂注入传输接口。
 所有 L4 模块均不包含 K230/MPP 或 POSIX 实现头文件。
 
-`src/CMakeLists.txt` 声明 `dart_detection`、`dart_control` 和 `dart_application` 静态模块库，
+`src/CMakeLists.txt` 声明 `dart_detection`、`dart_control` 和 `dart_application` 静态库，
 所属 `.cpp` 独立编译并参与应用/测试最终链接；领域库不继承应用的设备或运行时依赖。
 板级、日志、存储和录像目标由 `include/CMakeLists.txt` 声明；
 `runtime/` 中保留现有 IMU 采样行为，launcher 负责进程监督。

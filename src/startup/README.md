@@ -1,8 +1,8 @@
 # dart_app —— 板端业务应用
 
 [`../dart_entry.cpp`](../dart_entry.cpp) 提供唯一业务进程入口，将板级设备工厂注入
-`run.cpp` 的 `run_application()`。`argument_parser.cpp` 定义参数、默认值和校验；
-`run.cpp` 创建唯一日志对象并组织启动、运行和退出；`services.cpp` 管理服务故障隔离。
+`run.hpp` 的 `run_application()`。`argument_parser.cpp` 定义参数、默认值和校验；
+`run.hpp` 创建唯一日志对象并组织启动、运行和退出；`services.cpp` 管理服务故障隔离。
 本目录与其余 `src/` 一样属于 L4 调用层，不包含设备或系统资源的实现。
 
 | 功能 | L4 调用与策略 | 下层实现（`include/firmware/src/`） |
@@ -13,10 +13,10 @@
 | Wi-Fi 回传 | `vision/capture_pipeline.cpp` 提交同一帧，启动流程接收传输工厂 | `streaming/` 管理固定缓冲、JPEG 压缩和 Wi-Fi 发送线程 |
 | 录像 | `recording/frame_recording.cpp` 映射参数、决定启停并排空租约 | `recorder/` 管理队列、线程、编码和文件 |
 | 诊断 | `diagnostics/` 定义相机错误字段和检测 CSV 行 | `logging/` 管理文件缓冲和同步 |
-| 进程时限与退出 | `startup/run.cpp` 决定调用顺序 | `system/` 管理信号、时钟和 launcher 退出标记 |
+| 进程时限与退出 | `startup/run.hpp` 决定调用顺序 | `system/` 管理信号、时钟和 launcher 退出标记 |
 
 业务目标统一在 `src/CMakeLists.txt` 声明，下层库由 `include/CMakeLists.txt` 声明。
-各功能通过 `import dart.app.*` 使用独立编译的命名模块，不提供 C++ 头文件。
+各功能通过所需 `.hpp` 声明调用接口，`.cpp` 实现独立编译；入口无需配套头文件。
 `runtime/launcher/` 负责进程启动与监督；现有 `runtime/imu/` 采样服务本轮保留。
 单进程可以有多个线程或任务：当前相机调用保持串行，
 IMU 采样独立于相机逐帧循环；PWM 任务每 10 ms 检查视觉指令，输出 333 Hz 波形。

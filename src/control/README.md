@@ -1,7 +1,7 @@
 # 四路舵机坐标映射
 
 `servo_mapping.cpp` 是 L4 纯 C++23 映射，构建目标为 `dart_control`。
-文件声明命名模块 `dart.control.servo_mapping`，独立编译并链接为静态库；不包含 SDK，不操作 PWM 设备，也不分配堆内存。
+共享声明位于 `servo_mapping.hpp`，实现独立编译并链接为静态库；不包含 SDK，不操作 PWM 设备，也不分配堆内存。
 
 四个数组元素始终按已有 PWM 测试的 CH1～CH4 排列：
 
@@ -49,7 +49,7 @@
 下面的数值只是展示各字段的含义，方向和比例须自行修改：
 
 ```cpp
-import dart.control.servo_mapping;
+#include "src/control/servo_mapping.hpp"
 
 // 以下配置和调用放在所属业务函数内。以下参数为 UNVALIDATED。
 dart::control::ServoMapping::Config config{};

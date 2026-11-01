@@ -13,9 +13,9 @@
 #include <thread>
 #include <utility>
 
-import dart.camera.frame_lease;
-import dart.recorder.recorder;
-import dart.streaming.session;
+#include "camera/frame_lease.hpp"
+#include "recorder/recorder.hpp"
+#include "streaming/session.hpp"
 
 namespace dart::tests {
 

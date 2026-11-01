@@ -243,7 +243,7 @@ Detect 两次调用分别为 603 / 611 µs。已检查干扰物关联、质量�
 IDE 预览、曝光响应和连接器处的 PWM 波形仍需确认。
 PWM API 与引脚配置依据本机 SDK 源码及[官方 PWM 手册](https://www.kendryte.com/k230_canmv/v0.6/zh/api/machine/k230_canmv_pwm_api_manual.html)。
 
-C++ 模块构建：检测桥接通过 CMake 的 `dart_canmv_detector` 静态库链接同一套检测器，
-不再由解释器的旧 GCC 包含或重新编译 C++ 源码。构建机需安装 Clang >= 19 和配套
-`clang-scan-deps`（或完整 GCC >= 14 交叉工具链）；可用 `DART_CXX_COMPILER` 指定前端。
+C++ 检测器构建：检测桥接通过 CMake 的 `dart_canmv_detector` 静态库链接同一套检测器，
+使用常规 `.hpp` 声明和 `.cpp` 实现，由 SDK 配套 RISC-V musl GCC/G++ 编译；
+解释器只链接其 C ABI，不包含 `.cpp`，不需要命名模块或扫描器。
 私有 overlay 的网络补丁选项与 C ABI 保持原有用法。

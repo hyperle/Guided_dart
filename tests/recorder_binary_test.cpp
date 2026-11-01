@@ -15,15 +15,15 @@
 #include <thread>
 #include <vector>
 
-import dart.recorder.encoding.binary_decoder;
-import dart.recorder.recorder;
+#include "recorder/encoding/binary_decoder.hpp"
+#include "recorder/recorder.hpp"
 
-import dart.recorder.encoding.binary_encoder;
-import dart.recorder.encoding.binary_format;
-import dart.recorder.encoding.png_encoder;
-import dart.recorder.storage.session;
+#include "recorder/encoding/binary_encoder.hpp"
+#include "recorder/encoding/binary_format.hpp"
+#include "recorder/encoding/png_encoder.hpp"
+#include "recorder/storage/session.hpp"
 
-import dart.recorder.storage.image_writer;
+#include "recorder/storage/image_writer.hpp"
 
 namespace dart::tests {
 

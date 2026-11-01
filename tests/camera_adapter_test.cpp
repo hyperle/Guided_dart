@@ -5,7 +5,7 @@
 #include "camera/c_api/camera.h"
 #include "camera/error_codes.h"
 
-import dart.camera.k230.camera;
+#include "camera/k230/camera.hpp"
 
 namespace dart::tests {
 

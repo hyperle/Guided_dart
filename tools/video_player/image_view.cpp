@@ -1,4 +1,5 @@
-module;
+#include "tools/video_player/image_view.hpp"
+
 #include <QImage>
 #include <QMouseEvent>
 #include <QPainter>
@@ -11,87 +12,70 @@ module;
 #include <optional>
 #include <utility>
 
-export module dart.tools.video_player.image_view;
+#include "tools/video_player/recording_types.hpp"
 
-export import dart.tools.video_player.recording_types;
+namespace dart::tools::video_player {
 
-export namespace dart::tools::video_player {
+ImageView::ImageView(QWidget* parent)
+    : QWidget(parent) {
+    setMinimumSize(320, 240);
+    setFocusPolicy(Qt::StrongFocus);
+}
 
-class ImageView final : public QWidget {
-public:
-    struct Overlay {
-        std::optional<QPointF> center;
-        std::optional<QRectF> window;
-    };
+void ImageView::set_frame(QImage image, Overlay overlay) {
+    image_ = std::move(image);
+    overlay_ = std::move(overlay);
+    update();
+}
 
-    explicit ImageView(QWidget* parent = nullptr)
-        : QWidget(parent) {
-        setMinimumSize(320, 240);
-        setFocusPolicy(Qt::StrongFocus);
+void ImageView::paintEvent(QPaintEvent*) {
+    QPainter painter(this);
+    painter.fillRect(rect(), Qt::black);
+    if (image_.isNull())
+        return;
+    const QRect target = image_rect();
+    painter.drawImage(target, image_);
+    const double sx = target.width() / static_cast<double>(image_.width());
+    const double sy = target.height() / static_cast<double>(image_.height());
+    painter.save();
+    painter.setClipRect(target);
+    painter.translate(target.topLeft());
+    if (overlay_.window) {
+        const auto& box = *overlay_.window;
+        painter.setPen(QPen(Qt::cyan, 2));
+        // win_x1/win_y1 are exclusive pixel boundaries.
+        painter.drawRect(QRectF(box.x() * sx, box.y() * sy, box.width() * sx, box.height() * sy));
     }
-    void set_frame(QImage image, Overlay overlay = {}) {
-        image_ = std::move(image);
-        overlay_ = std::move(overlay);
-        update();
+    if (overlay_.center) {
+        const auto& center = *overlay_.center;
+        const QPointF p((center.x() + 0.5) * sx, (center.y() + 0.5) * sy);
+        painter.setPen(QPen(Qt::green, 2));
+        painter.drawLine(p + QPointF(-10, 0), p + QPointF(10, 0));
+        painter.drawLine(p + QPointF(0, -10), p + QPointF(0, 10));
     }
-    std::function<void(int, int)> clicked;
-    static Overlay overlay_for(const Frame& frame, const QSize& size);
+    painter.restore();
+}
 
-protected:
-    void paintEvent(QPaintEvent*) override {
-        QPainter painter(this);
-        painter.fillRect(rect(), Qt::black);
-        if (image_.isNull())
-            return;
-        const QRect target = image_rect();
-        painter.drawImage(target, image_);
-        const double sx = target.width() / static_cast<double>(image_.width());
-        const double sy = target.height() / static_cast<double>(image_.height());
-        painter.save();
-        painter.setClipRect(target);
-        painter.translate(target.topLeft());
-        if (overlay_.window) {
-            const auto& box = *overlay_.window;
-            painter.setPen(QPen(Qt::cyan, 2));
-            // win_x1/win_y1 are exclusive pixel boundaries.
-            painter.drawRect(
-                QRectF(box.x() * sx, box.y() * sy, box.width() * sx, box.height() * sy));
-        }
-        if (overlay_.center) {
-            const auto& center = *overlay_.center;
-            const QPointF p((center.x() + 0.5) * sx, (center.y() + 0.5) * sy);
-            painter.setPen(QPen(Qt::green, 2));
-            painter.drawLine(p + QPointF(-10, 0), p + QPointF(10, 0));
-            painter.drawLine(p + QPointF(0, -10), p + QPointF(0, 10));
-        }
-        painter.restore();
-    }
-    void mousePressEvent(QMouseEvent* event) override {
-        const QRect target = image_rect();
-        if (image_.isNull() || !target.contains(event->pos()))
-            return;
-        const int x = std::clamp(
-            (event->pos().x() - target.x()) * image_.width() / target.width(), 0,
-            image_.width() - 1);
-        const int y = std::clamp(
-            (event->pos().y() - target.y()) * image_.height() / target.height(), 0,
-            image_.height() - 1);
-        if (clicked)
-            clicked(x, y);
-        setFocus();
-    }
+void ImageView::mousePressEvent(QMouseEvent* event) {
+    const QRect target = image_rect();
+    if (image_.isNull() || !target.contains(event->pos()))
+        return;
+    const int x = std::clamp(
+        (event->pos().x() - target.x()) * image_.width() / target.width(), 0, image_.width() - 1);
+    const int y = std::clamp(
+        (event->pos().y() - target.y()) * image_.height() / target.height(), 0,
+        image_.height() - 1);
+    if (clicked)
+        clicked(x, y);
+    setFocus();
+}
 
-private:
-    QRect image_rect() const {
-        if (image_.isNull())
-            return {};
-        const QSize scaled = image_.size().scaled(size(), Qt::KeepAspectRatio);
-        return QRect(
-            QPoint((width() - scaled.width()) / 2, (height() - scaled.height()) / 2), scaled);
-    }
-    QImage image_;
-    Overlay overlay_;
-};
+QRect ImageView::image_rect() const {
+    if (image_.isNull())
+        return {};
+    const QSize scaled = image_.size().scaled(size(), Qt::KeepAspectRatio);
+    return QRect(QPoint((width() - scaled.width()) / 2, (height() - scaled.height()) / 2), scaled);
+}
 
 ImageView::Overlay ImageView::overlay_for(const Frame& frame, const QSize& size) {
     Overlay overlay;

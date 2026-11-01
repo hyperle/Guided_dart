@@ -1,13 +1,11 @@
-module;
+#pragma once
+
 #include <expected>
 
-export module dart.detection.interface;
+#include "camera/frame_view.hpp"
+#include "src/detector/result.hpp"
 
-export import dart.camera.frame_view;
-export import dart.detection.result;
-
-export namespace dart::detection {
-
+namespace dart::detection {
 enum class DetectionError : int {
     kInvalidConfig = 1,
     kNoMemory,

@@ -1,12 +1,10 @@
-module;
+#pragma once
+
 #include <cstdint>
 
-export module dart.imu.sample;
+#include "imu/math_types.hpp"
 
-export import dart.imu.math_types;
-
-export namespace dart::imu {
-
+namespace dart::imu {
 enum class SampleFlag : std::uint32_t {
     kNone = 0U,
     kAccelerometerSaturated = 1U << 0U,

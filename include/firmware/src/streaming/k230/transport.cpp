@@ -1,4 +1,5 @@
-module;
+#include "streaming/k230/transport.hpp"
+
 #include <atomic>
 #include <cstdint>
 #include <expected>
@@ -7,56 +8,46 @@ module;
 #include "streaming/http.h"
 #include "streaming/k230/radio.h"
 
-export module dart.streaming.k230.transport;
+#include "streaming/interface.hpp"
 
-import dart.streaming.interface;
+namespace dart::streaming::k230 {
 
-export namespace dart::streaming::k230 {
+std::expected<void, Error>
+    Transport::open(const Config& config, const std::atomic_bool& stop) noexcept {
+    config_ = config;
+    int result = dart_wifi_ensure(
+        config_.ssid, config_.password, &cancelled, const_cast<std::atomic_bool*>(&stop));
+    if (result != 0)
+        return std::unexpected(Error{Code::kRadio, result});
+    result = dart_http_open(
+        &client_, config_.host, static_cast<std::uint16_t>(config_.port),
+        config_.connect_timeout_ms, config_.io_timeout_ms, &cancelled,
+        const_cast<std::atomic_bool*>(&stop));
+    if (result != 0)
+        return std::unexpected(Error{Code::kConnect, result});
+    return {};
+}
 
-class Transport final : public ITransport {
-public:
-    ~Transport() override { close(); }
-    std::expected<void, Error>
-        open(const Config& config, const std::atomic_bool& stop) noexcept override {
-        config_ = config;
-        int result = dart_wifi_ensure(
-            config_.ssid, config_.password, &cancelled, const_cast<std::atomic_bool*>(&stop));
-        if (result != 0)
-            return std::unexpected(Error{Code::kRadio, result});
-        result = dart_http_open(
+std::expected<void, Error> Transport::upload(
+    std::span<const std::uint8_t> jpeg, std::uint64_t sequence, std::uint64_t received_us,
+    const std::atomic_bool&) noexcept {
+    // The peer may request Connection: close after acknowledging a frame.
+    if (client_.socket < 0) {
+        const int result = dart_http_open(
             &client_, config_.host, static_cast<std::uint16_t>(config_.port),
-            config_.connect_timeout_ms, config_.io_timeout_ms, &cancelled,
-            const_cast<std::atomic_bool*>(&stop));
+            config_.connect_timeout_ms, config_.io_timeout_ms, client_.cancelled, client_.context);
         if (result != 0)
             return std::unexpected(Error{Code::kConnect, result});
-        return {};
     }
-    std::expected<void, Error> upload(
-        std::span<const std::uint8_t> jpeg, std::uint64_t sequence, std::uint64_t received_us,
-        const std::atomic_bool&) noexcept override {
-        // The peer may request Connection: close after acknowledging a frame.
-        if (client_.socket < 0) {
-            const int result = dart_http_open(
-                &client_, config_.host, static_cast<std::uint16_t>(config_.port),
-                config_.connect_timeout_ms, config_.io_timeout_ms, client_.cancelled,
-                client_.context);
-            if (result != 0)
-                return std::unexpected(Error{Code::kConnect, result});
-        }
-        const int result = dart_http_upload(
-            &client_, config_.token, jpeg.data(), jpeg.size(), sequence, received_us);
-        if (result != 0)
-            return std::unexpected(Error{Code::kUpload, result});
-        return {};
-    }
-    void close() noexcept override { dart_http_close(&client_); }
+    const int result =
+        dart_http_upload(&client_, config_.token, jpeg.data(), jpeg.size(), sequence, received_us);
+    if (result != 0)
+        return std::unexpected(Error{Code::kUpload, result});
+    return {};
+}
 
-private:
-    static int cancelled(void* context) noexcept {
-        return static_cast<std::atomic_bool*>(context)->load() ? 1 : 0;
-    }
-    Config config_{};
-    dart_http_client_t client_{-1, 0, nullptr, nullptr, {}, 0};
-};
+int Transport::cancelled(void* context) noexcept {
+    return static_cast<std::atomic_bool*>(context)->load() ? 1 : 0;
+}
 
 } // namespace dart::streaming::k230

@@ -14,8 +14,8 @@
 
 #include "drv_spi.h"
 
-import dart.logging.logger;
-import dart.system.monotonic_clock;
+#include "logging/logger.hpp"
+#include "system/monotonic_clock.hpp"
 
 namespace dart::imu::raw_probe {
 

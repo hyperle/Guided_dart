@@ -1,12 +1,8 @@
-module;
+#pragma once
+
 #include <cstdint>
 
-export module dart.imu.math_types;
-
-
-
-export namespace dart::imu {
-
+namespace dart::imu {
 struct Vector3f {
     float x = 0.0F;
     float y = 0.0F;

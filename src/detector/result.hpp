@@ -1,13 +1,11 @@
-module;
+#pragma once
+
 #include <chrono>
 #include <cstdint>
 
-export module dart.detection.result;
+#include "src/detector/geometry.hpp"
 
-export import dart.detection.geometry;
-
-export namespace dart::detection {
-
+namespace dart::detection {
 class Target {
 public:
     bool valid = false;

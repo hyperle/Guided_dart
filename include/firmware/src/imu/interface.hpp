@@ -1,13 +1,11 @@
-module;
+#pragma once
+
 #include <cstdint>
 #include <expected>
 
-export module dart.imu.interface;
+#include "imu/sample.hpp"
 
-export import dart.imu.sample;
-
-export namespace dart::imu {
-
+namespace dart::imu {
 enum class ErrorCode : std::uint8_t {
     kInvalidConfiguration,
     kAlreadyInitialized,

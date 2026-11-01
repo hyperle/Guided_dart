@@ -10,8 +10,8 @@
 #include <string>
 #include <vector>
 
-import dart.app.startup.argument_parser;
-import dart.app.recording.frame_recording;
+#include "src/startup/argument_parser.hpp"
+#include "src/recording/frame_recording.hpp"
 
 namespace dart::tests {
 

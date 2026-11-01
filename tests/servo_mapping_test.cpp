@@ -3,9 +3,9 @@
 #include <cassert>
 #include <limits>
 
-import dart.control.servo_mapping;
+#include "src/control/servo_mapping.hpp"
 
-import dart.tests.odr_consumer;
+#include "tests/odr_consumer.hpp"
 
 namespace dart::tests {
 

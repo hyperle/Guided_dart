@@ -15,7 +15,7 @@
 #include <utility>
 #include <vector>
 
-import dart.recorder.recorder;
+#include "recorder/recorder.hpp"
 
 namespace dart::tests {
 

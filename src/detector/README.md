@@ -1,8 +1,8 @@
 # 检测与 ROI
 
-纯 C++23 的 L4 算法，使用 C++20 命名模块。`.cpp` 按职责组织并独立编译；相关值类型可以同文件，
-跟踪历史等状态保留为私有类型。消费者导入所需模块，并链接 `dart_detection` 静态库。
-CMake 原生扫描模块依赖，主机回归与交叉应用完成最终链接。
+纯 C++23 的 L4 算法，按职责使用 `.hpp` / `.cpp`，头文件按接口需要建立。
+相关值类型可以同文件，跟踪历史等状态保留为私有类型；消费者包含所需头文件，
+并链接 `dart_detection` 静态库。主机回归与交叉应用完成最终链接。
 
 | 文件 | 类 / 职责 |
 |---|---|
@@ -11,17 +11,17 @@ CMake 原生扫描模块依赖，主机回归与交叉应用完成最终链接�
 | `tracking.cpp` | 位置/尺寸/对比度关联、按接收时间估计速度及有限外推 |
 | `armor.cpp` | 灯条配对、板心几何与 `ArmorDetector::Config`；灯条和辅助计算为私有实现 |
 | `roi.cpp` | `RoiDetector::Config`、测量编排、窗口策略及跟踪历史 |
-| `interface.cpp` | `IDetector`，检测与重置接口 |
+| `interface.hpp` | `IDetector`，检测与重置接口 |
 | `geometry.cpp`、`numeric.cpp` | 检测功能间共享的几何与数值运算，使用普通函数 |
-| `result.cpp` | 目标、帧身份、扫描元数据和检测结果组成的公开契约 |
+| `result.hpp` | 目标、帧身份、扫描元数据和检测结果组成的公开契约 |
 
-只依赖 `camera/frame_view.cpp` 的只读帧数据；不持有相机、不释放租约、不保留像素指针。
+只依赖 `camera/frame_view.hpp` 的只读帧数据；不持有相机、不释放租约、不保留像素指针。
 
 初始化时构造 `dart::detection::RoiDetector` 并调用
 `Prepare(max_width, max_height)`。在现有采集线程拿到 `AcquireStatus::kFrame` 后调用：
 
 ```cpp
-import dart.detection.roi;   // target_link_libraries(... dart_detection)
+#include "src/detector/roi.hpp"  // target_link_libraries(... dart_detection)
 
 auto result = detector.Detect(acquired.lease.view());
 if (result && result->target.valid) {

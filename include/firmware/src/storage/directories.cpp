@@ -1,14 +1,11 @@
-module;
+#include "storage/directories.hpp"
+
 #include <cerrno>
 #include <cstddef>
 #include <cstring>
 #include <sys/stat.h>
 
-export module dart.storage.directories;
-
-
-
-export namespace dart::storage {
+namespace dart::storage {
 
 void ensure_dir(const char* dir) noexcept {
     if (dir == nullptr || dir[0] == '\0')

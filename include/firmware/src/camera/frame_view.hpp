@@ -1,15 +1,11 @@
-module;
+#pragma once
+
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <span>
 
-export module dart.camera.frame_view;
-
-
-
-export namespace dart::camera {
-
+namespace dart::camera {
 enum class FrameFlag : std::uint32_t {
     kSourcePtsUnvalidated = 1U,
 };

@@ -8,15 +8,15 @@
 #include <thread>
 #include <vector>
 
-import dart.app.vision.visual_servo;
+#include "src/vision/visual_servo.hpp"
 
-import dart.app.startup.argument_parser;
-import dart.pwm.interface;
+#include "src/startup/argument_parser.hpp"
+#include "pwm/interface.hpp"
 
-import dart.logging.logger;
-import dart.system.device_services;
-import dart.system.run_control;
-import dart.control.servo_mapping;
+#include "logging/logger.hpp"
+#include "system/device_services.hpp"
+#include "system/run_control.hpp"
+#include "src/control/servo_mapping.hpp"
 
 namespace dart::tests {
 

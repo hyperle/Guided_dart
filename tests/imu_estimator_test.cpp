@@ -4,7 +4,7 @@
 #include <cmath>
 #include <limits>
 
-import dart.imu.estimator;
+#include "imu/estimator.hpp"
 
 namespace dart::tests {
 

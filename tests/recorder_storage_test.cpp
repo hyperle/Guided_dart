@@ -16,10 +16,10 @@
 #include <thread>
 #include <vector>
 
-import dart.recorder.recorder;
+#include "recorder/recorder.hpp"
 
-import dart.recorder.storage.image_writer;
-import dart.recorder.storage.session;
+#include "recorder/storage/image_writer.hpp"
+#include "recorder/storage/session.hpp"
 
 namespace dart::tests {
 

@@ -10,7 +10,8 @@
 （`include/firmware/src/recorder/`）、L4 业务入口与功能编排（`src/`）、开机自启动器与清单
 （`runtime/launcher/`）、构建/部署脚本（`.script/`）。
 
-先读 [`docs/STRUCTURE_DESIGN.md`](docs/STRUCTURE_DESIGN.md)（分层与依赖方向），
+工程约束先读 [AGENTS.md](AGENTS.md)，分层与依赖方向见
+[`docs/STRUCTURE_DESIGN.md`](docs/STRUCTURE_DESIGN.md)，
 启动链路读 [`docs/LAUNCHER_DESIGN.md`](docs/LAUNCHER_DESIGN.md)，
 板端调试读 [`docs/DEBUG_GUIDE.md`](docs/DEBUG_GUIDE.md)。
 录像与日志可通过 `write-rtos off|on` 暂停、恢复；清理前自动设置暂停，
@@ -48,7 +49,7 @@
 | `.script/` | 构建、部署、板端清理和相机回归检查；`install-rtos` 可注册短命令 | — |
 | [`tools/`](tools/README.md) | Rust Wi-Fi 接收/视频编码、主机播放器、IMU 日志工具与独立 RAW 相机诊断探针 | 独立构建的工具 |
 
-`dart_entry.cpp` 将板级工厂注入 `startup/run.cpp`，启动流程调用视觉、录像与诊断模块；
+`dart_entry.cpp` 将板级工厂注入 `startup/run.hpp`，启动流程调用视觉、录像与诊断模块；
 设备初始化和系统资源操作由 `include/` 的实现承担。可选 IMU 采样已独立运行，
 纯视觉控制通过独立 PWM 任务消费每帧的两轴映射结果，不依赖 IMU。`launcher` 负责进程启动与监督。应用说明见
 [`src/startup/README.md`](src/startup/README.md)。
@@ -65,43 +66,14 @@ IMU 历史测试见 [IMU 直读测试](runtime/imu/README.md)，
 合在 `dart_app` 一个 ELF 里，清单里也只能出现一条。详见
 [`docs/LAUNCHER_DESIGN.md`](docs/LAUNCHER_DESIGN.md) §5。
 
-### C++ 源码组织规范
+### C++ 源码组织
 
-C++ 按完整功能组织，以类封装状态、行为和资源生命周期。相关配置、结果类型、
-临时数据和内部辅助类跟随所属功能，不强制一类一文件。新增类或调用层应当隐藏
-实现、维护约束或管理资源，并减少调用方需要理解的细节。
-例如曝光钳位和单位换算直接位于相机设置流程，估计器在同一文件定义自己的
-`Config`、`Estimate` 和 `SeedResult`；内部步骤不因有名字就独立成文件或类。
+工程约束统一见 [AGENTS.md](AGENTS.md)。使用常规 `.hpp` / `.cpp` 和 `#include`；
+根据接口和实现需要建立头文件，不要求一一配对，也不强制一类一文件。
+共享类型、接口及模板跟随所属功能；普通实现由 CMake 编译并参与最终链接。
+C 数据面继续使用 `.c` / `.h`。历史重构计划不作为当前工程的执行指令。
 
-本项目 C++ 代码仅使用 `.cpp` 源文件，不引入自有 C++ 头文件。每个 `.cpp` 都是
-独立编译单元，**禁止任何源文件包含 `.cpp`，禁止将 `.cpp` 当作头文件使用**。
-构建系统也不得通过生成包含 `.cpp` 的汇总源文件绕过此约束。
-标准库、第三方 SDK 和既有 C ABI 头文件仍可正常包含；C 数据面继续使用 `.c` / `.h`。
-
-跨文件复用 C++ 类型和行为采用 C++20 命名模块，通过 `export/import` 声明依赖；
-模块源文件统一使用 `.cpp` 后缀并独立编译。仅导出调用方需要的接口，内部状态和
-辅助实现留在所属模块。禁止在多个文件中手工复制公共类定义或接口声明。
-模板定义放在所属模块中，满足导入方实例化的需要。
-
-`.cpp` 不使用头文件包含保护，也不要求所有函数使用 `inline`。
-除进程入口外，每个文件只声明一个具名命名空间；不使用匿名命名空间、
-`using namespace` 或命名空间别名。进程入口 `dart_entry.cpp` 仅连接板级工厂与 L4
-启动流程，由全局 `main()` 调用 `run_application()`。
-文件名按所在目录省略重复信息，例如 `detector/armor.cpp`。
-
-CMake 必须将实现源文件纳入实际编译和链接目标。承载实现的组件使用 `STATIC`、
-`OBJECT` 或可执行目标，编译结果必须参与最终链接；`INTERFACE` 目标仅传播使用要求，
-不能替代实现的编译与链接。结构检查应拒绝包含 `.cpp`，并配合真实组件构建和最终
-链接验证依赖，不能只靠逐文件编译检查代替应用构建。
-
-源码与 CMake 已迁移为命名模块：组件用静态库承载实现，测试通过模块导入并完成最终链接。
-`tests/check_cpp_structure.py` 检查禁止 `.cpp` 包含、包含保护、自有 C++ 头文件和下层反向依赖。
-播放器独立构建同样使用命名模块；CanMV 通过既有 C ABI 链接同一套检测模块。
-2026-10-31 使用 Clang 19.1.1 验证：主机 87 项回归和 Qt offscreen 回归通过，
-`dart_app` 与 CanMV 解释器完成 RISC-V musl 最终静态链接；尚未上板运行。
-
-首次从旧构建迁移时，用 `cmake --fresh --preset host` / `cross` 更新编译器缓存；
-后续可直接增量构建。主机回归：
+主机回归：
 
 ```bash
 cmake --preset host
@@ -160,19 +132,11 @@ dart/
 export K230_TOOLCHAIN_DIR=/path/to/riscv64-musl/bin     # 探测不到时显式指定
 ```
 
-环境要求：`cmake >= 3.28`、`ninja >= 1.11`、`scp`（网络部署用）。SDK 位于
-`/mnt/mydata/kRTOSSDK`（仅用于提供 SDK 头文件与链接脚本；用 `K230_SDK_ROOT` 或
-`-DK230_SDK_ROOT=...` 覆盖）。构建使用 CMake 原生模块依赖扫描，禁止 unity/汇总源文件构建。
-
-主机编译器使用 GCC 14 或更新版本，或 Clang 19 或更新版本及配套的 `clang-scan-deps`。
-Ubuntu 可安装 `clang-19 clang-tools-19`。host 预设自动选择这些编译器，也可通过
-`CXX` 或 `DART_CXX_COMPILER` 指定；后者也用于交叉构建的 C++ 前端。
-
-交叉构建保留现有 GCC 12.0.1 的 C 编译器、musl 标准库、汇编器和链接器，C++ 使用
-Clang 19 的 RISC-V 前端编译命名模块。工具链文件显式设置 target、GCC toolchain、sysroot
-和 BFD 链接器；如安装了完整 GCC 14+ RISC-V musl 工具链，也可直接使用。
-已有本地 Clang 包可放在 `.cache/module-toolchain/bin`，构建会自动发现；本次验证用此目录，
-无需修改系统编译器。模块 BMI 与编译器、标准库和选项绑定，主机、交叉及播放器各用独立构建目录。
+环境要求：`cmake >= 3.28`、C11 / C++23 编译器、`scp`（网络部署用）；
+预设使用 Ninja。SDK 位于 `/mnt/mydata/kRTOSSDK`，用 `K230_SDK_ROOT` 或
+`-DK230_SDK_ROOT=...` 覆盖。主机使用系统 C++ 编译器，也可用 `CXX` 或
+`DART_CXX_COMPILER` 指定。交叉构建默认使用 SDK 配套的 RISC-V musl GCC/G++，
+头文件、标准库和链接器来自同一工具链；不需要 C++ 模块扫描器或 BMI 缓存。
 
 HAL 头文件和库只取 SDK `.config` 的 `CONFIG_BOARD_CONFIG_NAME` 对应输出目录，
 避免 SDK 保留多块板子的构建产物时误链旧板库。使用其它固件输出时可显式设置

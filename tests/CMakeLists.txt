@@ -102,7 +102,7 @@ endif()
 set(_pwm_hal_include "${K230_SDK_ROOT}/src/rtsmart/libs/rtsmart_hal/drivers/pwm")
 set(_fpioa_hal_include "${K230_SDK_ROOT}/src/rtsmart/libs/rtsmart_hal/drivers/fpioa")
 if(EXISTS "${_pwm_hal_include}/drv_pwm.h" AND EXISTS "${_fpioa_hal_include}/drv_fpioa.h")
-    dart_add_modules(dart_pwm_k230_host "${PROJECT_SOURCE_DIR}/include/firmware/src/pwm/k230/output.cpp")
+    dart_add_cpp_library(dart_pwm_k230_host "${PROJECT_SOURCE_DIR}/include/firmware/src/pwm/k230/output.cpp")
     target_include_directories(dart_pwm_k230_host PRIVATE "${_pwm_hal_include}" "${_fpioa_hal_include}")
     target_link_libraries(dart_pwm_k230_host PUBLIC dart_pwm)
     add_executable(pwm_output_test pwm_output_test.cpp)
@@ -125,8 +125,8 @@ if(EXISTS "${_pwm_hal_include}/drv_pwm.h" AND EXISTS "${_fpioa_hal_include}/drv_
     endforeach()
 endif()
 
-# Independent importers must resolve to the same compiled definitions at link time.
-dart_add_modules(dart_odr_consumer odr_consumer.cpp)
+# Independent translation units must share the same definitions at link time.
+dart_add_cpp_library(dart_odr_consumer odr_consumer.cpp)
 target_link_libraries(dart_odr_consumer PUBLIC dart_detection dart_recording dart_imu dart_control dart_pwm)
 target_link_libraries(camera_contract_test PRIVATE dart_odr_consumer)
 target_link_libraries(servo_mapping_test PRIVATE dart_odr_consumer)

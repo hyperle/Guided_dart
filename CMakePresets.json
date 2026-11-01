@@ -9,7 +9,7 @@
     {
       "name": "host",
       "displayName": "host (K230 off, clangd compile database)",
-      "description": "Host named-module build and linked behavior tests (GCC >= 14 or Clang >= 19 with matching clang-scan-deps).",
+      "description": "Host C++23 build and linked behavior tests with the system compiler.",
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build",
       "cacheVariables": {
@@ -21,7 +21,7 @@
     {
       "name": "cross",
       "displayName": "cross (RISC-V musl, needs K230_TOOLCHAIN_DIR)",
-      "description": "RISC-V musl modules: GCC >= 14, or Clang >= 19 using the existing GCC musl runtime/SDK. Set K230_TOOLCHAIN_DIR and optionally DART_CXX_COMPILER.",
+      "description": "RISC-V musl C11/C++23 build with the SDK toolchain. Set K230_TOOLCHAIN_DIR.",
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build-cross",
       "toolchainFile": "${sourceDir}/cmake/toolchain-riscv64-musl.cmake",

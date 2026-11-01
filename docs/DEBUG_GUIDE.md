@@ -32,22 +32,13 @@
 ## 2. 构建与部署
 
 ```bash
-bash scripts/build.sh --all                    # -> build-cross/{launcher,dart_app}/...
-bash scripts/deploy.sh --all <板子IP> --list    # scp + md5 校验（有网络时首选）
-bash scripts/deploy-sdcard.sh /media/$USER/<卡> # 无网络：读卡器直写
-bash scripts/deploy-sdcard.sh 'gphoto2://Kendryte_CanMV_001000000/store_ffff0001'  # 板子用 USB 挂着（MTP）
+bash .script/build-rtos
+bash .script/deploy-rtos
 ```
 
-**MTP（gphoto2）部署的两个硬事实**（2026-10-13 实测）：
-
-| 现象 | 实测数据 | 结论 |
-|---|---|---|
-| 覆盖已存在的文件 | `cp -f` 返回 0，文件变成 **0 字节** | 绝不能覆盖，必须先删/改名再写 |
-| 覆盖之后继续写 | 换成全新文件名也全是 0 字节，`gio mount -u/-m` 无效 | 板端 MTP 已坏，只能拔插 USB / 重启板子 |
-| 存储映射 | `store_ffff0001` 根目录有 `revision.txt` | 它是板端 `/sdcard`（要部署的目标）；`store_ffff0002` 是 `/data` |
-
-`deploy-sdcard.sh` 已按这些事实写成：写探针自检 → 写临时名并校验大小+md5 → 删旧名 → 改名 →
-再校验；任一步失败就中止且不动板上文件。板子没有网络又要反复换版本时，走读卡器最稳。
+传输方式和地址通过 `.script/board.env` 或环境变量配置，详见
+[脚本说明](../.script/README.md)。早期 FUSE 覆盖的零字节实验仅适用于当时路径，
+不构成禁止 GIO/MTP 部署的工程约束；当前脚本以上传后的完整回读校验判断成功。
 
 ```text
 配置 SDK/toolchain → 构建一个 src/ 下的目标 → 获得 build-cross/<目标名>/<目标名>

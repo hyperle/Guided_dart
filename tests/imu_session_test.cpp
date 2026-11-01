@@ -18,8 +18,8 @@
 #include <thread>
 #include <vector>
 
-import dart.runtime.imu.session;
-import dart.system.write_control;
+#include "runtime/imu/session.hpp"
+#include "system/write_control.hpp"
 
 namespace dart::tests {
 

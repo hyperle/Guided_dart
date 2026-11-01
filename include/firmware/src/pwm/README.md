@@ -1,6 +1,6 @@
 # 四路 PWM 输出
 
-`interface.cpp` 定义平台无关 `IPwm`、四路绝对脉宽（µs）和操作错误。
+`interface.hpp` 定义平台无关 `IPwm`、四路绝对脉宽（µs）和操作错误。
 `k230/output.cpp` 包含厂商头文件并调用 HAL；L4 仅通过板级工厂取得接口。
 构建目标为 `dart_pwm`，交叉构建随相机默认启用 `DART_PWM_K230`。
 

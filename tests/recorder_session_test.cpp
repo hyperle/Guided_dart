@@ -17,8 +17,8 @@
 # include <thread>
 # include <unistd.h>
 
-import dart.camera.frame_lease;
-import dart.recorder.recorder;
+#include "camera/frame_lease.hpp"
+#include "recorder/recorder.hpp"
 
 namespace dart::tests {
 

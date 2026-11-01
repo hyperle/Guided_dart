@@ -20,14 +20,14 @@ cmake_minimum_required(VERSION 3.28)
 project(k230d_rtos_apps LANGUAGES C CXX)
 
 # C data-plane modules use a strict C11 ABI; the orchestration/control plane
-# uses C++23 (notably std::expected) and C++20 named modules.
+# uses C++23 (notably std::expected) with ordinary headers and sources.
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
-include(cmake/modules.cmake)
+include(cmake/targets.cmake)
 
 # ---------------------------------------------------------------------------
 # K230 RTOS SDK 根目录（本机默认；若 SDK 在其他路径，用 -DK230_SDK_ROOT=... 覆盖）

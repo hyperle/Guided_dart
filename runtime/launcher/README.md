@@ -24,8 +24,8 @@ launcher 自身日志和子进程 console 日志服从 `/sdcard/app/control/writ
 | `startup.list` | 启动清单（**源码母版**；板端运行时默认文件是 `/sdcard/app/startup_final.list`，需拷贝并改名） |
 | `README.md` | 本文件 |
 
-构建目标与产物路径在 `runtime/CMakeLists.txt`（本仓库约定：模块目录只放源码，
-目标集中声明）：`build-cross/launcher/launcher`。
+当前启动器目标在 `runtime/CMakeLists.txt` 中声明，产物为
+`build-cross/launcher/launcher`。
 
 当前启动清单只启用 `dart_app` 的识别、坐标、两轴映射和四路 PWM 链路。
 零点、两轴增益与增量限幅以 `startup.list` 当前参数为准。

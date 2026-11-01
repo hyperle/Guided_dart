@@ -112,24 +112,23 @@ def build(args):
     board = staged_boards / BOARD
     for name in ("moddart_raw.c", "moddart_detect.c", "detector_bridge.h"):
         shutil.copy2(HERE / name, board / name)
-    # The interpreter's GCC may predate named-module support. Compile the real
-    # detector with the application's module toolchain and link its C ABI archive.
+    # Compile the same detector implementation with the SDK's C++ toolchain
+    # and link its C ABI archive into the interpreter.
     # Remove only the obsolete generated source from older private overlays.
     (board / "detector_bridge.cpp").unlink(missing_ok=True)
-    module_build = destination / "detector-modules"
+    detector_build = destination / "detector"
     subprocess.run([
-        "cmake", "-S", str(ROOT), "-B", str(module_build), "-G", "Ninja",
+        "cmake", "-S", str(ROOT), "-B", str(detector_build), "-G", "Ninja",
         f"-DCMAKE_TOOLCHAIN_FILE={ROOT / 'cmake/toolchain-riscv64-musl.cmake'}",
         f"-DK230_TOOLCHAIN_DIR={toolchain}", f"-DK230_SDK_ROOT={sdk}",
         "-DDART_CAMERA_K230=OFF", "-DDART_IMU_K230=OFF", "-DDART_PWM_K230=OFF",
         "-DDART_CAMERA_CLANGD_COMMANDS=OFF", "-DDART_IMU_CLANGD_COMMANDS=OFF",
         "-DBUILD_TESTING=OFF",
     ], check=True)
-    subprocess.run(["cmake", "--build", str(module_build), "--target",
+    subprocess.run(["cmake", "--build", str(detector_build), "--target",
                     "dart_canmv_detector", "--parallel", str(args.jobs)], check=True)
-    detector_archives = [module_build / "src/libdart_canmv_detector.a",
-                         module_build / "src/libdart_detection.a",
-                         module_build / "include/libdart_camera_types.a"]
+    detector_archives = [detector_build / "src/libdart_canmv_detector.a",
+                         detector_build / "src/libdart_detection.a"]
 
     # Recompile the actual app sources, not a second implementation of exposure,
     # unpacking, cutoff, cache handling, or DMA ownership.
@@ -242,7 +241,9 @@ def build(args):
         "sources": {str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest()
                     for path in sorted(HERE.glob("*.[ch]")) + sorted(HERE.glob("*.cpp"))
                     + [ROOT / "tools/canmv_tune.py"] + sorted((ROOT / "src/detector").glob("*.cpp"))
-                    + sorted(camera.rglob("*.c")) + sorted(camera.rglob("*.h"))},
+                    + sorted((ROOT / "src/detector").glob("*.hpp"))
+                    + sorted(camera.rglob("*.c")) + sorted(camera.rglob("*.h"))
+                    + sorted(camera.rglob("*.hpp"))},
         "sha256": hashlib.sha256(artifact.read_bytes()).hexdigest(),
     }
     (destination / "BUILD_INFO.json").write_text(json.dumps(metadata, indent=2) + "\n")

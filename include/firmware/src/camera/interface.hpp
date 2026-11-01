@@ -1,14 +1,12 @@
-module;
+#pragma once
+
 #include <chrono>
 #include <cstdint>
 #include <expected>
 
-export module dart.camera.interface;
+#include "camera/frame_lease.hpp"
 
-export import dart.camera.frame_lease;
-
-export namespace dart::camera {
-
+namespace dart::camera {
 enum class ExposureMode : std::uint32_t {
     kFixed = 0,
     kAuto = 1,
