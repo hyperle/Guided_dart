@@ -73,7 +73,7 @@ private:
 
     // Recover the dimensions of a filled rectangular bar from its axis-aligned
     // bounds and area. A rotated bar's bounding-box aspect/fill can be poor even
-    // when its principal dimensions are still a valid light bar.
+    // when its principal dimensions are still a valid light bar. The moment
     // The caller keeps the axis-aligned bbox interpretation if recovery fails.
     static bool RecoverRectShape(
         const Blob& blob, float& length, float& thickness, float& tilt) noexcept {
@@ -147,22 +147,19 @@ private:
         float angle = blob.angle;
         bar.length = blob.length;
         bar.thickness = blob.thickness;
-        // Area and bounds cannot describe every foreground shape. Preserve
-        // measured moment geometry and recover a rectangle only when it is absent.
-        if (!(IsPositive(bar.length) && IsPositive(bar.thickness) && std::isfinite(angle))) {
-            float tilt = 0.0F;
-            if (RecoverRectShape(blob, bar.length, bar.thickness, tilt)) {
-                const float long_axis_angle = blob.bounds.width > blob.bounds.height
-                    ? tilt : static_cast<float>(kPi * 0.5) - tilt;
-                angle = std::copysign(long_axis_angle, blob.angle);
-            } else {
-                // Keep the legacy bbox interpretation when area/bounds cannot be
-                // explained by a filled rotated rectangle.
-                bar.length = static_cast<float>(std::max(blob.bounds.width, blob.bounds.height));
-                bar.thickness = static_cast<float>(std::min(blob.bounds.width, blob.bounds.height));
-                angle = blob.bounds.height >= blob.bounds.width ? static_cast<float>(kPi * 0.5)
-                                                                : 0.0F;
-            }
+        float tilt = 0.0F;
+        const bool recovered_shape = RecoverRectShape(blob, bar.length, bar.thickness, tilt);
+        if (recovered_shape) {
+            const float long_axis_angle = blob.bounds.width > blob.bounds.height
+                ? tilt : static_cast<float>(kPi * 0.5) - tilt;
+            angle = std::copysign(long_axis_angle, blob.angle);
+        } else {
+            // Keep the legacy bbox interpretation when area/bounds cannot be
+            // explained by a filled rotated rectangle.
+            bar.length = static_cast<float>(std::max(blob.bounds.width, blob.bounds.height));
+            bar.thickness = static_cast<float>(std::min(blob.bounds.width, blob.bounds.height));
+            angle = blob.bounds.height >= blob.bounds.width ? static_cast<float>(kPi * 0.5)
+                                                            : 0.0F;
         }
         // Remote blobs are too quantized for shape tests; LightTracker's temporal
         // confirmation is the gate. Keep only the area/pixel floor above.
