@@ -5,7 +5,7 @@
 CAMERA_ENABLED = True
 EXPOSURE_LINES = 120                 # --exp：整行；0 保留初始化曝光，否则 4..65509
 GRAY_THRESHOLD = 60                  # --threshold：灰度候选下限 0..255；不改变预览/识别图
-MIRROR = 0                           # Controls::mirror：0 无，1 左右，2 上下，3 两者
+MIRROR = 0                           # CanMV 软件镜像 0..3；dart_app 对应 --image-reverse（仅 180° = 3）
 
 DETECTION_ENABLED = True             # 复用 RT-Smart 的 RoiDetector；装甲板优先，否则灯心
 # 键名即 RoiDetector::Config 字段路径；面积 px²，长度/坐标 px，角度 deg。
@@ -198,8 +198,11 @@ def _print_parameters():
         EXPOSURE_LINES, GRAY_THRESHOLD, DETECTOR_CONFIG.get("workspace.min_contrast", 12.0), csv(SERVO_INITIAL_US),
         csv(SERVO_MIN_US), csv(SERVO_MAX_US)
     ))
-    print("C++: Controls::mirror = %d; PWM = %d Hz; grayscale candidate threshold = %d" % (
-        MIRROR, PWM_FREQUENCY_HZ, GRAY_THRESHOLD
+    print("dart_app: --image-reverse %s (Controls::flip180 = %s; app supports 180° only, MIRROR=3)" % (
+        "on" if MIRROR == 3 else "off", "true" if MIRROR == 3 else "false"
+    ))
+    print("C++: PWM = %d Hz; grayscale candidate threshold = %d" % (
+        PWM_FREQUENCY_HZ, GRAY_THRESHOLD
     ))
     if not all(SERVO_ENABLED):
         print("SERVO_ENABLED is only a calibration switch; dart_app enables all four channels")

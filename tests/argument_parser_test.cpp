@@ -29,6 +29,11 @@ public:
         assert(parsed->record_fps == 60 && parsed->record_keep == 0);
         assert(parsed->record_format == recorder::ImageFormat::kPgm && parsed->threshold == 50);
         assert(parsed->min_contrast == 12);
+        assert(!parsed->image_reverse);
+        assert(parse({"--image-reverse", "on"})->image_reverse);
+        assert(parse({"--image-reverse", "off"})->image_reverse == false);
+        assert(!parse({"--image-reverse", "maybe"}));
+        assert(!parse({"--image-reverse"}));
         assert(!parsed->log_console && std::string_view{parsed->log_path} == app::kDefaultLog);
         assert(parse({"--log-console", "on"})->log_console);
         assert(parse({"--log-console", "1"})->log_console);

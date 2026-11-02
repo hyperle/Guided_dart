@@ -1,5 +1,5 @@
 # /sdcard/app/dart_app --exp 800 --vision off --pwm off --record on --rec-fps 30 --rec-format png --raw-layout packed10-lsb --threshold 50 --rec-dir /data/app/records --det-csv /data/app/records/detection.csv --log /data/app/logs/dart_app.log &
-/sdcard/app/dart_app --exp 1200 --record on --rec-format png --rec-fps 15 --vision off --pwm off --log /data/app/logs/png30.log &
+/sdcard/app/dart_app --exp 1200 --record on --rec-format pgm --rec-fps 30 --vision off --pwm off --image-reverse on --log /data/app/logs/png30.log &
 # ============================================================================
 # launcher 开机自启动清单 —— 本文件是**源码母版**（runtime/launcher/startup.list）
 #
@@ -44,11 +44,13 @@
 
 # ---- 本轮启用项：纯视觉舵机输出 + 录像 ----
 # PWM 由 dart_app 独占，不能与 pwm_swing 同时运行。
+# 本行启用 --image-reverse on：灰度图在解码时旋转 180°，识别与录像一致。
+# 相机正装时删掉这两个 token 即恢复原始方向（默认 off）。
 # 默认预设点为实际图像中心，两轴增益为 0，四路保持各自初始脉宽。
 # 方向/比例标定后可追加 --servo-horizontal A,B,C,D 和 --servo-vertical A,B,C,D。
 # 零点标定（四路 initial_us）：见 src/control/README.md「板端零点标定」。
 #   标定时先注释本行再重启，避免自启实例与手跑实例抢 VICAP/PWM；也可直接改本行
-#   的 --servo-initial 后重启。本行现 26 个 token，上限 31。
+#   的 --servo-initial 后重启。本行现 18 个 token（含末尾 &），上限 32。
 # 日志:  /data/app/logs/dart_app.log（状态与耗时两行共用一次 fsync；launcher 另写
 #        /data/app/logs/launcher.log 与 dart_app.console.log）
 # 录像:  /data/app/records/rec_NNNN/img/recording.pgm（灰度连续流，目标 60 FPS）
@@ -58,6 +60,12 @@
 #
 # 相机模式、尺寸、帧率与 CSI 由 K230 实现和固件板级配置管理，上层只消费图像。
 # 参数含义（src/startup/argument_parser.cpp 的 usage；曝光/阈值需要板端验证）：
+#   --image-reverse on|off     相机倒装时启用：RAW10 -> 灰度解码时把整幅图旋转 180°
+#                              （左右和上下同时翻转），没有额外拷贝。识别/舵机坐标、
+#                               detection.csv 与录像（PGM/PNG/DBV/PBM）都基于翻转后的
+#                              图像；显式 --aim 也按翻转后坐标填写。省略时默认 off。
+#                              已标定的 --servo-horizontal/--servo-vertical 符号需重标：
+#                              180° 翻转会使像素误差方向反号。
 #   --exp 400                  本轮核对固定曝光 400 行，帧长 600 行。
 #                              应用省略参数时默认 400 行，帧长 600 行，
 #                              通过现有传感器接口写入，无需标定像素时钟或修改固件。

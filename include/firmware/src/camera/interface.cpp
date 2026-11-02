@@ -27,6 +27,11 @@ public:
     ExposureMode exposure_mode = ExposureMode::kFixed;
     std::uint32_t initial_exposure_lines = 0; /* Keep the sensor's initialized exposure. */
     Raw10Layout raw10_layout = Raw10Layout::kPackedLsb;
+    /* Rotate every published grayscale frame by 180 degrees (mirror both axes)
+     * while decoding RAW10. All consumers, including detection, the CSV and the
+     * recorder, therefore see the same corrected geometry without another pass.
+     */
+    bool flip180 = false;
 };
 
 /* Actual frame geometry, available after creation for consumer allocation. */

@@ -38,6 +38,7 @@ public:
     std::uint32_t record_keep = 0;
     recorder::ImageFormat record_format = recorder::ImageFormat::kPgm;
     camera::Raw10Layout raw10_layout = camera::Raw10Layout::kPackedLsb;
+    bool image_reverse = false; /* 180-degree software rotation while decoding. */
     char rec_dir[512] = "/data/app/records";
     char det_csv[512] = "";    /* 空 = 关闭 */
     char log_path[512] = "/data/app/logs/dart_app.log"; /* 空 = 只输出控制台 */
@@ -124,6 +125,7 @@ inline void usage(const char* argv0) {
     std::printf("  --seconds N      有界运行秒数，0 = 跑到 SIGINT/SIGTERM（默认 0）\n");
     std::printf("  --exp LINES      固定曝光行数（默认 400；0 保留传感器初始曝光）\n");
     std::printf("  --raw-layout F   packed10-lsb（默认，K230 实板验证）\n");
+    std::printf("  --image-reverse on|off  灰度解码时翻转 180°，识别/CSV/录像同步（默认 off）\n");
     std::printf("  --vision on|off  识别开关（默认 on）\n");
     std::printf("  --pwm on|off     纯视觉四路舵机输出（默认 on；vision off 时停用）\n");
     std::printf("  --aim X,Y        全图预设像素坐标（默认实际图像中心）\n");
@@ -282,7 +284,7 @@ inline std::expected<Arguments, int> parse_args(int argc, char* argv[]) {
             continue;
         }
         if (a == "--vision" || a == "--record" || a == "--imu" || a == "--imu-ignore-id"
-            || a == "--pwm") {
+            || a == "--pwm" || a == "--image-reverse") {
             if (!need_value(value)) {
                 std::fprintf(
                     stderr, "%s: %.*s 缺少参数\n", argv[0], static_cast<int>(a.size()), a.data());
@@ -303,6 +305,8 @@ inline std::expected<Arguments, int> parse_args(int argc, char* argv[]) {
                 args.vision_on = flag;
             else if (a == "--pwm")
                 args.pwm_on = flag;
+            else if (a == "--image-reverse")
+                args.image_reverse = flag;
             else if (a == "--imu")
                 args.imu_on = flag;
             else if (a == "--imu-ignore-id")

@@ -144,7 +144,8 @@ bash .script/deploy-rtos list     # 或直接改板端 /sdcard/app/startup_final
 ```
 
 清单只在 launcher 下次启动时读取，改动要重启才生效。每行最多 31 个 token，
-现有 `dart_app` 行 26 个，加 `--servo-initial` 后 28 个；若还要加 `--servo-min/--servo-max`，
+现有 `dart_app` 行 18 个（含 `--image-reverse on`），加 `--servo-initial` 后 20 个；
+若还要加 `--servo-min/--servo-max`，
 先删掉与默认值相同的 `--rec-format dbv`、`--rec-keep 0` 或 `--raw-layout packed10-lsb`。
 
 零点只决定中位。行程 `--servo-min/--servo-max`、左右/上下方向的符号和比例仍需分别

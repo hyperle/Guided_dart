@@ -37,7 +37,7 @@ IMU 采样独立于相机逐帧循环；PWM 任务每 10 ms 检查视觉指令�
 ## 流水线
 
 ```
-SC038HGS RAW10 -> CSI/MCM（绕过 ISP）-> RAW10 >> 2 灰度解包 -> 归还 RAW dump
+SC038HGS RAW10 -> CSI/MCM（绕过 ISP）-> RAW10 >> 2 灰度解包（可选 180° 翻转）-> 归还 RAW dump
 camera->acquire(timeout) -> FrameLease（独立的 0..255 灰度 Y8 缓冲）
   -> detector.Detect(lease.view())      灰度候选提取与背景对比度过滤；同步借用像素
   -> servo.observe(result)             装甲板优先/灯回退 -> 两轴增量 -> 合成限幅
@@ -71,6 +71,7 @@ dart_app [选项]
   --seconds N      有界运行秒数，0 = 跑到 SIGINT/SIGTERM（默认 0）
   --exp LINES      固定曝光行数（默认 400；0 保留传感器初始曝光）
   --raw-layout F   packed10-lsb（默认，K230 实板验证）
+  --image-reverse on|off  灰度解码时翻转 180°，识别/CSV/录像同步（默认 off）
   --vision on|off  识别开关（默认 on）
   --pwm on|off     纯视觉 PWM 输出（默认 on；vision off 时停用）
   --aim X,Y        全图预设像素（默认实际图像中心）
@@ -101,6 +102,10 @@ dart_app [选项]
 ```
 
 应用不提供采集分辨率、采集帧率或 CSI 请求参数。`--rec-fps` 仅设置录像按时间抽帧的目标速率。
+`--image-reverse on` 在 RAW10 → 灰度解码时把整幅图旋转 180°（水平与垂直同时镜像），
+识别坐标、`detection.csv`、舵机映射和录像都使用同一张翻转后的图，不增加像素拷贝；
+省略时默认 off。显式 `--aim` 需要按翻转后的图像坐标填写（默认点取图像中心，翻转不改变中心）；
+已标定的 `--servo-horizontal` / `--servo-vertical` 符号也要重标或取反，因为像素误差方向随之反转。
 曝光/阈值默认值均为 UNVALIDATED，要用真实板端样本标定，见 [`docs/DEBUG_GUIDE.md`](../../docs/DEBUG_GUIDE.md) §5。
 PWM 默认增益为零，目标偏移不会改变脉宽。标定后通过上述参数启用各路修正，
 数值列表不含空格，通道顺序和映射符号见 [舵机控制](../control/README.md)。

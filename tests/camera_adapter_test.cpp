@@ -160,6 +160,7 @@ void automatic_mode() {
     assert(fake.config.output_width == 0 && fake.config.output_height == 0);
     assert(fake.config.max_outstanding_frames == 4 && fake.config.channel_buffers >= 4);
     assert(fake.config.raw10_layout == DART_CAMERA_RAW10_PACKED_LSB);
+    assert(fake.config.mirror == 0);
     assert(created.value()->frame_info().width == 320);
     assert(created.value()->frame_info().height == 240);
     assert(created.value()->start());
@@ -167,6 +168,20 @@ void automatic_mode() {
     auto frame = created.value()->acquire(std::chrono::milliseconds{0});
     assert(frame && frame->status == camera::AcquireStatus::kFrame);
     assert(frame->lease.release());
+}
+
+void flip_180() {
+    fake = {};
+    auto config = camera_config();
+    config.flip180 = true;
+    auto created = camera::k230::Camera<1>::create(config);
+    assert(created);
+    /* Bit 0 is horizontal and bit 1 vertical; both together are 180 degrees. */
+    assert(fake.config.mirror == 3);
+    assert(created.value()->start());
+    assert(created.value()->stop());
+    created.value().reset();
+    assert(!fake.camera_open && !fake.media_open);
 }
 
 void release_retry() {
@@ -268,6 +283,7 @@ void exposure_adjustment() {
 
 int main() {
     dart::tests::automatic_mode();
+    dart::tests::flip_180();
     dart::tests::release_retry();
     dart::tests::exposure_adjustment();
     dart::tests::exposure_rollback(false);

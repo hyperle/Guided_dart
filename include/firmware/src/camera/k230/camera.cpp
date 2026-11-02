@@ -98,6 +98,9 @@ private:
         result.max_outstanding_frames = kCapacity;
         result.exposure_mode = static_cast<std::uint32_t>(controls.exposure_mode);
         result.raw10_layout = static_cast<std::uint32_t>(controls.raw10_layout);
+        /* Bit 0 mirrors horizontally, bit 1 vertically; together they are the
+         * 180-degree rotation applied while RAW10 is decoded to grayscale. */
+        result.mirror = controls.flip180 ? 3U : 0U;
         /* start() applies exposure through the same path as later adjustments. */
         result.initial_exposure_lines = 0;
         return result;

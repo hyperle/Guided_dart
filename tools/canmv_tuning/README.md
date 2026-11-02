@@ -79,7 +79,7 @@ Detect/Track 分工要求 `_dart_detect.TRACK_FEATURE_VERSION >= 1`。
 | `EXPOSURE_LINES` | `--exp` / `Controls::initial_exposure_lines` | 整行；0 保留初始化值，否则 4..65509 |
 | `GRAY_THRESHOLD` | `--threshold` / `RoiDetector::Config::threshold` | 0..255；灰度候选下限，包含等号，不修改图像 |
 | `DETECTOR_CONFIG["workspace.min_contrast"]` | `--min-contrast` | 候选均值减背景均值的下限，默认 12 个灰度级 |
-| `MIRROR` | `Controls::mirror` | 0 无、1 左右、2 上下、3 两者；软件镜像 |
+| `MIRROR` | `--image-reverse` / `Controls::flip180` | CanMV 可设 0..3；dart_app 只有 180°：`on` = 3，`off` = 0 |
 | `SERVO_INITIAL_US` | `--servo-initial` / `Channel::initial_pulse_us` | 四路机械零点的绝对脉宽，µs，允许小数 |
 | `SERVO_MIN_US` / `SERVO_MAX_US` | `--servo-min` / `--servo-max` | µs；零点超出范围时直接报错 |
 | `PWM_FREQUENCY_HZ` | `dart::pwm::kFrequencyHz` | 固定 333 Hz |

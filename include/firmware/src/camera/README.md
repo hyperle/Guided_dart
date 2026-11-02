@@ -7,7 +7,7 @@ C++ 按职责包含带保护的 `.cpp`，通过 `dart_camera_acl` INTERFACE 目�
 | 文件 | 类 / 职责 |
 |---|---|
 | `frame_view.cpp` | `FrameView`，L3 只读帧数据 |
-| `interface.cpp` | `ICamera`、曝光/RAW10 布局、实际尺寸与取帧契约 |
+| `interface.cpp` | `ICamera`、曝光/RAW10 布局/180° 翻转、实际尺寸与取帧契约 |
 | `frame_lease.cpp` | `FrameLease` 的移动与释放语义，以及后端槽位与受限构造入口 |
 | `error.cpp` | 错误分类、上下文、原生码翻译及有界诊断文本 |
 | `k230/camera.cpp` | `Camera<N>`，K230 生命周期、曝光调整与 C ABI 适配 |
@@ -72,7 +72,11 @@ MCM 固定四槽环形数组，配置缓冲数固定为 4，不随 CPU 租约容
 RAW dump 在转换完成后立即归还，录像持有灰度缓冲不会占用 DMA 环。
 识别器和录像使用同一帧。`--threshold` 仅控制候选提取，`--min-contrast` 控制候选与
 背景的最小亮度差；两者均不修改相机像素。默认 PGM 和可选 PNG 保留灰度，
-显式选择 DBV/PBM 时才在录像器内按 `--threshold` 导出二值图。软件镜像在解包时完成。
+显式选择 DBV/PBM 时才在录像器内按 `--threshold` 导出二值图。软件镜像在解包时完成：
+`Controls::flip180`（应用参数 `--image-reverse on`）让 `to_c_config()` 写入
+`mirror = 3`（水平+垂直），`dart_camera_raw10_gray()` 在写灰度缓冲时同步改写下标，
+因此识别、CSV 和录像拿到的是同一张已旋转 180° 的图，没有额外拷贝；默认 `false`
+对应 `mirror = 0`，保持传感器原始方向。
 C ABI 已升至 6，移除了相机二值阈值配置；相机消费者与 CanMV 解释器需一起重新编译。
 
 应用默认通过曝光接口设置 **400 行**（`--exp 400`），K230 后端使用现有
