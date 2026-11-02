@@ -11,7 +11,10 @@ Y8，后台线程默认写入灰度 PGM 连续流，也支持逐帧灰度 PNG、
 8 位灰度。显式选择 `--rec-format dbv|pbm` 时，录像器按 `--threshold` 生成二值副本，
 该副本不反馈给识别器，也无法在回放时恢复灰度。DBV 的无损指打包后的二值位图。
 灰度 PGM 在 640×480 下每帧约 307 KB，60 FPS 时约 18.4 MB/s，500 MB 上限约容纳
-27 秒；实际保存速度与时长取决于输入和写盘。可用 8 位灰度 PNG 减少体积，其压缩耗时需上板测量。
+27 秒；实际保存速度与时长取决于输入和写盘。可用 8 位灰度 PNG 减少体积：
+上板实测（旧参数：filter None、默认策略）640×480 每帧编码 13–17 ms、
+普通画面 60–125 KiB/帧；换成 Up 滤波 + RLE 后本机测得编码时间再降 16–21%、
+体积再降 26–27%，板端数值需按 `op=recorder_timing pack_us` 复核。
 
 ## 类与消费方式
 
@@ -30,7 +33,7 @@ INTERFACE 目标取得相机 C 数据面、线程和 zlib 依赖。类外方法�
 | `encoding/binary_format.cpp` | `BinaryFormat`，DBV1 文件头、变长记录前缀与边界检查 |
 | `encoding/binary_encoder.cpp` | `BinaryEncoder`，1-bit 打包、完整帧/差分/稀疏差分自适应压缩 |
 | `encoding/binary_decoder.cpp` | `BinaryDecoder`，按记录还原位图，供播放器和回归使用 |
-| `encoding/png_encoder.cpp` | `PngEncoder`，8-bit 灰度、快速 DEFLATE 和 PNG 封装 |
+| `encoding/png_encoder.cpp` | `PngEncoder`，8-bit 灰度、Up 行滤波、RLE DEFLATE 和 PNG 封装 |
 | `storage/event_writer.cpp` | `EventWriter`，事件 CSV、缓冲与刷新 |
 | `error.cpp` | `RecorderError`，错误状态、系统错误码与路径 |
 | `config.cpp` | 录像配置、事件与事件回调的共享契约 |
@@ -145,6 +148,12 @@ CSV 偏移读取。文件末尾未写完的帧需要通过 CSV 边界和 PNG 签
 
 逐帧 PNG 使用 8-bit 灰度、level 1、每 32 张分组和逐图关闭行为，旧 1-bit PNG 仍可回放。
 PNG 容器同样使用 8-bit 灰度、level 1，但每轮只打开一次文件，每帧顺序追加完整 PNG。
+两种 PNG 共用 `PngEncoder`：行滤波固定为 **Up**（当前行减上一行，首行按全零处理），
+DEFLATE 策略用 **Z_RLE**。Up 把平稳背景和稳定曝光变成大量零游程，RLE 几乎免费地编码它们；
+本机对 4 帧真实 640×480 灰度帧实测：普通亮度帧体积 **−26~27%**、暗帧 −8~18%，
+编码总耗时（含滤波）普通亮度帧 **−16~21%**、暗帧基本持平（±4%）。滤波只多一次
+逐字节减法和 0.15 ms 级（主机）开销，不增加缓冲；解码端无兼容性变化，旧录像照常播放。
+选择 RLE 而不是默认策略，是因为默认策略在暗噪声帧上会让 Up 反而变大（实测 +8~24%）。
 
 `Config::max_file_bytes` 默认且最多为 **500 MB = 500,000,000 字节**，逐帧 PNG 模式按
 **本轮所有 PNG 文件实际大小的总和**计算，PNG 容器按 `recording.pngs` 总字节数计费，

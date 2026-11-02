@@ -1,5 +1,5 @@
 # /sdcard/app/dart_app --exp 800 --vision off --pwm off --record on --rec-fps 30 --rec-format png --raw-layout packed10-lsb --threshold 50 --rec-dir /data/app/records --det-csv /data/app/records/detection.csv --log /data/app/logs/dart_app.log &
-/sdcard/app/dart_app --exp 1200 --record on --rec-format pngs --rec-fps 30 --rec-queue 32 --vision off --pwm off --image-reverse on --log /data/app/logs/png30.log &
+/sdcard/app/dart_app --exp 1000 --record on --rec-format pngs --rec-fps 24 --rec-queue 16 --rec-keep 5 --vision off --pwm off --image-reverse on --log /data/app/logs/pngs_record.log &
 # ============================================================================
 # launcher 开机自启动清单 —— 本文件是**源码母版**（runtime/launcher/startup.list）
 #
@@ -54,7 +54,7 @@
 # 零点标定（四路 initial_us）：见 src/control/README.md「板端零点标定」。
 #   标定时先注释本行再重启，避免自启实例与手跑实例抢 VICAP/PWM；也可直接改本行
 #   的 --servo-initial 后重启。本行现 20 个 token（含末尾 &），上限 32。
-# 日志:  /data/app/logs/dart_app.log（状态与耗时两行共用一次 fsync；launcher 另写
+# 日志:  /data/app/logs/dart_app.log（状态批由专用日志线程 fsync+关闭，采集线程不等待；launcher 另写
 #        /data/app/logs/launcher.log 与 dart_app.console.log）
 # 录像:  /data/app/records/rec_NNNN/img/recording.pngs（本行 PNG 容器，目标 30 FPS）
 #        /data/app/records/rec_NNNN/logs/frames.csv（每帧一行的放行记录）

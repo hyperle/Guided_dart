@@ -1,6 +1,8 @@
 #ifndef DART_LOGGING_LOGGER_CPP
 #define DART_LOGGING_LOGGER_CPP
 
+#include <atomic>
+#include <chrono>
 #include <cstdarg>
 #include <cstdint>
 #include <cstdio>
@@ -9,9 +11,7 @@
 #include <string_view>
 #include <unistd.h>
 
-#include "storage/directories.cpp"
-#include "system/monotonic_clock.cpp"
-#include "system/write_control.cpp"
+#include "logging/log_sink.cpp"
 
 namespace dart::logging {
 
@@ -32,25 +32,27 @@ inline const char* tag_text(Tag tag) noexcept {
     return "app";
 }
 
-/* Console mirror rate limit, in lines per second (0 disables the limit).
- * Every periodic line is emitted once per --status-ms (default 1 s, ~7 lines),
- * so normal operation never touches the limit. A per-frame failure path can
- * emit ~95 lines/s, which exceeds a 115200 console (11.5 KB/s) and would block
- * the foreground process; 30 lines/s keeps the console near 6.6 KB/s. */
-inline constexpr std::uint32_t kConsoleRatePerSecond = 30;
-inline constexpr std::uint32_t kConsoleBurst = kConsoleRatePerSecond;
-/* At most one dropped-line summary per second, independent of line batching. */
-inline constexpr std::int64_t kConsoleDropReportMs = 1000;
-
-/* File logging with an optional console mirror. A failed log write must not
- * become a console error loop: console output is best-effort, never retried,
- * and rate limited. */
+/* Structured file log with an optional console mirror.
+ *
+ * line() only formats the line and hands it to the bounded sink queue; the sink
+ * thread owns open/write/fsync/close and the console mirror. On the board an
+ * fsync on the FAT partition waits for the storage device to drain the image
+ * stream (100-400 ms measured per status batch), so doing it here used to stall
+ * acquisition, detection and the servo for that long once per second. The
+ * durability contract is unchanged: each batch still ends with fsync+close and
+ * the file stays closed between batches, so MTP can read it and a reset loses at
+ * most the current second.
+ *
+ * A failed log write must not become a console error loop: console output is
+ * best-effort, never retried, and rate limited. If the sink thread cannot be
+ * created the logger falls back to synchronous writes on the caller thread. */
 class Logger {
 public:
     explicit Logger(platform::WriteControl* writes = nullptr) noexcept : writes_(writes) {}
     ~Logger() {
-        end_batch();
-        flush_console_dropped(true);
+        (void)sink_.drain(std::chrono::milliseconds{kShutdownDrainMs});
+        sink_.stop();
+        sink_.finish_console();
     }
     Logger(const Logger&) = delete;
     Logger& operator=(const Logger&) = delete;
@@ -59,44 +61,37 @@ public:
             return false;
         std::memcpy(path_, path.data(), path.size());
         path_[path.size()] = '\0';
-        if (writes_ != nullptr && !writes_->logging_enabled())
+        if (writes_ != nullptr && !writes_->logging_enabled()) {
+            /* Paused at startup: the file stays untouched, but the sink must
+             * still start so writes resume asynchronously once the host
+             * unpauses instead of silently staying on the synchronous path. */
+            (void)sink_.start(std::string_view{path_, path.size()}, writes_);
             return true;
+        }
         storage::ensure_parent(path_);
         const int fd = ::open(path_, O_WRONLY | O_CREAT | O_APPEND, 0666);
         if (fd < 0)
             return false;
         ::close(fd);
+        /* The writer thread failing to start keeps the old synchronous path. */
+        (void)sink_.start(std::string_view{path_, path.size()}, writes_);
         return true;
     }
 
     /* Mirror every written line to stderr. Off by default: only a foreground
      * run on the serial console benefits, and launcher redirects a child's
-     * stderr into <app>.console.log, where the mirror would only double I/O. */
-    void set_console(bool on) noexcept {
-        if (on && !console_) {
-            /* Start with a full bucket so the startup burst (camera_create,
-             * detector_prepare, csv_open …) is never dropped, and start the
-             * drop-report window now so the first summary is not emitted on the
-             * first dropped line. */
-            const std::int64_t now = platform::mono_ms();
-            console_tokens_ = kConsoleBurst;
-            console_credit_ = 0;
-            console_refill_ms_ = now;
-            console_drop_report_ms_ = now;
-        }
-        console_ = on;
-    }
+     * stderr into <app>.console.log, where the mirror would only double I/O.
+     * Mirroring runs on the sink thread as well, so a console-only run no
+     * longer blocks the capture loop on the serial port. */
+    void set_console(bool on) noexcept { sink_.set_console(on); }
 
-    void begin_batch() noexcept { batching_ = true; }
+    void begin_batch() noexcept { batching_.store(true, std::memory_order_relaxed); }
 
+    /* Ends a batch: the sink writes the queued lines and then fsyncs and closes
+     * the file on its own thread. The call itself never touches storage. */
     void end_batch() noexcept {
-        batching_ = false;
-        if (fd_ >= 0) {
-            ::fsync(fd_);
-            ::close(fd_);
-            fd_ = -1;
-        }
-        flush_console_dropped();
+        batching_.store(false, std::memory_order_relaxed);
+        sink_.request_flush();
     }
 
     void line(Tag tag, const char* fmt, ...) noexcept {
@@ -119,83 +114,31 @@ public:
             return;
         if (static_cast<std::size_t>(out_n) >= sizeof(out))
             out_n = static_cast<int>(sizeof(out)) - 1;
-        if (fd_ < 0 && path_[0] != '\0') {
-            storage::ensure_parent(path_);
-            fd_ = ::open(path_, O_WRONLY | O_CREAT | O_APPEND, 0666);
-        }
-        if (fd_ >= 0)
-            (void)!::write(fd_, out, static_cast<std::size_t>(out_n));
-        /* Mirror after the file write and before end_batch(), so a dropped-line
-         * summary always follows the line that triggered the batch. */
-        emit_console(out, static_cast<std::size_t>(out_n));
-        if (!batching_)
+        /* Only a copy into the bounded queue happens here; storage I/O and the
+         * console mirror belong to the sink thread. */
+        if (sink_.started())
+            sink_.enqueue(out, static_cast<std::size_t>(out_n));
+        else
+            sink_.write_now(out, static_cast<std::size_t>(out_n));
+        if (!batching_.load(std::memory_order_relaxed))
             end_batch();
     }
 
+    /* Blocks until queued lines are written and the file is fsynced+closed
+     * again. Shutdown and tests use it to observe the file; the capture loop
+     * never calls it. */
+    bool flush(std::chrono::milliseconds deadline) noexcept { return sink_.drain(deadline); }
+
+    /* Lines discarded because the bounded queue was full or its mutex was held.
+     * Diagnostics only: dropping never blocks the producer. */
+    std::uint64_t dropped() const noexcept { return sink_.dropped(); }
+
 private:
-    void emit_console(const char* out, std::size_t length) noexcept {
-        if (!console_)
-            return;
-        if (kConsoleRatePerSecond > 0) {
-            /* Sub-millisecond calls must not lose their fraction: keep a credit
-             * counter in thousandths of a line instead of resetting the clock. */
-            const std::int64_t now = platform::mono_ms();
-            const std::int64_t elapsed = now - console_refill_ms_;
-            if (elapsed > 0) {
-                console_credit_ += static_cast<std::uint64_t>(elapsed) * kConsoleRatePerSecond;
-                console_refill_ms_ = now;
-                const std::uint64_t whole = console_credit_ / 1000ULL;
-                if (whole > 0) {
-                    console_credit_ -= whole * 1000ULL;
-                    const std::uint64_t refilled = console_tokens_ + whole;
-                    console_tokens_ = refilled >= kConsoleBurst
-                                          ? kConsoleBurst
-                                          : static_cast<std::uint32_t>(refilled);
-                }
-            }
-            if (console_tokens_ == 0) {
-                ++console_dropped_;
-                return;
-            }
-            --console_tokens_;
-        }
-        (void)!::write(STDERR_FILENO, out, length);
-    }
-
-    /* Report drops at most once per kConsoleDropReportMs. The summary bypasses
-     * the token bucket but never exceeds one line per interval, so a flood can
-     * not turn into a second flood of summaries. `force` reports the remaining
-     * count when the process exits, so the tail of a flood is never lost. */
-    void flush_console_dropped(bool force = false) noexcept {
-        if (!console_ || console_dropped_ == 0)
-            return;
-        if (writes_ != nullptr && !writes_->logging_enabled())
-            return;
-        const std::int64_t now = platform::mono_ms();
-        if (!force && now - console_drop_report_ms_ < kConsoleDropReportMs)
-            return;
-        char buffer[128];
-        const int written = std::snprintf(
-            buffer, sizeof(buffer),
-            "[log] ts_ms=%lld level=WARN op=console_dropped count=%llu\n",
-            static_cast<long long>(now),
-            static_cast<unsigned long long>(console_dropped_));
-        if (written > 0)
-            (void)!::write(STDERR_FILENO, buffer, static_cast<std::size_t>(written));
-        console_dropped_ = 0;
-        console_drop_report_ms_ = now;
-    }
-
+    static constexpr std::int64_t kShutdownDrainMs = 2000;
     platform::WriteControl* writes_ = nullptr;
     char path_[512]{};
-    int fd_ = -1;
-    bool batching_ = false;
-    bool console_ = false;
-    std::uint32_t console_tokens_ = 0;
-    std::uint64_t console_credit_ = 0;   /* thousandths of a line, for sub-ms calls */
-    std::uint64_t console_dropped_ = 0;
-    std::int64_t console_refill_ms_ = 0;
-    std::int64_t console_drop_report_ms_ = 0;
+    std::atomic<bool> batching_{false};
+    LogSink sink_{};
 };
 
 } // namespace dart::logging

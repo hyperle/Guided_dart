@@ -44,6 +44,14 @@ target_link_libraries(logger_console_test PRIVATE dart_platform Threads::Threads
 target_compile_options(logger_console_test PRIVATE -Werror -UNDEBUG)
 add_test(NAME logger_console COMMAND logger_console_test)
 
+# Log sink isolation: a blocked fsync must not block the producer, the bounded
+# queue must drop instead of growing, and the destructor must persist the tail.
+add_executable(logger_async_test logger_async_test.cpp)
+target_link_libraries(logger_async_test PRIVATE dart_platform Threads::Threads)
+target_compile_options(logger_async_test PRIVATE -Werror -UNDEBUG)
+target_link_options(logger_async_test PRIVATE -Wl,--wrap=fsync)
+add_test(NAME logger_async COMMAND logger_async_test)
+
 find_package(PNG REQUIRED)
 add_executable(recorder_png_test recorder_png_test.cpp)
 target_link_libraries(recorder_png_test PRIVATE dart_recording PNG::PNG)
@@ -100,6 +108,8 @@ add_test(NAME cpp_structure
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/check_cpp_structure.py")
 add_test(NAME recorder_pngs_extract
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/rec_extract_pngs_test.py")
+add_test(NAME rec_stall_report
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/rec_stall_report_test.py")
 add_test(NAME launcher_restart
     COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/launcher_restart_test.sh" $<TARGET_FILE:launcher>)
 add_test(NAME launcher_write_control

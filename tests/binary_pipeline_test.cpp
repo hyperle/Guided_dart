@@ -209,6 +209,9 @@ public:
         logging::Logger log_sink;
         assert(log_sink.open(args.log_path));
         assert(app::run_services(args, create, control, log_sink, nullptr, nullptr, create_pwm) == 0);
+        /* The sink thread owns open/write/fsync; wait for it before reading
+         * the file, exactly like the board shutdown path does. */
+        assert(log_sink.flush(std::chrono::milliseconds{2000}));
         assert(pwm_starts_ == 1 && pwm_stops_ == 1);
         if (pbm || pwm_failure || low_contrast || threshold > 200) // No accepted target, or PWM has failed.
             assert((last_pwm_ == pwm::Pulses{1510, 1520, 1530, 1540}));
@@ -269,6 +272,7 @@ public:
         logging::Logger log_sink;
         assert(log_sink.open(args.log_path));
         assert(app::run_services(args, create, control, log_sink, nullptr, nullptr, create_pwm) == 0);
+        assert(log_sink.flush(std::chrono::milliseconds{2000}));
         const auto log = read(root / "app.log");
         assert(pwm_starts_ == 0 && pwm_stops_ == 0);
         assert(log.find("[app]") != std::string::npos);
@@ -311,6 +315,7 @@ public:
         logging::Logger log_sink;
         assert(log_sink.open(args.log_path));
         assert(app::run_services(args, create, control, log_sink, nullptr, &writes, create_pwm) == 0);
+        assert(log_sink.flush(std::chrono::milliseconds{2000}));
         const auto log = read(root / "app.log");
         assert(pwm_starts_ == 0 && pwm_stops_ == 0);
         assert(log.find("[record]") != std::string::npos);

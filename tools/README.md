@@ -45,6 +45,21 @@ python3 tools/rec_extract_pngs.py records/rec_0001
 # 默认输出到 records/rec_0001/img/，文件名 00000001.png，Qt 播放器可直接打开
 ```
 
+[`rec_stall_report.py`](rec_stall_report.py) 汇总一轮或多轮录像的卡顿与写入指标，
+用于核对采集线程是否被日志/写盘打断：它按 `frames.csv` 的 `received_us` 计算总时长、
+>80 ms 的空洞（每秒一次的 fsync 停顿会表现为固定周期的空洞）、有效/活跃帧率、
+每帧体积与 `recording.pngs` 中未被 CSV 索引的尾部字节。给出同一轮的 `dart_app.log`
+时还会统计 `telemetry_us`/`telemetry_max_us`（状态块在采集线程上的耗时）、
+`pack_us`/`io_us`/`io_max_us` 和 `rec_busy`：
+
+```bash
+python3 tools/rec_stall_report.py records/rec_0001 records/rec_0002 \
+    --log records/dart_app.log
+```
+
+判定标准：没有 >80 ms 空洞、有效帧率与活跃帧率相差 <5%、`telemetry_max_us` < 5000。
+工具只读标准库，不连接板子。
+
 ## IMU 日志转 ROS 2 bag
 
 `imu_log_to_bag.py` 读取板端 `runtime/imu/Session` 写出的 v1 CSV 格式 `.log`，

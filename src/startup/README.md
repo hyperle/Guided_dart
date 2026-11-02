@@ -142,7 +142,7 @@ PWM 初始化或写入失败只停用输出，识别和录像继续；取帧错�
 ## 输出
 
 ```
-/data/app/logs/dart_app.log                        结构化日志（行首 `[tag]` 标明模块；状态批共用一次 fsync，写完关闭文件）
+/data/app/logs/dart_app.log                        结构化日志（行首 `[tag]` 标明模块；采集线程只入队，专用日志线程落盘，状态批仍共用一次 fsync 后关闭文件）
 /data/app/logs/imu_NNNNNN.log                      每轮独立的 IMU 原始样本、积分快照和重积分事件
 /data/app/records/rec_NNNN/img/recording.pgm         单文件灰度连续流（默认）
 /data/app/records/rec_NNNN/img/recording.pngs        单文件 PNG 容器（--rec-format pngs），偏移见 frames.csv

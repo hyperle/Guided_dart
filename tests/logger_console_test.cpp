@@ -2,6 +2,7 @@
 // and the write-control pause silencing both sinks.
 
 #include <cassert>
+#include <chrono>
 #include <cstddef>
 #include <cstdio>
 #include <filesystem>
@@ -115,6 +116,8 @@ public:
             log.set_console(true);
             log.line(logging::Tag::kApp, "level=INFO op=paused\n");
             log.end_batch();
+            /* The sink thread mirrors asynchronously; wait before asserting. */
+            assert(log.flush(std::chrono::milliseconds{1000}));
             assert(slurp(console_file).find("op=paused") == std::string::npos);
         }
         assert(slurp(log_file).find("op=paused") == std::string::npos);
@@ -128,6 +131,7 @@ public:
             log.set_console(true);
             log.line(logging::Tag::kApp, "level=INFO op=resumed\n");
             log.end_batch();
+            assert(log.flush(std::chrono::milliseconds{1000}));
             assert(slurp(console_file).find("op=resumed") != std::string::npos);
         }
         assert(slurp(log_file).find("op=resumed") != std::string::npos);
