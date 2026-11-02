@@ -27,6 +27,11 @@ public:
         auto parsed = app::parse_args(1, defaults);
         assert(parsed && parsed->record_on && parsed->exposure_lines == 400);
         assert(parsed->record_fps == 60 && parsed->record_keep == 0);
+        assert(parsed->record_queue == 16);
+        assert(parse({"--rec-queue", "32"})->record_queue == 32);
+        assert(!parse({"--rec-queue", "0"}));
+        assert(!parse({"--rec-queue", "65"}));
+        assert(!parse({"--rec-queue"}));
         assert(parsed->record_format == recorder::ImageFormat::kPgm && parsed->threshold == 50);
         assert(parsed->min_contrast == 12);
         assert(!parsed->image_reverse);
@@ -55,6 +60,7 @@ public:
         assert(!parse({"--min-contrast", "inf"}));
         assert(!parse({"--min-contrast"}));
         assert(app::recording_config(*parse({"--threshold", "60"}), 640, 480).pbm_threshold == 60);
+        assert(app::recording_config(*parse({"--rec-queue", "32"}), 640, 480).queue_slots == 32);
         assert(parsed->pwm_on && !parsed->aim_explicit && parsed->servo_timeout_ms == 200);
         const auto servo = parse({"--pwm", "on", "--aim", "310.5,235", "--servo-initial",
             "1510,1520,1530,1540", "--servo-horizontal", "1,-2,0,0.25", "--servo-vertical",
@@ -85,12 +91,14 @@ public:
                    == (data_volume ? 2'000'000'000 : 0));
         }
         char format[] = "--rec-format";
-        char dbv[] = "dbv", png[] = "png", pgm[] = "pgm", pbm[] = "pbm", bad_format[] = "jpg";
-        for (char* value : {dbv, png, pgm, pbm}) {
+        char dbv[] = "dbv", png[] = "png", pngs[] = "pngs", pgm[] = "pgm", pbm[] = "pbm",
+             bad_format[] = "jpg";
+        for (char* value : {dbv, png, pngs, pgm, pbm}) {
             char* options[] = {program, format, value};
             const auto chosen = app::parse_args(3, options);
             assert(chosen && chosen->record_format == (value == dbv ? recorder::ImageFormat::kDbv
                 : value == png ? recorder::ImageFormat::kPng
+                : value == pngs ? recorder::ImageFormat::kPngStream
                 : value == pgm ? recorder::ImageFormat::kPgm : recorder::ImageFormat::kPbm));
         }
         char* bad_options[] = {program, format, bad_format};

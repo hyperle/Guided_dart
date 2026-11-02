@@ -2,7 +2,7 @@
 
 `dart::recorder::Recorder` 提供异步录像服务。它只接收相机 ACL 的
 `FrameLease`，不包含 K230、MPP 或 VENC 头文件；提交时将输入帧拷贝为紧凑
-Y8，后台线程默认写入灰度 PGM 连续流，也支持独立灰度 PNG 和二值 DBV/PBM。硬件 H.264 需要后续独立的 video ACL，
+Y8，后台线程默认写入灰度 PGM 连续流，也支持逐帧灰度 PNG、单文件 PNG 容器和二值 DBV/PBM。硬件 H.264 需要后续独立的 video ACL，
 不会把厂商句柄带入录像服务。本模块是 `include/` 中的下层实现库，
 包含线程管理、编码和具体文件系统操作；L4 的 `src/recording/` 只决定参数与启停。
 构建目标在 `include/CMakeLists.txt` 中声明。
@@ -24,8 +24,8 @@ INTERFACE 目标取得相机 C 数据面、线程和 zlib 依赖。类外方法�
 | `recorder.cpp` | `Recorder`，采样放行、图像队列、相机租约释放及图像消费线程 |
 | `async/event_worker.cpp` | `EventWorker`，有界元数据队列、消费线程及排空关闭 |
 | `storage/session.cpp` | `Session`，轮次编号、目录创建与保留清理 |
-| `storage/image_writer.cpp` | `ImageWriter`，帧拷贝、DBV/独立 PNG/旧连续流写入和容量检查 |
-| `storage/image_files.cpp` | `ImageFiles`，PNG 分组路径、目录创建与逐帧可用空间预算 |
+| `storage/image_writer.cpp` | `ImageWriter`，帧拷贝、PNG 容器、DBV/逐帧 PNG/旧连续流写入和容量检查 |
+| `storage/image_files.cpp` | `ImageFiles`，逐帧 PNG 分组路径、目录创建与逐帧可用空间预算 |
 | `storage/storage_space.cpp` | `StorageSpace`，查询分区可用空间及配置的总占用预算 |
 | `encoding/binary_format.cpp` | `BinaryFormat`，DBV1 文件头、变长记录前缀与边界检查 |
 | `encoding/binary_encoder.cpp` | `BinaryEncoder`，1-bit 打包、完整帧/差分/稀疏差分自适应压缩 |
@@ -70,8 +70,10 @@ if (acquired && acquired->status == dart::camera::AcquireStatus::kFrame) {
 `queue_slots` 分别限制已拷贝图像和待释放租约两个队列。`try_submit()` 只做有界内存
 拷贝（640×480 实测约 0.2 ms），不做文件 I/O；拷贝后立即把租约交给 release 队列。
 采集线程每拍提交前后调用 `drain_releases()`，保证相机 ACL 的调用仍然串行。
-写线程只使用独立像素，不持有相机帧。应用使用固定 16 帧图像队列，640×480 Y8
+写线程只使用独立像素，不持有相机帧。应用默认 16 帧图像队列，640×480 Y8
 共 4,915,200 字节，约可缓冲 267 ms 的 60 FPS 输入，覆盖实测 134 ms 的写盘停顿。
+`--rec-queue` 可在 1..64 调整（30 FPS 建议 32，约 1.07 秒）；它只吸收写盘抖动，
+不提高持续吞吐。
 停止录像后也要先
 drain，随后才能停止/销毁相机。同一个 Recorder 可以在 stop 并排空租约后再次 start，
 复用缓冲并新建录像轮次；仍有租约时拒绝重启，避免丢失归还责任。
@@ -93,11 +95,24 @@ img/recording.pgm
 logs/frames.csv
 ```
 
-`dart_app` 默认及启动清单使用 `--rec-format pgm`。PGM/DBV/PBM 每轮只有一个图像文件，
+`dart_app` 默认及启动清单使用 `--rec-format pgm`。PGM/DBV/PBM/PNG 容器每轮只有一个图像文件，
 直到每轮 500 MB 上限或显式停止后关闭；不额外创建细碎分段，避免 FAT 簇分配浪费。
 本固件 MTP 无法读取仍被写入器打开的文件，应在停止录像后拷贝。
-显式 `--rec-format png|dbv|pbm` 可切换格式；PNG 仍使用分组的独立帧文件。
-`.script/player records/rec_NNNN` 自动识别全部格式，支持逐帧还原及导出 PNG。
+显式 `--rec-format png|pngs|dbv|pbm` 可切换格式：`png` 使用分组的独立帧文件，
+`pngs` 使用 `img/recording.pngs` 单文件容器。容器格式见下节。
+`.script/player records/rec_NNNN` 自动识别 PGM/DBV/PBM/逐帧 PNG；`pngs` 需先用
+`tools/rec_extract_pngs.py` 拆帧。
+
+### PNG 容器（`--rec-format pngs`）
+
+文件头 16 字节，little-endian：`DPNG` 四字节标识、`uint16` 版本 1、`uint16`
+头长度 16、`uint32` 宽、`uint32` 高。之后按写入顺序拼接每帧完整的 PNG 字节。
+`frames.csv` 的 accepted 行给出 `file_offset`/`file_bytes`，第一帧偏移为 16：
+`image_file=img/recording.pngs, file_offset=16, file_bytes=<PNG 长度>`。
+容器只有一个文件、每帧一次 `write()`，去掉了逐帧 PNG 的 open/close/FAT 目录开销；
+每帧仍是标准 PNG，可用 `tools/rec_extract_pngs.py` 拆出，或让播放器/工具按
+CSV 偏移读取。文件末尾未写完的帧需要通过 CSV 边界和 PNG 签名校验后跳过。
+
 
 ### DBV1 布局与压缩
 
@@ -128,15 +143,17 @@ logs/frames.csv
 缺失 CSV 时仍可从文件头和记录结构重建图片索引，但无法恢复源帧时间及检测对应关系。
 编码缓冲和 zlib 状态一次分配后复用，内存不随录像增长。
 
-PNG 使用 8-bit 灰度、level 1、每 32 张分组和逐图关闭行为，旧 1-bit PNG 仍可回放。
+逐帧 PNG 使用 8-bit 灰度、level 1、每 32 张分组和逐图关闭行为，旧 1-bit PNG 仍可回放。
+PNG 容器同样使用 8-bit 灰度、level 1，但每轮只打开一次文件，每帧顺序追加完整 PNG。
 
-`Config::max_file_bytes` 默认且最多为 **500 MB = 500,000,000 字节**，PNG 模式按
-**本轮所有 PNG 文件实际大小的总和**计算，包括 PNG 头和压缩数据，不包含 CSV/目录分配开销。
+`Config::max_file_bytes` 默认且最多为 **500 MB = 500,000,000 字节**，逐帧 PNG 模式按
+**本轮所有 PNG 文件实际大小的总和**计算，PNG 容器按 `recording.pngs` 总字节数计费，
+包括文件头和每帧 PNG 数据，不包含 CSV/目录分配开销。
 DBV 按整个 `recording.dbv` 的字节数计费，包括仅写一次的 12 字节文件头。
 写线程先编码，再检查下一张完整图片能否放入预算；放不下时设置 `limit_reached()`，
 停止接收并丢弃尚未落盘的队列图片，不生成超限文件或半张 PNG，不自动新建轮次续录。
 因此最终总量可能略小于 500 MB。`Admission::kAccepted` 表示成功拷贝进队列；
-DBV/PNG 的 CSV `accepted` 行只在图片实际成功写完后生成，队列中因停录未写的帧记为 `stopped`。
+DBV/逐帧 PNG/PNG 容器的 CSV `accepted` 行只在图片实际成功写完后生成，队列中因停录未写的帧记为 `stopped`。
 固定队列与压缩缓冲不会随录像增长。应用只停录像，继续识别和 IMU。
 旧连续流模式仍在提交时为固定帧大小预留空间。
 
@@ -147,11 +164,13 @@ DBV/PNG 的 CSV `accepted` 行只在图片实际成功写完后生成，队列�
 
 启动时查询录像分区空间，预算取每轮上限、物理剩余空间、总量上限剩余空间的较小值，
 并在后两者内预留 64 MiB 给日志及文件系统；达到保护线时不新建轮次。
-DBV/PNG 及启用总量上限的旧 PGM/PBM 流最多每 32 张重新查询空间，PNG/旧流期间每张按至少 2 MiB 扣减保守分配预算，
-不足时提前重新查询；实际空间不足或查询失败时停录。PNG 目录采用两层短名称分组，
-每个 p 目录最多 32 张、每个 b 目录最多 32 个 p 目录，限制目录扫描成本。
-DBV 共用文件分配簇，缓存预算按实际记录字节扣减，每次查询为尚未刷新的 256 KiB stdio 缓冲和簇对齐预留空间。
-PNG 的分组限制目录扫描成本；DBV 从源头减少小文件分配。以前轮次不自动删除。
+DBV/逐帧 PNG/PNG 容器及启用总量上限的旧 PGM/PBM 流最多每 32 张重新查询空间，
+逐帧 PNG/旧流期间每张按至少 2 MiB 扣减保守分配预算，PNG 容器按连续文件的实际字节
+加 256 KiB 缓冲预留；不足时提前重新查询，实际空间不足或查询失败时停录。
+逐帧 PNG 目录采用两层短名称分组，每个 p 目录最多 32 张、每个 b 目录最多 32 个 p 目录，
+限制目录扫描成本。DBV 共用文件分配簇，缓存预算按实际记录字节扣减，每次查询为尚未刷新的
+256 KiB stdio 缓冲和簇对齐预留空间。PNG 容器与 DBV 走同一连续文件分支。
+以前轮次不自动删除。
 总量保护只控制录像写入；停录后识别和 IMU 继续，其日志仍可使用预留空间。
 
 K230 构建必须链接 SDK 的 `libk230_syscalls.a`：该库提供 RT-Smart 原生 `statfs/statvfs`
@@ -159,7 +178,7 @@ K230 构建必须链接 SDK 的 `libk230_syscalls.a`：该库提供 RT-Smart 原
 
 CSV 首行的 `fps`、`max_file_bytes`、`file_limit_bytes` 记录目标帧率、配置上限和本轮有效上限，格式版本为 2。
 CSV 对每次提交尝试写一行（有界队列满时计数丢行），包含输入序号、源帧号、源 PTS、PTS 时间基有效位、单调接收时间、放行决定和
-对应文件名、`file_offset`（帧头起始字节偏移）、`file_bytes`（实际文件/帧长度）；PNG 的 `file_offset` 固定为 0，CSV 行可能按写入完成顺序到达；
+对应文件名、`file_offset`（帧头起始字节偏移）、`file_bytes`（实际文件/帧长度）；逐帧 PNG 的 `file_offset` 固定为 0，PNG 容器第一帧为 16、后续为前一帧 `file_offset + file_bytes`，CSV 行可能按写入完成顺序到达；
 DBV 第一条记录的 offset 为 0、bytes 包含文件头；后续条目的 offset/bytes 是记录前缀及负载的准确范围。
 `image_index` 仍为从 1 开始的输出帧编号。降采样、忙丢弃和非法帧也有行。`Config::event_sink` 在 metadata
 写线程中收到同一条 `FrameEvent`，可接入上层更快的文件/数据记录，不会在 VICAP

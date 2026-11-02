@@ -1,5 +1,5 @@
 # /sdcard/app/dart_app --exp 800 --vision off --pwm off --record on --rec-fps 30 --rec-format png --raw-layout packed10-lsb --threshold 50 --rec-dir /data/app/records --det-csv /data/app/records/detection.csv --log /data/app/logs/dart_app.log &
-/sdcard/app/dart_app --exp 1200 --record on --rec-format pgm --rec-fps 30 --vision off --pwm off --image-reverse on --log /data/app/logs/png30.log &
+/sdcard/app/dart_app --exp 1200 --record on --rec-format pngs --rec-fps 30 --rec-queue 32 --vision off --pwm off --image-reverse on --log /data/app/logs/png30.log &
 # ============================================================================
 # launcher 开机自启动清单 —— 本文件是**源码母版**（runtime/launcher/startup.list）
 #
@@ -46,15 +46,19 @@
 # PWM 由 dart_app 独占，不能与 pwm_swing 同时运行。
 # 本行启用 --image-reverse on：灰度图在解码时旋转 180°，识别与录像一致。
 # 相机正装时删掉这两个 token 即恢复原始方向（默认 off）。
+# 本行使用 --rec-format pngs（单文件 PNG 容器，30 FPS）和 --rec-queue 32。
+# 拆帧：python3 tools/rec_extract_pngs.py <rec_NNNN>；若板端仍出现 rec_busy，
+# 先把 --rec-fps 降到 25/20，或临时改回 --rec-format png 验证格式差异。
 # 默认预设点为实际图像中心，两轴增益为 0，四路保持各自初始脉宽。
 # 方向/比例标定后可追加 --servo-horizontal A,B,C,D 和 --servo-vertical A,B,C,D。
 # 零点标定（四路 initial_us）：见 src/control/README.md「板端零点标定」。
 #   标定时先注释本行再重启，避免自启实例与手跑实例抢 VICAP/PWM；也可直接改本行
-#   的 --servo-initial 后重启。本行现 18 个 token（含末尾 &），上限 32。
+#   的 --servo-initial 后重启。本行现 20 个 token（含末尾 &），上限 32。
 # 日志:  /data/app/logs/dart_app.log（状态与耗时两行共用一次 fsync；launcher 另写
 #        /data/app/logs/launcher.log 与 dart_app.console.log）
-# 录像:  /data/app/records/rec_NNNN/img/recording.pgm（灰度连续流，目标 60 FPS）
+# 录像:  /data/app/records/rec_NNNN/img/recording.pngs（本行 PNG 容器，目标 30 FPS）
 #        /data/app/records/rec_NNNN/logs/frames.csv（每帧一行的放行记录）
+#        其他格式：recording.pgm / recording.pbm / recording.dbv，或 --rec-format png 的逐帧 PNG
 # 识别:  /data/app/records/detection.csv（每帧一行：目标/质心/扫描窗口/候选数）
 # 程序在 /sdcard/app，不加载 ISP 配置；录像和日志写入 /data 分区。
 #
@@ -62,7 +66,7 @@
 # 参数含义（src/startup/argument_parser.cpp 的 usage；曝光/阈值需要板端验证）：
 #   --image-reverse on|off     相机倒装时启用：RAW10 -> 灰度解码时把整幅图旋转 180°
 #                              （左右和上下同时翻转），没有额外拷贝。识别/舵机坐标、
-#                               detection.csv 与录像（PGM/PNG/DBV/PBM）都基于翻转后的
+#                               detection.csv 与录像（PGM/PNG/PNGs/DBV/PBM）都基于翻转后的
 #                              图像；显式 --aim 也按翻转后坐标填写。省略时默认 off。
 #                              已标定的 --servo-horizontal/--servo-vertical 符号需重标：
 #                              180° 翻转会使像素误差方向反号。
@@ -75,6 +79,11 @@
 #   --record on --rec-fps 60   目标每秒保存 60 帧灰度 PGM，按接收时间采样，与采集帧率独立；
 #                              写盘在录像线程，输入不足或写盘忙时实际帧率会降低，
 #                              队列满即丢并计数（rec_busy），不阻塞采集。
+#   --rec-format pngs         单文件 PNG 容器：每帧完整 PNG 顺序写入 img/recording.pngs，
+#                              frames.csv 记 file_offset/file_bytes。去掉逐帧 open/close，
+#                              30 FPS 灰度优先用它；拆帧用 tools/rec_extract_pngs.py。
+#   --rec-queue 32            已拷贝帧队列槽数 1..64（默认 16）。30 FPS 下 16 槽约
+#                              0.53 秒、32 槽约 1.07 秒，只吸收写盘抖动，不提高吞吐。
 #   --rec-keep 0             每次启动新建 rec_NNNN，保留复位前的录像目录。
 #   本轮 PGM 最多 500 MB（500,000,000 字节，含每帧文件头）；下一张放不下时停止录像，
 #   640x480、60 FPS 时约 18.4 MB/s、约 27 秒达上限；写盘实际速度需重新验证。

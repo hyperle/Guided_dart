@@ -85,7 +85,9 @@ inline bool ImageFiles::png_path(
 
 inline bool ImageFiles::space_available(std::size_t bytes) noexcept {
     constexpr std::uint64_t guard = 1024U * 1024U;
-    const bool continuous = config_.image_format == ImageFormat::kDbv;
+    const bool continuous =
+        config_.image_format == ImageFormat::kDbv
+        || config_.image_format == ImageFormat::kPngStream;
     const auto charge = continuous ? static_cast<std::uint64_t>(bytes)
                                   : std::max<std::uint64_t>(bytes + guard, guard * 2U);
     if (space_checks_remaining_ > 0 && space_budget_ >= charge) {

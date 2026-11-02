@@ -37,7 +37,7 @@
 | `src/dart_entry.cpp`、`src/{startup,vision,recording,diagnostics}/` | L4 入口、配置、流程与故障决策 | `dart_app` → `build-cross/dart_app/dart_app` |
 | `src/detector/` | L4 灯/装甲板检测与 ROI，只消费帧数据 | `dart_detection`（INTERFACE，包含类 `.cpp`） |
 | [`src/control/`](src/control/README.md) | L4 四路舵机初始位置、左右/上下坐标映射与脉宽合成 | `dart_control`（INTERFACE，包含类 `.cpp`） |
-| `include/firmware/src/recorder/` | 录像队列、线程、紧凑 DBV 与兼容 PNG/PGM/PBM | `dart_recording`（INTERFACE，包含类 `.cpp`） |
+| `include/firmware/src/recorder/` | 录像队列、线程、紧凑 DBV 与兼容 PNG（逐帧/单文件容器）/PGM/PBM | `dart_recording`（INTERFACE，包含类 `.cpp`） |
 | `runtime/imu/` | 独立 IMU 采样、上层共用的积分状态和异步原始/积分日志 | `dart_imu_logging`（INTERFACE，包含类 `.cpp`） |
 | `include/firmware/src/camera/` | L3 帧数据/相机抽象 + L2/C 数据面实现 | `dart_camera_types` / `dart_camera_core` / `dart_camera_k230` / `dart_camera_acl` |
 | `include/firmware/src/{imu,spi}/` | IMU 抽象/估计器 + SPI 驱动 + K230 适配器 | `dart_imu` / `dart_iim42652` / `dart_imu_k230` |
@@ -139,7 +139,9 @@ HAL 头文件和库只取 SDK `.config` 的 `CONFIG_BOARD_CONFIG_NAME` 对应输
 按 `raw10 >> 2` 输出保留 256 级亮度的灰度 Y8，识别与录像共用同一图像，
 不依赖 ISP 标定文件。识别以 `--threshold`（默认 50）提取候选，再用候选与周围背景的
 灰度均值差（`--min-contrast`，默认 12）过滤低对比度干扰；阈值不改变相机图像。
-录像默认保存单文件灰度 PGM，也可选择灰度 PNG；DBV/PBM 是可选的二值导出格式。
+录像默认保存单文件灰度 PGM，也可选择逐帧灰度 PNG、单文件 PNG 容器（`--rec-format pngs`）
+或二值 DBV/PBM。PNG 容器每帧顺序追加、由 `frames.csv` 记录偏移，适合 30 FPS 灰度取证；
+拆帧用 `tools/rec_extract_pngs.py`。
 每轮最多 500 MB；
 多帧合并到一个文件，达到容量上限后停止录像，识别继续运行。
 `/data` 分区另设 2 GB（2,000,000,000 字节）总占用保护，计入旧录像、日志和分配开销，

@@ -36,6 +36,7 @@ public:
     std::uint32_t record_duration_ms = 0;
     std::uint32_t record_fps = recorder::Config{}.fps;
     std::uint32_t record_keep = 0;
+    std::uint32_t record_queue = 16;
     recorder::ImageFormat record_format = recorder::ImageFormat::kPgm;
     camera::Raw10Layout raw10_layout = camera::Raw10Layout::kPackedLsb;
     bool image_reverse = false; /* 180-degree software rotation while decoding. */
@@ -142,7 +143,10 @@ inline void usage(const char* argv0) {
     std::printf(
         "  --rec-fps N      目标录像帧率，按时间采样（默认 %u FPS）\n", recorder::Config{}.fps);
     std::printf("  --rec-keep N     只保留最近 N 轮录像，0 = 不清理（默认 0）\n");
-    std::printf("  --rec-format F   pgm（灰度，默认）| png（8 位灰度）| dbv / pbm（二值）\n");
+    std::printf("  --rec-queue N    已拷贝帧队列槽数 1..64（默认 16；30 FPS 建议 32）\n");
+    std::printf(
+        "  --rec-format F   pgm（默认）| png（逐帧文件）| pngs（单文件 PNG 容器）| "
+        "dbv / pbm（二值）\n");
     std::printf(
         "  --rec-dir DIR    录像根目录（默认 %.*s）\n", static_cast<int>(kDefaultRecordDir.size()),
         kDefaultRecordDir.data());
@@ -237,9 +241,10 @@ inline std::expected<Arguments, int> parse_args(int argc, char* argv[]) {
             continue;
         }
         if (a == "--seconds" || a == "--exp" || a == "--rec-fps" || a == "--rec-keep"
-            || a == "--threshold" || a == "--status-ms" || a == "--acquire-ms"
-            || a == "--max-acquire-errors" || a == "--rec-trigger-accel"
-            || a == "--rec-trigger-ms" || a == "--rec-duration-ms" || a == "--servo-timeout-ms") {
+            || a == "--rec-queue" || a == "--threshold" || a == "--status-ms"
+            || a == "--acquire-ms" || a == "--max-acquire-errors"
+            || a == "--rec-trigger-accel" || a == "--rec-trigger-ms"
+            || a == "--rec-duration-ms" || a == "--servo-timeout-ms") {
             if (!need_value(value)) {
                 std::fprintf(
                     stderr, "%s: %.*s 缺少参数\n", argv[0], static_cast<int>(a.size()), a.data());
@@ -273,7 +278,13 @@ inline std::expected<Arguments, int> parse_args(int argc, char* argv[]) {
                 args.record_fps = static_cast<std::uint32_t>(n);
             } else if (a == "--rec-keep")
                 args.record_keep = static_cast<std::uint32_t>(n);
-            else if (a == "--threshold")
+            else if (a == "--rec-queue") {
+                if (n == 0 || n > 64) {
+                    std::fprintf(stderr, "%s: --rec-queue 必须在 1..64\n", argv[0]);
+                    return std::unexpected<int>(2);
+                }
+                args.record_queue = static_cast<std::uint32_t>(n);
+            } else if (a == "--threshold")
                 args.threshold = static_cast<std::uint32_t>(n);
             else if (a == "--status-ms")
                 args.status_ms = static_cast<std::uint32_t>(n);
@@ -355,8 +366,11 @@ inline std::expected<Arguments, int> parse_args(int argc, char* argv[]) {
                 args.record_format = recorder::ImageFormat::kDbv;
             else if (value == "png")
                 args.record_format = recorder::ImageFormat::kPng;
+            else if (value == "pngs")
+                args.record_format = recorder::ImageFormat::kPngStream;
             else {
-                std::fprintf(stderr, "%s: --rec-format 需要 dbv|png|pgm|pbm\n", argv[0]);
+                std::fprintf(
+                    stderr, "%s: --rec-format 需要 dbv|png|pngs|pgm|pbm\n", argv[0]);
                 return std::unexpected<int>(2);
             }
             continue;

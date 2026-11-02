@@ -73,7 +73,8 @@ private:
         if (!image)
             return std::strcmp(name, "frames.csv") == 0;
         if (std::strcmp(name, "recording.pgm") == 0 || std::strcmp(name, "recording.pbm") == 0
-            || std::strcmp(name, "recording.dbv") == 0)
+            || std::strcmp(name, "recording.dbv") == 0
+            || std::strcmp(name, "recording.pngs") == 0)
             return true;
         if (std::strlen(name) == 12 && std::strcmp(name + 8, ".png") == 0) {
             for (unsigned i = 0; i < 8; ++i)
@@ -334,12 +335,14 @@ inline bool Session::open() noexcept {
     const int image_n = std::snprintf(image_dir_, sizeof(image_dir_), "%s/img", session_dir_);
     const int log_n = std::snprintf(log_dir, sizeof(log_dir), "%s/logs", session_dir_);
     const int event_n = std::snprintf(event_path_, sizeof(event_path_), "%s/frames.csv", log_dir);
-    const int stream_n = std::snprintf(
-        image_path_, sizeof(image_path_), "%s/%s", image_dir_,
-        config_.image_format == ImageFormat::kPng   ? "."
-        : config_.image_format == ImageFormat::kDbv ? "recording.dbv"
-        : config_.image_format == ImageFormat::kPbm ? "recording.pbm"
-                                                    : "recording.pgm");
+    const char* image_name =
+        config_.image_format == ImageFormat::kPng          ? "."
+        : config_.image_format == ImageFormat::kPngStream ? "recording.pngs"
+        : config_.image_format == ImageFormat::kDbv       ? "recording.dbv"
+        : config_.image_format == ImageFormat::kPbm       ? "recording.pbm"
+                                                          : "recording.pgm";
+    const int stream_n =
+        std::snprintf(image_path_, sizeof(image_path_), "%s/%s", image_dir_, image_name);
     if (image_n <= 0 || log_n <= 0 || event_n <= 0 || stream_n <= 0
         || static_cast<std::size_t>(image_n) >= sizeof(image_dir_)
         || static_cast<std::size_t>(log_n) >= sizeof(log_dir)

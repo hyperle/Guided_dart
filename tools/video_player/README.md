@@ -5,6 +5,9 @@
 保留 Qt Widgets 的滑块、左右键、图像缩放、像素点击和检测叠加，按当前 v2
 的紧凑 DBV、逐帧 PNG、旧版 PGM/PBM 连续流及逐帧文件、录像 CSV 和检测 CSV 重写数据关联。与 v1 一样为手动逐帧浏览，
 不按时间自动播放。支持 Qt 5 / Qt 6，不依赖 ROS、SDK 或板端构建。
+`--rec-format pngs` 的单文件容器需先用
+`python3 tools/rec_extract_pngs.py records/rec_NNNN` 拆成 `img/00000001.png`，
+播放器再按逐帧 PNG 读取。
 
 ## 构建与打开
 

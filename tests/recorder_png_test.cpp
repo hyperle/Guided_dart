@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -232,11 +233,117 @@ class RecorderPngTest final {
         std::filesystem::remove_all(directory);
     }
 
+    static void png_stream() {
+        char directory[] = "/tmp/dart-png-stream-XXXXXX";
+        assert(::mkdtemp(directory));
+        const std::filesystem::path root{directory};
+        std::vector<std::byte> first(640U * 480U, std::byte{0});
+        std::vector<std::byte> second(first.size());
+        for (std::size_t i = 0; i < second.size(); ++i)
+            second[i] = std::byte{static_cast<unsigned char>((i * 37U + i / 640U) & 255U)};
+
+        recorder::Config config;
+        config.width = 640;
+        config.height = 480;
+        config.fps = 30;
+        config.queue_slots = 8;
+        config.image_format = recorder::ImageFormat::kPngStream;
+        config.output_directory = directory;
+        std::vector<recorder::FrameEvent> events;
+        config.event_sink = event_sink;
+        config.event_sink_context = &events;
+        recorder::Recorder rec{config};
+        assert(rec.start());
+
+        camera::FrameLeaseAccess::Slot slot;
+        slot.release = release;
+        slot.view.width = slot.view.stride = 640;
+        slot.view.height = 480;
+        unsigned tick = 0;
+        for (unsigned i = 0; i < 2; ++i) {
+            const auto& pixels = i == 0 ? first : second;
+            slot.view.luma = std::span<const std::byte>{pixels};
+            for (unsigned attempt = 0;; ++attempt) {
+                assert(attempt < 1000);
+                slot.view.sequence = ++tick;
+                slot.view.received = std::chrono::microseconds{40'000U * tick};
+                slot.state = camera::FrameLeaseAccess::SlotState::kHeld;
+                auto lease = camera::FrameLeaseAccess::make(&slot);
+                const auto admission = rec.try_submit(std::move(lease));
+                (void)lease.release();
+                while (rec.pending_releases())
+                    (void)rec.drain_releases();
+                if (admission == recorder::Admission::kAccepted)
+                    break;
+                assert(admission == recorder::Admission::kBusy);
+                std::this_thread::sleep_for(std::chrono::milliseconds{1});
+            }
+        }
+        for (unsigned i = 0; i < 1000 && rec.stats().written < 2; ++i)
+            std::this_thread::sleep_for(std::chrono::milliseconds{1});
+        assert(rec.stats().written == 2);
+        rec.stop();
+        assert(rec.last_error() == recorder::Error::kNone);
+        assert(rec.stats().write_fail == 0 && rec.stats().queued == 0);
+
+        const auto session_root = std::filesystem::path{rec.directory()};
+        const auto container = session_root / "img/recording.pngs";
+        const auto bytes = read(container);
+        assert(bytes.size() >= recorder::ImageWriter::kPngStreamHeaderBytes);
+        assert(std::memcmp(bytes.data(), "DPNG", 4) == 0);
+        const auto u16 = [&](std::size_t offset) {
+            return static_cast<unsigned>(std::to_integer<unsigned>(bytes[offset]))
+                | (static_cast<unsigned>(std::to_integer<unsigned>(bytes[offset + 1])) << 8U);
+        };
+        const auto u32 = [&](std::size_t offset) {
+            return (static_cast<std::uint32_t>(u16(offset)))
+                | (static_cast<std::uint32_t>(u16(offset + 2)) << 16U);
+        };
+        assert(u16(4) == 1 && u16(6) == 16);
+        assert(u32(8) == 640 && u32(12) == 480);
+
+        std::uint64_t expected_offset = recorder::ImageWriter::kPngStreamHeaderBytes;
+        unsigned accepted = 0, written = 0;
+        for (const auto& event : events) {
+            if (event.decision != recorder::EventDecision::kAccepted)
+                continue;
+            ++accepted;
+            assert(std::string_view{event.image_name.data()} == "img/recording.pngs");
+            assert(event.file_offset == expected_offset);
+            assert(event.file_offset + event.file_bytes <= bytes.size());
+            const auto* data = bytes.data() + static_cast<std::size_t>(event.file_offset);
+            decode(
+                std::span<const std::byte>{data, static_cast<std::size_t>(event.file_bytes)},
+                event.image_index == 1 ? first : second, 640, 480);
+            expected_offset += event.file_bytes;
+            ++written;
+        }
+        assert(accepted == 2 && written == 2);
+        assert(expected_offset == bytes.size());
+        assert(rec.stats().bytes == bytes.size() - recorder::ImageWriter::kPngStreamHeaderBytes);
+
+        // A later session with a two-session retention window must recognize and
+        // remove the older container file, not fail on an unknown image name.
+        recorder::Recorder next_session{config};
+        assert(next_session.start());
+        next_session.stop();
+        recorder::Config cleanup = config;
+        cleanup.keep_sessions = 2;
+        recorder::Recorder next{cleanup};
+        assert(next.start());
+        next.stop();
+        assert(!std::filesystem::exists(root / "rec_0001"));
+        assert(std::filesystem::exists(root / "rec_0002"));
+        assert(std::filesystem::exists(root / "rec_0003"));
+        std::filesystem::remove_all(root);
+    }
+
 public:
     static void run() {
         encoder();
         limit_and_queue();
         grouping_and_cleanup();
+        png_stream();
     }
 };
 

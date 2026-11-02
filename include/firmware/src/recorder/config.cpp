@@ -32,7 +32,7 @@ public:
 
 using FrameEventSink = void (*)(const FrameEvent&, void*) noexcept;
 
-enum class ImageFormat : std::uint8_t { kPgm, kPbm, kPng, kDbv };
+enum class ImageFormat : std::uint8_t { kPgm, kPbm, kPng, kDbv, kPngStream };
 
 class Config {
 public:
@@ -58,8 +58,9 @@ public:
     /* Separate bounded metadata queue for one CSV row per enqueued submission; drops
      * are counted instead of blocking capture. */
     std::uint32_t event_slots = 512;
-    /* Recheck free space at most this many images apart. DBV charges actual
-     * record bytes; other formats retain the conservative 2 MiB charge. */
+    /* Recheck free space at most this many images apart. DBV and the PNG
+     * container charge actual record bytes; other formats retain the
+     * conservative 2 MiB charge. */
     std::uint32_t storage_check_frames = 32;
     ImageFormat image_format = ImageFormat::kPgm;
     std::uint8_t pbm_threshold = 128;
@@ -70,7 +71,15 @@ public:
     void* event_sink_context = nullptr;
 
     bool variable_record_size() const noexcept {
-        return image_format == ImageFormat::kPng || image_format == ImageFormat::kDbv;
+        return image_format == ImageFormat::kPng || image_format == ImageFormat::kDbv
+            || image_format == ImageFormat::kPngStream;
+    }
+
+    /* PNG frames concatenated into one container file. Each frame's bounds live
+     * in frames.csv, so the recorder can index without a second file per frame.
+     */
+    bool container_format() const noexcept {
+        return image_format == ImageFormat::kPngStream;
     }
 };
 

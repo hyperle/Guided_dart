@@ -23,13 +23,15 @@ namespace dart::recorder {
 
 class ImageWriter final {
 public:
+    static constexpr std::size_t kPngStreamHeaderBytes = 16;
     ImageWriter(const Config& config, const Session& session) noexcept
         : config_(config)
         , session_(session) {}
     ~ImageWriter() { (void)close(); }
     bool prepare(std::size_t frame_bytes) noexcept {
         frame_bytes_ = frame_bytes;
-        if (config_.image_format == ImageFormat::kPng)
+        if (config_.image_format == ImageFormat::kPng
+            || config_.image_format == ImageFormat::kPngStream)
             return png_.prepare(config_.width, config_.height);
         if (config_.image_format == ImageFormat::kDbv) {
             file_buffer_.reset(new (std::nothrow) char[kFileBufferBytes]);
@@ -61,6 +63,31 @@ public:
         last_offset_ = 0;
         binary_.reset();
         image_name_[0] = '\0';
+        if (config_.image_format == ImageFormat::kPngStream) {
+            png_fd_ = ::open(session_.image_path(), O_WRONLY | O_CREAT | O_TRUNC, 0666);
+            if (png_fd_ < 0) {
+                error.set_file_error(Error::kImageFile, session_.image_path());
+                return false;
+            }
+            std::uint8_t header[kPngStreamHeaderBytes]{};
+            std::memcpy(header, "DPNG", 4);
+            put_le16(header + 4, 1);
+            put_le16(header + 6, static_cast<std::uint16_t>(kPngStreamHeaderBytes));
+            put_le32(header + 8, config_.width);
+            put_le32(header + 12, config_.height);
+            if (!write_all(png_fd_, header, sizeof(header))) {
+                const int saved = errno;
+                (void)::close(png_fd_);
+                png_fd_ = -1;
+                errno = saved;
+                error.set_file_error(Error::kImageFile, session_.image_path());
+                return false;
+            }
+            bytes_written_ = kPngStreamHeaderBytes;
+            last_flush_ = std::chrono::steady_clock::now();
+            (void)std::snprintf(image_name_, sizeof(image_name_), "img/recording.pngs");
+            return true;
+        }
         if (config_.image_format == ImageFormat::kPng) {
             last_flush_ = std::chrono::steady_clock::now();
             return true;
@@ -81,6 +108,15 @@ public:
         return true;
     }
     bool close() noexcept {
+        if (png_fd_ >= 0) {
+            const bool synced = ::fsync(png_fd_) == 0;
+            const int sync_error = errno;
+            const bool closed = ::close(png_fd_) == 0;
+            png_fd_ = -1;
+            if (!synced)
+                errno = sync_error;
+            return synced && closed;
+        }
         if (file_ == nullptr)
             return true;
         const bool synced = sync();
@@ -113,11 +149,39 @@ public:
 
 private:
     bool write_png(std::span<const std::byte> pixels, std::uint64_t index) noexcept;
+    bool write_png_stream(std::span<const std::byte> pixels) noexcept;
     bool write_binary(std::span<const std::byte> pixels) noexcept;
+    static void put_le16(std::uint8_t* out, std::uint16_t value) noexcept {
+        out[0] = static_cast<std::uint8_t>(value);
+        out[1] = static_cast<std::uint8_t>(value >> 8U);
+    }
+    static void put_le32(std::uint8_t* out, std::uint32_t value) noexcept {
+        for (unsigned i = 0; i < 4; ++i)
+            out[i] = static_cast<std::uint8_t>(value >> (i * 8U));
+    }
+    static bool write_all(int fd, const void* data, std::size_t size) noexcept {
+        const auto* bytes = static_cast<const std::byte*>(data);
+        std::size_t offset = 0;
+        while (offset < size) {
+            const auto written = ::write(fd, bytes + offset, size - offset);
+            if (written < 0 && errno == EINTR)
+                continue;
+            if (written <= 0) {
+                if (written == 0)
+                    errno = EIO;
+                return false;
+            }
+            offset += static_cast<std::size_t>(written);
+        }
+        return true;
+    }
     bool sync() noexcept {
         // fflush only drains libc. FAT updates the directory size and cluster
         // chain on fsync; without it a reset can leave a zero-byte recording.
-        return std::fflush(file_) == 0 && ::fsync(::fileno(file_)) == 0;
+        if (png_fd_ >= 0)
+            return ::fsync(png_fd_) == 0;
+        return file_ != nullptr && std::fflush(file_) == 0
+            && ::fsync(::fileno(file_)) == 0;
     }
     static constexpr std::size_t kFileBufferBytes = 256U * 1024U;
     const Config& config_;
@@ -135,6 +199,7 @@ private:
     std::uint64_t last_offset_ = 0;
     char image_name_[48]{};
     std::FILE* file_ = nullptr;
+    int png_fd_ = -1;
     std::uint64_t bytes_written_ = 0;
     std::uint64_t pack_us_ = 0;
     std::uint64_t io_us_ = 0;
@@ -236,6 +301,52 @@ inline bool
 }
 
 inline bool
+    ImageWriter::write_png_stream(std::span<const std::byte> pixels) noexcept {
+    if (png_fd_ < 0)
+        return false;
+    const auto begin = std::chrono::steady_clock::now();
+    const auto encoded = png_.encode(pixels);
+    const auto encoded_at = std::chrono::steady_clock::now();
+    pack_us_ = static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::microseconds>(encoded_at - begin).count());
+    if (encoded.empty()) {
+        errno = EIO;
+        return false;
+    }
+    if (encoded.size() > session_.file_limit_bytes() - bytes_written_) {
+        errno = EFBIG;
+        return false;
+    }
+    if (!files_.space_available(encoded.size()))
+        return false;
+    const auto space_at = std::chrono::steady_clock::now();
+    space_us_ = static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::microseconds>(space_at - encoded_at).count());
+    // Complete PNG blobs are appended in order. frames.csv records the offset
+    // and length, so extraction never has to rescan the container.
+    const auto offset = bytes_written_;
+    if (!write_all(png_fd_, encoded.data(), encoded.size()))
+        return false;
+    const auto write_end = std::chrono::steady_clock::now();
+    write_us_ = static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::microseconds>(write_end - space_at).count());
+    if (offset == kPngStreamHeaderBytes
+        || write_end - last_flush_ >= config_.flush_period) {
+        if (!sync())
+            return false;
+        last_flush_ = write_end;
+    }
+    last_offset_ = offset;
+    last_record_bytes_ = encoded.size();
+    bytes_written_ += encoded.size();
+    io_us_ = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+                                            std::chrono::steady_clock::now() - encoded_at)
+                                            .count());
+    open_us_ = close_us_ = 0;
+    return true;
+}
+
+inline bool
     ImageWriter::write_binary(std::span<const std::byte> pixels) noexcept {
     if (!file_)
         return false;
@@ -284,6 +395,8 @@ inline bool
     ImageWriter::write_image(std::span<const std::byte> pixels, std::uint64_t index) noexcept {
     if (config_.image_format == ImageFormat::kDbv)
         return write_binary(pixels);
+    if (config_.image_format == ImageFormat::kPngStream)
+        return write_png_stream(pixels);
     if (config_.image_format == ImageFormat::kPng)
         return write_png(pixels, index);
     if (file_ == nullptr || pixels.size() < frame_bytes_)

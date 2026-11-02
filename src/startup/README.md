@@ -84,7 +84,8 @@ dart_app [选项]
   --record on|off  录像开关（默认 on）
   --rec-keep N     只保留最近 N 轮录像，0 = 不清理（默认 0）
   --rec-fps N      目标录像帧率，按时间采样（默认 60 FPS）
-  --rec-format F   pgm（灰度，默认）| png（8 位灰度）| dbv / pbm（二值）
+  --rec-queue N    已拷贝帧队列槽数 1..64（默认 16；30 FPS 建议 32）
+  --rec-format F   pgm（默认）| png（逐帧文件）| pngs（单文件 PNG 容器）| dbv / pbm（二值）
   --rec-dir DIR    录像根目录（默认 /data/app/records）
   --det-csv PATH   识别结果 CSV；off 关闭（默认关闭）
   --threshold N    灰度候选阈值 0..255（默认 50），不改变相机灰度图
@@ -102,6 +103,12 @@ dart_app [选项]
 ```
 
 应用不提供采集分辨率、采集帧率或 CSI 请求参数。`--rec-fps` 仅设置录像按时间抽帧的目标速率。
+`--rec-format pngs` 把每帧完整的 PNG 顺序写入 `img/recording.pngs`，文件头 16 字节
+（`DPNG`、版本、宽高），每帧 `file_offset`/`file_bytes` 由 `frames.csv` 索引。相比逐帧
+`png` 去掉了每帧建文件/关文件的开销，30 FPS 证据录像优先用它；代价是需要
+[`tools/rec_extract_pngs.py`](../../tools/rec_extract_pngs.py) 先拆帧才能用逐帧查看器
+或 `rec_to_video.py`。`--rec-queue` 只是抖动缓冲，不提高持续写盘吞吐；30 FPS 时
+队列 16 约 0.53 秒、32 约 1.07 秒。
 `--image-reverse on` 在 RAW10 → 灰度解码时把整幅图旋转 180°（水平与垂直同时镜像），
 识别坐标、`detection.csv`、舵机映射和录像都使用同一张翻转后的图，不增加像素拷贝；
 省略时默认 off。显式 `--aim` 需要按翻转后的图像坐标填写（默认点取图像中心，翻转不改变中心）；
@@ -138,6 +145,8 @@ PWM 初始化或写入失败只停用输出，识别和录像继续；取帧错�
 /data/app/logs/dart_app.log                        结构化日志（行首 `[tag]` 标明模块；状态批共用一次 fsync，写完关闭文件）
 /data/app/logs/imu_NNNNNN.log                      每轮独立的 IMU 原始样本、积分快照和重积分事件
 /data/app/records/rec_NNNN/img/recording.pgm         单文件灰度连续流（默认）
+/data/app/records/rec_NNNN/img/recording.pngs        单文件 PNG 容器（--rec-format pngs），偏移见 frames.csv
+/data/app/records/rec_NNNN/img/.../*.png             逐帧 PNG（--rec-format png）
 /data/app/records/rec_NNNN/logs/frames.csv           每帧一行的放行记录（Recorder 写）
 /data/app/records/detection.csv                    每帧一行的识别结果（本程序写）
 ```

@@ -98,6 +98,8 @@ add_test(NAME rtos_scripts
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test_rtos_scripts.py")
 add_test(NAME cpp_structure
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/check_cpp_structure.py")
+add_test(NAME recorder_pngs_extract
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/rec_extract_pngs_test.py")
 add_test(NAME launcher_restart
     COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/launcher_restart_test.sh" $<TARGET_FILE:launcher>)
 add_test(NAME launcher_write_control

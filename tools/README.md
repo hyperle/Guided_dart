@@ -36,6 +36,15 @@ bash .script/player --check records/rec_0001
 同时归档对应的 `records/detection.csv`，避免后续运行覆盖。详细构建、过滤和核对规则见
 播放器说明。
 
+[`rec_extract_pngs.py`](rec_extract_pngs.py) 把 `--rec-format pngs` 的单文件 PNG 容器
+按 `frames.csv` 的 `file_offset`/`file_bytes` 拆成逐帧 `00000001.png`，供播放器和
+`rec_to_video.py` 使用：
+
+```bash
+python3 tools/rec_extract_pngs.py records/rec_0001
+# 默认输出到 records/rec_0001/img/，文件名 00000001.png，Qt 播放器可直接打开
+```
+
 ## IMU 日志转 ROS 2 bag
 
 `imu_log_to_bag.py` 读取板端 `runtime/imu/Session` 写出的 v1 CSV 格式 `.log`，

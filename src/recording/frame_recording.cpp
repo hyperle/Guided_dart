@@ -26,6 +26,7 @@ inline const char* image_format_text(recorder::ImageFormat format) noexcept {
     switch (format) {
     case recorder::ImageFormat::kDbv: return "dbv";
     case recorder::ImageFormat::kPng: return "png";
+    case recorder::ImageFormat::kPngStream: return "pngs";
     case recorder::ImageFormat::kPbm: return "pbm";
     case recorder::ImageFormat::kPgm: return "pgm";
     }
@@ -84,9 +85,11 @@ inline recorder::Config
     config.height = height;
     config.fps = args.record_fps;
     config.keep_sessions = args.record_keep;
-    // About 267 ms at 60 FPS, covering observed 134 ms FAT write stalls.
-    // Pixels are copied before enqueue; this does not hold 16 camera leases.
-    config.queue_slots = 16;
+    // Queue depth is a jitter buffer, not a throughput fix. The default covers
+    // observed FAT stalls at 15 FPS; 30 FPS evidence needs about one second of
+    // buffer, so --rec-queue raises it for that run.
+    // Pixels are copied before enqueue; this does not hold camera leases.
+    config.queue_slots = args.record_queue;
     config.image_format = args.record_format;
     config.pbm_threshold = static_cast<std::uint8_t>(args.threshold);
     config.output_directory = std::string_view{args.rec_dir};
