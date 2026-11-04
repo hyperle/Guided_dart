@@ -2,11 +2,10 @@
 #include <array>
 #include <cmath>
 
-#include "pose_control.hpp"
 #include "pwm/interface.hpp"
 #include "predictor.hpp"
 
-namespace dart::controll::servo {
+namespace dart::control {
 
 class Servo final {
 public:
@@ -27,18 +26,19 @@ private:
     std::array<double, 2>direction =  {1.0, 1.0};
 };
 
-class Duty_mapping final {
+class DutyMapping final {
 public:
-    explicit Duty_mapping(dart::control::predictor::Preditor& predictor_)
+    explicit DutyMapping(dart::control::Preditor& predictor_)
         : predictor_(predictor_) {}
 
     std::expected<void, pwm::Error> update(
-        dart::pwm::IPwm& pwm, const imu::Estimator::Estimate& estimate) {
+        dart::pwm::IPwm& pwm, const imu::Estimator::Estimate& estimate,
+        const detection::DetectResult& result) {
         pose_.update(estimate);
         controller_.update(pose_);
         const double stability = controller_.get_stability();
 
-        const auto increment = predictor_.predictor_update();
+        const auto increment = predictor_.update(result);
 
         servo_1_.update_pose_output(increment.vertical_increment, increment.horizontal_increment, stability);
         servo_2_.update_pose_output(increment.vertical_increment, increment.horizontal_increment, stability);
@@ -56,16 +56,14 @@ public:
         return output_;
     } 
 
-
-
 private:
-    dart::control::pose_control::Pose pose_;
-    dart::control::pose_control::PoseControl controller_;
-    dart::control::predictor::Preditor& predictor_;
+    dart::control::Pose pose_;
+    dart::control::PoseControl controller_;
+    dart::control::Preditor& predictor_;
     Servo servo_1_{1475.0, { 1.0,  1.0}};
     Servo servo_2_{1445.0, { 1.0, -1.0}};
     Servo servo_3_{1490.0, {-1.0, -1.0}};
     Servo servo_4_{1150.0, {-1.0,  1.0}};
 };
 
-} //namespace dart::controll::servo
+} //namespace dart::controll

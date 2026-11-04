@@ -1,15 +1,14 @@
 #pragma once
 
-#include "runtime/imu/session.hpp"
 #include "src/detector/result.hpp"
 #include "pose_control.hpp"
+#include "blackboard.hpp"
 
-namespace dart::control::predictor {
+namespace dart::control {
 class Preditor final {
 public:
-    explicit Preditor(const imu::Session& session, const detection::DetectResult& result)
-        : imu_session_(session)
-        , result_(result) {}
+    explicit Preditor(BlackBoard& blackboard)
+        : blackboard_(blackboard) {}
 
 
     struct Increment {
@@ -17,12 +16,27 @@ public:
         double horizontal_increment;
     };
 
-    Increment predictor_update () {
-        if (!imu_session_.imu_working()) {
-            return no_prediction(result_);
-        }
-        
+    void start_up() noexcept {
+        use_imu_ = blackboard_.imu_working();
+    }
 
+    Increment update (const detection::DetectResult& result) {
+        const auto target = result.target.center;
+
+        if (target.x == -1.0F || target.y == -1.0F) {
+            return {0.0,0.0};
+        }
+
+        if (!use_imu_) {
+            return no_prediction(result);
+        }
+
+        const auto snapshot = blackboard_.read(blackboard_.imu_state);
+        pose.update(snapshot.value);
+        
+        previous_increment_ = increment_;
+        velocity_ = pose.speed();
+        return increment_;
     }
 
     static Increment no_prediction(const detection::DetectResult& result) {
@@ -33,8 +47,13 @@ public:
     }
 
 private:
-    const imu::Session& imu_session_;
-    const detection::DetectResult& result_;
+    BlackBoard& blackboard_;
+    Increment previous_increment_{0.0, 0.0};
+    Increment increment_{0.0, 0.0};
+    Pose pose;
+    
+    bool use_imu_ = false;
+    double velocity_;
 };
-} // namespace dart::control::predictor
+} // namespace dart::control
 

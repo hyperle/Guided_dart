@@ -4,7 +4,7 @@
 
 #include "imu/estimator.hpp"
 
-namespace dart::control::pose_control {
+namespace dart::control {
 class Pose final {
 public:
     void update(const imu::Estimator::Estimate& estimate) {
@@ -52,4 +52,4 @@ private:
     double stability_ = 0.0;
 };
 
-} // namespace dart::control::pose_control
+} // namespace dart::control
