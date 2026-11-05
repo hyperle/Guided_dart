@@ -15,9 +15,9 @@ Y8，后台线程默认写入灰度 PGM 连续流，也支持独立灰度 PNG �
 
 ## 类与消费方式
 
-使用 `import dart.recorder.recorder;`，并链接 `dart_recording`（别名 `dart_recorder`）静态库，
-取得相机 C 数据面、线程和 zlib 依赖。各 `.cpp` 是独立命名模块；只重导出帧契约、配置和错误，
-异步工作器、编码器与存储实现通过内部依赖导入。
+包含 `recorder/recorder.hpp`，并链接 `dart_recording`（别名 `dart_recorder`）静态库，
+取得相机 C 数据面、线程和 zlib 依赖。共享声明按功能放在 `.hpp`，普通实现放在 `.cpp`。
+异步工作器、编码器与存储实现保持原有职责边界。
 
 | 文件 | 职责 |
 |---|---|
@@ -62,16 +62,23 @@ if (acquired && acquired->status == dart::camera::AcquireStatus::kFrame) {
 原 `sample_every_n` / `--rec-every` 已由这个参数替代。
 采样使用 `FrameView::received` 的单调微秒时间，每个 `1/fps` 时间区间最多选一帧，
 不依赖未经验证的源 PTS。时间区间先于队列检查，采集停顿或队列忙后不突发补帧，
-已采样的图像进入固定队列吸收短时写盘抖动。输入帧率不足或队列满时，实际落盘帧率会低于目标。
+已采样的图像进入固定队列。写线程取出图片时检查入队以来的单调时钟耗时，
+达到超时预算就丢弃，不补写过期帧；实际落盘帧率取决于输入、队列和写盘速度。
 采样命中后，录像用 `try_to_lock` 和固定槽做放行：
 槽满或队列锁正被占用都立即返回 `kBusy`，不等待，计数器
 `Stats::busy` 增加。
+
+`Config::frame_timeout` / `--rec-timeout-ms N` 设置待写帧的超时毫秒数，范围为 0..60000。
+默认 0 表示一个目标帧周期，60 FPS 时为 16,667 µs；超时从提交拷贝开始计算，
+不使用源 PTS，也不要求输入时间戳与写线程具有相同起点。过期帧记为 CSV `timed_out`，
+累计到 `Stats::timed_out` 和应用日志的 `rec_timed_out`。超时只决定是否开始写这一帧；
+已经开始的文件写入正常完成，避免截断图像或破坏差分编码。
 
 `queue_slots` 分别限制已拷贝图像和待释放租约两个队列。`try_submit()` 只做有界内存
 拷贝（640×480 实测约 0.2 ms），不做文件 I/O；拷贝后立即把租约交给 release 队列。
 采集线程每拍提交前后调用 `drain_releases()`，保证相机 ACL 的调用仍然串行。
 写线程只使用独立像素，不持有相机帧。应用使用固定 16 帧图像队列，640×480 Y8
-共 4,915,200 字节，约可缓冲 267 ms 的 60 FPS 输入，覆盖实测 134 ms 的写盘停顿。
+共 4,915,200 字节；容量仅限制内存占用，默认不会保留超过一帧周期的待写图像。
 停止录像后也要先
 drain，随后才能停止/销毁相机。同一个 Recorder 可以在 stop 并排空租约后再次 start，
 复用缓冲并新建录像轮次；仍有租约时拒绝重启，避免丢失归还责任。
@@ -136,9 +143,11 @@ DBV 按整个 `recording.dbv` 的字节数计费，包括仅写一次的 12 字�
 写线程先编码，再检查下一张完整图片能否放入预算；放不下时设置 `limit_reached()`，
 停止接收并丢弃尚未落盘的队列图片，不生成超限文件或半张 PNG，不自动新建轮次续录。
 因此最终总量可能略小于 500 MB。`Admission::kAccepted` 表示成功拷贝进队列；
-DBV/PNG 的 CSV `accepted` 行只在图片实际成功写完后生成，队列中因停录未写的帧记为 `stopped`。
+全部格式的 CSV `accepted` 行只在图片实际成功写完后生成，队列中因停录未写的帧记为 `stopped`，
+等待超时的帧记为 `timed_out`。输出帧号、偏移和文件预算只计算成功保存的图像，
+丢帧不会产生索引空洞或提前耗尽容量。
 固定队列与压缩缓冲不会随录像增长。应用只停录像，继续识别和 IMU。
-旧连续流模式仍在提交时为固定帧大小预留空间。
+PGM/PBM 同样在写线程中检查完整帧容量，剩余空间放不下下一帧时停止录像。
 
 `dart_app` 对 `/data` 及其子目录启用 **2 GB = 2,000,000,000 字节**的分区总占用上限，
 通过 `Config::max_storage_bytes` 注入；统计 `statvfs` 的已分配块，包含以前所有轮次、日志、
@@ -157,11 +166,13 @@ PNG 的分组限制目录扫描成本；DBV 从源头减少小文件分配。以
 K230 构建必须链接 SDK 的 `libk230_syscalls.a`：该库提供 RT-Smart 原生 `statfs/statvfs`
 适配；仅使用当前工具链的 libc 会得到全零容量，导致录像启动报 `storage/EOVERFLOW`。
 
-CSV 首行的 `fps`、`max_file_bytes`、`file_limit_bytes` 记录目标帧率、配置上限和本轮有效上限，格式版本为 2。
+CSV 首行的 `fps`、`frame_timeout_ms`、`max_file_bytes`、`file_limit_bytes` 记录目标帧率、
+超时配置（0 表示一个目标帧周期）、容量上限和本轮有效上限，格式版本为 2。
 CSV 对每次提交尝试写一行（有界队列满时计数丢行），包含输入序号、源帧号、源 PTS、PTS 时间基有效位、单调接收时间、放行决定和
 对应文件名、`file_offset`（帧头起始字节偏移）、`file_bytes`（实际文件/帧长度）；PNG 的 `file_offset` 固定为 0，CSV 行可能按写入完成顺序到达；
 DBV 第一条记录的 offset 为 0、bytes 包含文件头；后续条目的 offset/bytes 是记录前缀及负载的准确范围。
-`image_index` 仍为从 1 开始的输出帧编号。降采样、忙丢弃和非法帧也有行。`Config::event_sink` 在 metadata
+`image_index` 为从 1 开始的连续输出帧编号。降采样、忙丢弃、超时和非法帧也有行；
+未保存的帧不带图像文件名、偏移、长度或输出帧号。`Config::event_sink` 在 metadata
 写线程中收到同一条 `FrameEvent`，可接入上层更快的文件/数据记录，不会在 VICAP
 回调中做 I/O。`event_slots` 也是有界的，满时只丢 metadata 并累计
 `Stats::event_dropped`，不会反向阻塞采集。

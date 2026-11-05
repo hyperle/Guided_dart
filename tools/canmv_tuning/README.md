@@ -81,7 +81,8 @@ Detect/Track 分工要求 `_dart_detect.TRACK_FEATURE_VERSION >= 1`。
 | `DETECTOR_CONFIG["workspace.min_contrast"]` | `--min-contrast` | 候选均值减背景均值的下限，默认 12 个灰度级 |
 | `MIRROR` | `Controls::mirror` | 0 无、1 左右、2 上下、3 两者；软件镜像 |
 | `SERVO_INITIAL_US` | `--servo-initial` / `Channel::initial_pulse_us` | 四路机械零点的绝对脉宽，µs，允许小数 |
-| `SERVO_MIN_US` / `SERVO_MAX_US` | `--servo-min` / `--servo-max` | µs；零点超出范围时直接报错 |
+| `SERVO_MAX_DELTA_US` | `--servo-max-delta` / `Config::max_delta_us` | 单个 µs 数值；原生应用合成增量的绝对值上限，默认 500 |
+| `SERVO_MIN_US` / `SERVO_MAX_US` | 仅 Python 零点校验 | 不再导出为原生应用的 min/max 参数 |
 | `PWM_FREQUENCY_HZ` | `dart::pwm::kFrequencyHz` | 固定 333 Hz |
 | `SERVO_ENABLED` | 调试时逐路选择 | 仅 Python 标定开关；原生应用启用全部四路 |
 | `SERVO_RETURN_MS` | 仅 Python 退出清理 | 停止前发送零点脉宽的时长，默认 500 ms，至少 20 ms |
@@ -152,6 +153,10 @@ python3 tools/canmv_tuning/build.py
 输出 [`../../build/canmv-tuning/micropython`](../../build/canmv-tuning/micropython)、
 脚本副本和 `BUILD_INFO.json`。可用 `--sdk`、`--toolchain-bin`、`--build-dir` 覆盖路径。
 构建前校验原生后端要求的 VICAP 用户态/内核库哈希；SDK 源码和原固件产物均不改动。
+构建使用私有配置头，将 `.config` 中的 `CONFIG_CANMV_*` 选项覆盖到 SDK 已生成的头文件，
+保留其余内核/MPP 配置；要求 `CONFIG_CANMV_IDE_SUPPORT=y`，并检查最终链接包含 IDE 服务。
+SDK 的 `.config` 与生成头可能不同步，缺少 IDE 服务的解释器仍可响应 REPL，
+但 IDE 会报 `did not respond to any USBDBG handshake command`，不能靠更换串口权限解决。
 新增适配器借用 CanMV 启动时已初始化的 VB；相机仍拥有并释放自己的 RAW 池。
 不要同时创建普通 `Sensor` 或运行另一个相机应用。
 
@@ -214,7 +219,7 @@ assert PIXEL_FORMAT == "gray8"
 例如调好后控制台输出：
 
 ```text
---exp 400 --threshold 50 --min-contrast 12 --servo-initial 1520.000,1520.000,1520.000,1520.000 --servo-min 1420.000,1420.000,1420.000,1420.000 --servo-max 1620.000,1620.000,1620.000,1620.000
+--exp 400 --threshold 50 --min-contrast 12 --servo-initial 1520.000,1520.000,1520.000,1520.000 --servo-max-delta 500.000
 ```
 
 可追加到 `dart_app` 的启动参数；相同参数也可填入表中 C++ 配置字段。
@@ -238,7 +243,7 @@ Detect 两次调用分别为 603 / 611 µs。已检查干扰物关联、质量�
 IDE 预览、曝光响应和连接器处的 PWM 波形仍需确认。
 PWM API 与引脚配置依据本机 SDK 源码及[官方 PWM 手册](https://www.kendryte.com/k230_canmv/v0.6/zh/api/machine/k230_canmv_pwm_api_manual.html)。
 
-C++ 模块构建：检测桥接通过 CMake 的 `dart_canmv_detector` 静态库链接同一套检测器，
-不再由解释器的旧 GCC 包含或重新编译 C++ 源码。构建机需安装 Clang >= 19 和配套
-`clang-scan-deps`（或完整 GCC >= 14 交叉工具链）；可用 `DART_CXX_COMPILER` 指定前端。
+C++ 检测器构建：检测桥接通过 CMake 的 `dart_canmv_detector` 静态库链接同一套检测器，
+使用常规 `.hpp` 声明和 `.cpp` 实现，由 SDK 配套 RISC-V musl GCC/G++ 编译；
+解释器只链接其 C ABI，不包含 `.cpp`，不需要命名模块或扫描器。
 私有 overlay 的网络补丁选项与 C ABI 保持原有用法。

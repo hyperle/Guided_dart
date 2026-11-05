@@ -1,4 +1,5 @@
-module;
+#include "board/k230.hpp"
+
 #include <expected>
 #include <memory>
 #include <new>
@@ -6,21 +7,31 @@ module;
 
 #include "spi/iim42652.h"
 
-export module dart.board.k230;
-
 #ifdef DART_APP_IMU_K230
-import dart.imu.k230.iim42652;
+# include "imu/k230/iim42652.hpp"
 #endif
 #ifdef DART_APP_PWM_K230
-import dart.pwm.k230.output;
+# include "pwm/k230/output.hpp"
 #endif
-import dart.camera.k230.camera;
-import dart.logging.logger;
-import dart.runtime.imu.session;
-import dart.storage.directories;
-import dart.system.device_services;
+#ifdef DART_APP_WIFI_K230
+# include "streaming/k230/transport.hpp"
+#endif
+#include "camera/k230/camera.hpp"
+#include "logging/logger.hpp"
+#include "runtime/imu/session.hpp"
+#include "storage/directories.hpp"
+#include "streaming/interface.hpp"
+#include "system/device_services.hpp"
 
-export namespace dart::board {
+namespace dart::board {
+
+std::unique_ptr<streaming::ITransport> create_wifi_transport() noexcept {
+#ifdef DART_APP_WIFI_K230
+    return std::unique_ptr<streaming::ITransport>{new (std::nothrow) streaming::k230::Transport};
+#else
+    return nullptr;
+#endif
+}
 
 std::expected<std::unique_ptr<pwm::IPwm>, pwm::Error> create_pwm() noexcept {
 #ifdef DART_APP_PWM_K230
@@ -41,11 +52,11 @@ std::expected<std::unique_ptr<camera::ICamera>, camera::CameraError>
     return std::unique_ptr<camera::ICamera>{std::move(created.value())};
 }
 
-template <typename Service>
-int with_imu(
-    const platform::ImuOptions& options, logging::Logger& log, Service&& service) noexcept {
+int with_imu_service(
+    const platform::ImuOptions& options, logging::Logger& log, void* context,
+    ImuService service) noexcept {
     if (!options.enabled)
-        return service(nullptr);
+        return service(context, nullptr);
 #ifdef DART_APP_IMU_K230
     /* Explicit bus/CS; remaining acquisition defaults are UNVALIDATED.
      * 1 kHz ODR/polling, +/-16 g, +/-2000 deg/s, zero configured gyro bias. */
@@ -70,9 +81,8 @@ int with_imu(
         "level=%s module=imu op=identity id_check=%s id_read=%u expected_id=0x6f "
         "observed_id=0x%02x reset_id_read=%u reset_id=0x%02x\n",
         diagnostic.device_id_check_skipped ? "WARN" : level,
-        diagnostic.device_id_check_skipped ? "skipped" : "enforced",
-        diagnostic.device_id_read, diagnostic.observed_device_id,
-        diagnostic.reset_device_id_read, diagnostic.reset_device_id);
+        diagnostic.device_id_check_skipped ? "skipped" : "enforced", diagnostic.device_id_read,
+        diagnostic.observed_device_id, diagnostic.reset_device_id_read, diagnostic.reset_device_id);
     if (options.ignore_device_id) {
         constexpr char hex[] = "0123456789abcdef";
         char raw[29]{};
@@ -83,12 +93,11 @@ int with_imu(
         log.line(
             "level=%s module=imu op=raw_probe read=%u stage=%s register=0x1d length=14 "
             "bytes=%s verification=unverified accel_raw=%d,%d,%d gyro_raw=%d,%d,%d\n",
-            level, diagnostic.raw_probe_read,
-            dart_iim42652_stage_name(diagnostic.raw_probe_stage),
-            diagnostic.raw_probe_read ? raw : "unavailable",
-            diagnostic.last_accelerometer[0], diagnostic.last_accelerometer[1],
-            diagnostic.last_accelerometer[2], diagnostic.last_gyroscope[0],
-            diagnostic.last_gyroscope[1], diagnostic.last_gyroscope[2]);
+            level, diagnostic.raw_probe_read, dart_iim42652_stage_name(diagnostic.raw_probe_stage),
+            diagnostic.raw_probe_read ? raw : "unavailable", diagnostic.last_accelerometer[0],
+            diagnostic.last_accelerometer[1], diagnostic.last_accelerometer[2],
+            diagnostic.last_gyroscope[0], diagnostic.last_gyroscope[1],
+            diagnostic.last_gyroscope[2]);
     }
     log.line(
         "level=%s module=imu op=init_timing result=%d stage=%s "
@@ -110,9 +119,9 @@ int with_imu(
         "power=0x%02x gyro=0x%02x accel=0x%02x status=0x%02x status_seen=0x%02x "
         "sensor_config_read=%u sensor_config0=0x%02x external_clock_read=%u intf5=0x%02x "
         "accel_raw=%d,%d,%d gyro_raw=%d,%d,%d individual_read=%u gyro_individual=%d,%d,%d\n",
-        level, diagnostic.registers_read, diagnostic.interface_config0, diagnostic.interface_config1,
-        diagnostic.power_config, diagnostic.gyro_config, diagnostic.accel_config,
-        diagnostic.interrupt_status, diagnostic.interrupt_status_seen,
+        level, diagnostic.registers_read, diagnostic.interface_config0,
+        diagnostic.interface_config1, diagnostic.power_config, diagnostic.gyro_config,
+        diagnostic.accel_config, diagnostic.interrupt_status, diagnostic.interrupt_status_seen,
         diagnostic.sensor_config_read, diagnostic.sensor_config0,
         diagnostic.external_clock_config_read, diagnostic.interface_config5,
         diagnostic.last_accelerometer[0], diagnostic.last_accelerometer[1],
@@ -127,7 +136,7 @@ int with_imu(
             static_cast<unsigned>(initialized.error()), config.bus, config.chip_select_pin,
             diagnostic.device_id_read, diagnostic.observed_device_id,
             dart_iim42652_device_name(diagnostic.observed_device_id));
-        return service(nullptr);
+        return service(context, nullptr);
     }
     log.line(
         "level=INFO module=imu op=initialize model=%s device_id=0x%02x result=ok\n",
@@ -135,10 +144,11 @@ int with_imu(
     if (options.writes == nullptr || options.writes->logging_enabled())
         storage::ensure_parent(options.log_path);
     imu::Session session{device};
-    if (!session.start(options.log_path, 1000, true, imu::Session::kDefaultLogLimitBytes,
-                       options.writes, options.sample_observer, options.sample_observer_context)) {
+    if (!session.start(
+            options.log_path, 1000, true, imu::Session::kDefaultLogLimitBytes, options.writes,
+            options.sample_observer, options.sample_observer_context)) {
         log.line("level=ERROR module=imu op=start path=%s action=disable_imu\n", options.log_path);
-        return service(nullptr);
+        return service(context, nullptr);
     }
     log.line(
         "level=INFO module=imu op=start bus=%d cs=%d bus_hz=%u timeout_ms=%u "
@@ -149,7 +159,7 @@ int with_imu(
         config.output_data_rate, config.accelerometer_range, config.gyroscope_range,
         static_cast<unsigned long long>(imu::Session::kDefaultLogLimitBytes), session.log_path());
     // Consumers must share this session's current()/seed()/reset() methods.
-    const int result = service(&session);
+    const int result = service(context, &session);
     session.stop();
     const auto stats = session.stats();
     log.line(
@@ -165,7 +175,7 @@ int with_imu(
     return result;
 #else
     log.line("level=ERROR module=imu op=initialize code=backend_unavailable action=disable_imu\n");
-    return service(nullptr);
+    return service(context, nullptr);
 #endif
 }
 

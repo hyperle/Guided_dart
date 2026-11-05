@@ -1,195 +1,113 @@
-module;
+#include "imu/estimator.hpp"
+
 #include <cmath>
 #include <cstdint>
 #include <limits>
 
-export module dart.imu.estimator;
+#include "imu/sample.hpp"
 
-export import dart.imu.sample;
+namespace dart::imu {
 
-export namespace dart::imu {
+Vector3f Estimator::add(Vector3f a, Vector3f b) noexcept {
+    return {a.x + b.x, a.y + b.y, a.z + b.z};
+}
 
-class Estimator final {
-public:
-    struct Config {
-        std::uint64_t max_integration_interval_ns = 100'000'000ULL;
-        float max_acceleration_m_s2 = 160.0F;
-        float max_angular_velocity_rad_s = 35.0F;
-        float max_acceleration_step_m_s2 = 80.0F;
-        float max_angular_velocity_step_rad_s = 25.0F;
-        float seed_gravity_tolerance_m_s2 = 2.0F;
-        float seed_max_angular_velocity_rad_s = 0.15F;
+Vector3f Estimator::subtract(Vector3f a, Vector3f b) noexcept {
+    return {a.x - b.x, a.y - b.y, a.z - b.z};
+}
+
+Vector3f Estimator::scale(Vector3f value, float factor) noexcept {
+    return {value.x * factor, value.y * factor, value.z * factor};
+}
+
+Vector3f Estimator::cross(Vector3f a, Vector3f b) noexcept {
+    return {a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x};
+}
+
+float Estimator::norm(Vector3f value) noexcept {
+    return std::sqrt(value.x * value.x + value.y * value.y + value.z * value.z);
+}
+
+bool Estimator::finite(Vector3f value) noexcept {
+    return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
+}
+
+float Estimator::dot(Quaternionf a, Quaternionf b) noexcept {
+    return a.w * b.w + a.x * b.x + a.y * b.y + a.z * b.z;
+}
+
+Quaternionf Estimator::multiply(Quaternionf a, Quaternionf b) noexcept {
+    return {
+        a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z,
+        a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
+        a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
+        a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w,
     };
+}
 
-    enum class QualityEvent : std::uint32_t {
-        kNone = 0U,
-        kSampleFlagged = 1U << 0U,
-        kNonFinite = 1U << 1U,
-        kAccelerationThreshold = 1U << 2U,
-        kAngularRateThreshold = 1U << 3U,
-        kAccelerationStepThreshold = 1U << 4U,
-        kAngularRateStepThreshold = 1U << 5U,
-        kTimestampNonMonotonic = 1U << 6U,
-        kTimestampGap = 1U << 7U,
-        kReferenceNotSeeded = 1U << 8U,
-        kSeedNotStationary = 1U << 9U,
-        kInvalidReference = 1U << 10U,
-    };
+bool Estimator::normalize(Quaternionf& q) noexcept {
+    const float norm_squared = dot(q, q);
+    if (!std::isfinite(norm_squared) || norm_squared < 1.0e-12F)
+        return false;
+    const float inverse_norm = 1.0F / std::sqrt(norm_squared);
+    q.w *= inverse_norm;
+    q.x *= inverse_norm;
+    q.y *= inverse_norm;
+    q.z *= inverse_norm;
+    return true;
+}
 
-    struct Estimate {
-        Sample sample{};
-        Quaternionf attitude{};
-        Vector3f attitude_rpy_rad{};
-        Vector3f angular_velocity_rad_s{};   /* Selected reference-frame axes. */
-        Vector3f linear_acceleration_m_s2{}; /* Gravity compensated, reference-frame axes. */
-        Vector3f velocity_m_s{};
-        Vector3f cumulative_rotation_rad{};  /* Unwrapped integral, reference-frame axes. */
-        std::uint64_t generation = 0U;
-        std::uint32_t quality_events = 0U;
-        bool sample_accepted = false;
-        bool integrated = false;
-        bool has_reference_frame = false;
-    };
+Vector3f Estimator::rotate(Quaternionf q, Vector3f value) noexcept {
+    const Vector3f imaginary{q.x, q.y, q.z};
+    const Vector3f twice_cross = scale(cross(imaginary, value), 2.0F);
+    return add(value, add(scale(twice_cross, q.w), cross(imaginary, twice_cross)));
+}
 
-    struct SeedResult {
-        bool accepted = false;
-        std::uint32_t quality_events = 0U;
-        std::uint64_t generation = 0U;
-    };
-
-    Estimator() noexcept;
-    explicit Estimator(const Config& config) noexcept;
-
-    Estimate update(const Sample& sample) noexcept;
-    SeedResult
-        seed(const Sample& stationary_sample, const Quaternionf& sensor_to_reference) noexcept;
-    void reset() noexcept;
-    Estimate current() const noexcept;
-    std::uint64_t generation() const noexcept { return generation_; }
-
-private:
-    std::uint32_t assess_sample(const Sample& sample, bool check_steps) const noexcept;
-    Estimate make_estimate(
-        const Sample& sample, std::uint32_t events, bool accepted, bool integrated) const noexcept;
-
-    Config config_{};
-    Sample previous_sample_{};
-    Sample latest_sample_{};
-    Quaternionf attitude_{};
-    Vector3f gravity_reference_m_s2_{};
-    Vector3f velocity_m_s_{};
-    Vector3f cumulative_rotation_rad_{};
-    Vector3f previous_linear_acceleration_m_s2_{};
-    std::uint64_t generation_ = 0U;
-    bool has_sample_ = false;
-    bool has_reference_frame_ = false;
-
-private:
-    static constexpr float kGravityMPerS2 = 9.80665F;
-
-    static constexpr float kHalf = 0.5F;
-
-    static Vector3f add(Vector3f a, Vector3f b) noexcept {
-        return {a.x + b.x, a.y + b.y, a.z + b.z};
+Quaternionf Estimator::rotation_delta(Vector3f omega_rad_s, float seconds) noexcept {
+    const Vector3f half_angle = scale(omega_rad_s, kHalf * seconds);
+    const float angle = norm(half_angle);
+    if (angle < 1.0e-6F) {
+        Quaternionf result{1.0F, half_angle.x, half_angle.y, half_angle.z};
+        (void)normalize(result);
+        return result;
     }
+    const float vector_scale = std::sin(angle) / angle;
+    return {
+        std::cos(angle), half_angle.x * vector_scale, half_angle.y * vector_scale,
+        half_angle.z * vector_scale};
+}
 
-    static Vector3f subtract(Vector3f a, Vector3f b) noexcept {
-        return {a.x - b.x, a.y - b.y, a.z - b.z};
-    }
+Vector3f Estimator::to_rpy(Quaternionf q) noexcept {
+    constexpr float kHalfPi = 1.57079632679489661923F;
+    const float sin_roll_cos_pitch = 2.0F * (q.w * q.x + q.y * q.z);
+    const float cos_roll_cos_pitch = 1.0F - 2.0F * (q.x * q.x + q.y * q.y);
+    const float sin_pitch = 2.0F * (q.w * q.y - q.z * q.x);
+    const float bounded_pitch = sin_pitch < -1.0F ? -1.0F : sin_pitch > 1.0F ? 1.0F : sin_pitch;
+    const float sin_yaw_cos_pitch = 2.0F * (q.w * q.z + q.x * q.y);
+    const float cos_yaw_cos_pitch = 1.0F - 2.0F * (q.y * q.y + q.z * q.z);
+    const float pitch = std::abs(bounded_pitch) >= 1.0F ? std::copysign(kHalfPi, bounded_pitch)
+                                                        : std::asin(bounded_pitch);
+    return {
+        std::atan2(sin_roll_cos_pitch, cos_roll_cos_pitch), pitch,
+        std::atan2(sin_yaw_cos_pitch, cos_yaw_cos_pitch)};
+}
 
-    static Vector3f scale(Vector3f value, float factor) noexcept {
-        return {value.x * factor, value.y * factor, value.z * factor};
-    }
+std::uint32_t Estimator::event(QualityEvent value) noexcept {
+    return static_cast<std::uint32_t>(value);
+}
 
-    static Vector3f cross(Vector3f a, Vector3f b) noexcept {
-        return {a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x};
-    }
+bool Estimator::finite_sample(const Sample& sample) noexcept {
+    return finite(sample.acceleration_m_s2) && finite(sample.angular_velocity_rad_s)
+        && std::isfinite(sample.temperature_c);
+}
 
-    static float norm(Vector3f value) noexcept {
-        return std::sqrt(value.x * value.x + value.y * value.y + value.z * value.z);
-    }
-
-    static bool finite(Vector3f value) noexcept {
-        return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
-    }
-
-    static float dot(Quaternionf a, Quaternionf b) noexcept {
-        return a.w * b.w + a.x * b.x + a.y * b.y + a.z * b.z;
-    }
-
-    static Quaternionf multiply(Quaternionf a, Quaternionf b) noexcept {
-        return {
-            a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z,
-            a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
-            a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
-            a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w,
-        };
-    }
-
-    static bool normalize(Quaternionf& q) noexcept {
-        const float norm_squared = dot(q, q);
-        if (!std::isfinite(norm_squared) || norm_squared < 1.0e-12F)
-            return false;
-        const float inverse_norm = 1.0F / std::sqrt(norm_squared);
-        q.w *= inverse_norm;
-        q.x *= inverse_norm;
-        q.y *= inverse_norm;
-        q.z *= inverse_norm;
-        return true;
-    }
-
-    static Vector3f rotate(Quaternionf q, Vector3f value) noexcept {
-        const Vector3f imaginary{q.x, q.y, q.z};
-        const Vector3f twice_cross = scale(cross(imaginary, value), 2.0F);
-        return add(value, add(scale(twice_cross, q.w), cross(imaginary, twice_cross)));
-    }
-
-    static Quaternionf rotation_delta(Vector3f omega_rad_s, float seconds) noexcept {
-        const Vector3f half_angle = scale(omega_rad_s, kHalf * seconds);
-        const float angle = norm(half_angle);
-        if (angle < 1.0e-6F) {
-            Quaternionf result{1.0F, half_angle.x, half_angle.y, half_angle.z};
-            (void)normalize(result);
-            return result;
-        }
-        const float vector_scale = std::sin(angle) / angle;
-        return {
-            std::cos(angle), half_angle.x * vector_scale, half_angle.y * vector_scale,
-            half_angle.z * vector_scale};
-    }
-
-    static Vector3f to_rpy(Quaternionf q) noexcept {
-        constexpr float kHalfPi = 1.57079632679489661923F;
-        const float sin_roll_cos_pitch = 2.0F * (q.w * q.x + q.y * q.z);
-        const float cos_roll_cos_pitch = 1.0F - 2.0F * (q.x * q.x + q.y * q.y);
-        const float sin_pitch = 2.0F * (q.w * q.y - q.z * q.x);
-        const float bounded_pitch = sin_pitch < -1.0F ? -1.0F : sin_pitch > 1.0F ? 1.0F : sin_pitch;
-        const float sin_yaw_cos_pitch = 2.0F * (q.w * q.z + q.x * q.y);
-        const float cos_yaw_cos_pitch = 1.0F - 2.0F * (q.y * q.y + q.z * q.z);
-        const float pitch = std::abs(bounded_pitch) >= 1.0F ? std::copysign(kHalfPi, bounded_pitch)
-                                                            : std::asin(bounded_pitch);
-        return {
-            std::atan2(sin_roll_cos_pitch, cos_roll_cos_pitch), pitch,
-            std::atan2(sin_yaw_cos_pitch, cos_yaw_cos_pitch)};
-    }
-
-    static std::uint32_t event(QualityEvent value) noexcept {
-        return static_cast<std::uint32_t>(value);
-    }
-
-    static bool finite_sample(const Sample& sample) noexcept {
-        return finite(sample.acceleration_m_s2) && finite(sample.angular_velocity_rad_s)
-            && std::isfinite(sample.temperature_c);
-    }
-};
-
-Estimator::Estimator() noexcept : Estimator(Config{}) {}
+Estimator::Estimator() noexcept
+    : Estimator(Config{}) {}
 
 Estimator::Estimator(const Config& config) noexcept
     : config_(config) {}
 
-std::uint32_t
-    Estimator::assess_sample(const Sample& sample, bool check_steps) const noexcept {
+std::uint32_t Estimator::assess_sample(const Sample& sample, bool check_steps) const noexcept {
     std::uint32_t events = 0U;
     if (sample.flags != 0U)
         events |= event(QualityEvent::kSampleFlagged);

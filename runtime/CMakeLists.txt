@@ -2,7 +2,7 @@
 # Module subdirectories contain sources and README files; targets live here.
 
 # IMU acquisition, shared estimator state and asynchronous raw/estimate log.
-dart_add_modules(dart_imu_logging imu/session.cpp)
+dart_add_cpp_library(dart_imu_logging imu/session.cpp)
 target_link_libraries(dart_imu_logging PUBLIC dart_imu dart_platform Threads::Threads)
 
 # Finite board diagnostic for initialization timing comparisons. Run alone.

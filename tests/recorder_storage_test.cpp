@@ -16,10 +16,10 @@
 #include <thread>
 #include <vector>
 
-import dart.recorder.recorder;
+#include "recorder/recorder.hpp"
 
-import dart.recorder.storage.image_writer;
-import dart.recorder.storage.session;
+#include "recorder/storage/image_writer.hpp"
+#include "recorder/storage/session.hpp"
 
 namespace dart::tests {
 
@@ -276,6 +276,7 @@ private:
         config.width = 8;
         config.height = 1;
         config.queue_slots = 8;
+        config.frame_timeout = std::chrono::milliseconds{5000};
         config.flush_period = std::chrono::milliseconds{60'000};
         recorder::Recorder rec{config};
         assert(rec.start());

@@ -1,8 +1,8 @@
 # ===========================================================================
-# include/ —— L3/L2 接口和实现库目标的唯一构建文件
+# include/ —— 当前 L3/L2 接口和实现库目标
 #
-# 约定：模块目录（camera/、spi/、imu/ …）只放源码和 README，不再各自持有
-# CMakeLists.txt；所有库目标在这里集中声明，新增模块在下面追加一节即可。
+# 当前 camera/、spi/、imu/ 等下层库目标集中在本文件声明。
+# 各目录是否需要说明文档，按实际使用需要决定。
 # 本文件里的路径一律以 include/ 为基准，通过下面的模块目录变量拼接。
 #
 # 节的先后顺序有意义：spi/ 声明 DART_IMU_K230 并提供 dart_iim42652，imu/ 的
@@ -20,8 +20,10 @@ set(_imu_dir "${_dart_src}/imu")
 # ---------------------------------------------------------------------------
 option(DART_CAMERA_K230 "Build the K230 camera data plane and C++ adapter" OFF)
 
-# Pure frame data is a compiled named module with no device/SDK dependency.
-dart_add_modules(dart_camera_types "${_camera_dir}/frame_view.cpp")
+# Read-only frame types are header-only; no device/SDK implementation.
+add_library(dart_camera_types INTERFACE)
+target_include_directories(dart_camera_types INTERFACE "${PROJECT_SOURCE_DIR}" "${_dart_src}")
+target_compile_features(dart_camera_types INTERFACE cxx_std_23)
 
 # Every enabled C backend contains real sources; a missing file fails configure.
 function(_dart_camera_add_library target)
@@ -114,13 +116,15 @@ if(DART_CAMERA_K230)
         -Wl,--end-group pthread m)
 endif()
 
-dart_add_modules(dart_camera_acl
+dart_add_cpp_library(dart_camera_acl
     "${_camera_dir}/error.cpp" "${_camera_dir}/frame_lease.cpp"
-    "${_camera_dir}/interface.cpp" "${_camera_dir}/k230/camera.cpp")
+    "${_camera_dir}/interface.hpp" "${_camera_dir}/k230/camera.hpp")
 target_include_directories(dart_camera_acl PUBLIC "${_dart_include}")
 target_link_libraries(dart_camera_acl PUBLIC dart_camera_types dart_camera_core)
 if(DART_CAMERA_K230)
-    target_link_libraries(dart_camera_acl PUBLIC dart_camera_k230)
+    # The template adapter is compiled by its consumers. Propagate the
+    # firmware routing configuration together with its C backend dependency.
+    target_link_libraries(dart_camera_acl PUBLIC dart_camera_k230 k230_rtos_app)
 endif()
 
 # ---------------------------------------------------------------------------
@@ -147,21 +151,21 @@ endif()
 # imu —— 设备抽象（IImu）、估计器与 K230 适配器
 #
 # 纯 C++，不含厂商头文件：
-#   sample.cpp / interface.cpp   IMU 数据类与抽象接口
+#   sample.hpp / interface.hpp   IMU 数据类与抽象接口
 #   estimator.cpp               姿态/速度估计器，纯计算、无分配
 #   k230/iim42652.cpp            C 驱动到 IImu 的适配器
 # ---------------------------------------------------------------------------
-dart_add_modules(dart_imu
-    "${_imu_dir}/math_types.cpp" "${_imu_dir}/sample.cpp"
-    "${_imu_dir}/interface.cpp" "${_imu_dir}/estimator.cpp")
+dart_add_cpp_library(dart_imu
+    "${_imu_dir}/math_types.hpp" "${_imu_dir}/sample.hpp"
+    "${_imu_dir}/interface.hpp" "${_imu_dir}/estimator.cpp")
 if(DART_IMU_K230)
-    dart_add_modules(dart_imu_k230 "${_imu_dir}/k230/iim42652.cpp")
+    dart_add_cpp_library(dart_imu_k230 "${_imu_dir}/k230/iim42652.cpp")
     target_link_libraries(dart_imu_k230 PUBLIC dart_imu dart_iim42652)
 endif()
 
 # Editor support: spi/iim42652.c is only built by the cross preset, so with
-# DART_IMU_K230 off it needs an editor-only compile command. C++ modules already
-# receive compile commands from their compiled libraries. A borrowed command lacks the SDK
+# DART_IMU_K230 off it needs an editor-only compile command. C++ implementations already
+# receive compile commands from their libraries. A borrowed command lacks the SDK
 # include paths nor -std=gnu11, so drv_spi.h, drv_spi_inst_t, SPI_HAL_MODE_3 and
 # the bool literals all look undeclared in the editor while the real build is
 # clean. This target exists purely to emit those commands: it is
@@ -196,28 +200,28 @@ endif()
 option(DART_PWM_K230 "Build the K230 four-channel servo PWM backend" ${DART_CAMERA_K230})
 
 # Process, filesystem and logging modules do not select any device backend.
-file(GLOB_RECURSE _platform_modules CONFIGURE_DEPENDS
+file(GLOB_RECURSE _platform_sources CONFIGURE_DEPENDS
     "${_dart_src}/system/*.cpp" "${_dart_src}/logging/*.cpp" "${_dart_src}/storage/*.cpp")
-list(REMOVE_ITEM _platform_modules "${_dart_src}/system/device_services.cpp")
-dart_add_modules(dart_platform ${_platform_modules})
+dart_add_cpp_library(dart_platform ${_platform_sources})
 target_link_libraries(dart_platform PUBLIC Threads::Threads)
 
-dart_add_modules(dart_pwm "${_dart_src}/pwm/interface.cpp" "${_dart_src}/pwm/session.cpp")
+dart_add_cpp_library(dart_pwm "${_dart_src}/pwm/interface.cpp" "${_dart_src}/pwm/session.cpp")
 target_link_libraries(dart_pwm PUBLIC dart_platform Threads::Threads)
 if(DART_PWM_K230)
     if(NOT CMAKE_CROSSCOMPILING OR NOT CMAKE_SYSTEM_PROCESSOR MATCHES "riscv")
         message(FATAL_ERROR "DART_PWM_K230 requires a RISC-V cross toolchain")
     endif()
-    dart_add_modules(dart_pwm_k230 "${_dart_src}/pwm/k230/output.cpp")
+    dart_add_cpp_library(dart_pwm_k230 "${_dart_src}/pwm/k230/output.cpp")
     target_link_libraries(dart_pwm_k230 PUBLIC dart_pwm PRIVATE k230_rtos_app)
 endif()
 
 # Device callback contracts depend on interfaces, keeping PWM/platform acyclic.
-dart_add_modules(dart_device_services "${_dart_src}/system/device_services.cpp")
-target_link_libraries(dart_device_services PUBLIC dart_camera_acl dart_imu dart_pwm dart_platform)
+add_library(dart_device_services INTERFACE)
+target_include_directories(dart_device_services INTERFACE "${PROJECT_SOURCE_DIR}" "${_dart_src}")
+target_link_libraries(dart_device_services INTERFACE dart_camera_acl dart_imu dart_pwm dart_platform)
 
-file(GLOB_RECURSE _recording_modules CONFIGURE_DEPENDS "${_dart_src}/recorder/*.cpp")
-dart_add_modules(dart_recording ${_recording_modules})
+file(GLOB_RECURSE _recording_sources CONFIGURE_DEPENDS "${_dart_src}/recorder/*.cpp")
+dart_add_cpp_library(dart_recording ${_recording_sources})
 add_library(dart_recorder ALIAS dart_recording)
 if(CMAKE_CROSSCOMPILING)
     set(DART_ZLIB_INCLUDE_DIR "${K230_SDK_ROOT}/src/rtsmart/libs/3rd-party/libwebsockets/libwebsockets/win32port/zlib"
@@ -236,9 +240,40 @@ else()
 endif()
 target_link_libraries(dart_recording PUBLIC dart_camera_acl dart_platform Threads::Threads dart_zlib)
 
-# The composition root imports actual backends only when they are enabled.
-dart_add_modules(dart_board "${_dart_src}/board/k230.cpp")
-target_link_libraries(dart_board PUBLIC dart_device_services dart_imu_logging)
+# JPEG CPU data plane and bounded streaming workers. Device selection is injected.
+add_library(dart_streaming_data STATIC
+    "${_dart_src}/streaming/jpeg.c" "${_dart_src}/streaming/http.c")
+target_include_directories(dart_streaming_data PUBLIC "${_dart_include}" "${_dart_src}")
+target_compile_features(dart_streaming_data PUBLIC c_std_11)
+target_compile_options(dart_streaming_data PRIVATE -Wall -Wextra -Wpedantic)
+target_link_libraries(dart_streaming_data PUBLIC m)
+dart_add_cpp_library(dart_streaming "${_dart_src}/streaming/interface.cpp"
+    "${_dart_src}/streaming/session.cpp")
+target_link_libraries(dart_streaming PUBLIC dart_camera_types dart_streaming_data Threads::Threads)
+option(DART_WIFI_K230 "Build the SDIO Wi-Fi streaming transport" ${DART_CAMERA_K230})
+if(DART_WIFI_K230)
+    if(NOT CMAKE_CROSSCOMPILING OR NOT CMAKE_SYSTEM_PROCESSOR MATCHES "riscv")
+        message(FATAL_ERROR "DART_WIFI_K230 requires a RISC-V cross toolchain")
+    endif()
+    add_library(dart_wifi_radio STATIC "${_dart_src}/streaming/k230/radio.c")
+    target_link_libraries(dart_wifi_radio PRIVATE k230_rtos_app)
+    target_include_directories(dart_wifi_radio PRIVATE "${_dart_src}")
+    target_include_directories(dart_wifi_radio SYSTEM PRIVATE
+        "${_hal_root}/include"
+        "${K230_SDK_ROOT}/src/rtsmart/libs/rtsmart_hal/components/netmgmt")
+    target_compile_options(dart_wifi_radio PRIVATE -Wall -Wextra -Wpedantic)
+    dart_add_cpp_library(dart_streaming_k230 "${_dart_src}/streaming/k230/transport.cpp")
+    target_link_libraries(dart_streaming_k230 PUBLIC dart_streaming
+        PRIVATE dart_wifi_radio k230_rtos_app netmgmt)
+endif()
+
+# The composition root selects actual backends only when they are enabled.
+dart_add_cpp_library(dart_board "${_dart_src}/board/k230.cpp")
+target_link_libraries(dart_board PUBLIC dart_device_services dart_imu_logging dart_streaming)
+if(DART_WIFI_K230)
+    target_compile_definitions(dart_board PRIVATE DART_APP_WIFI_K230=1)
+    target_link_libraries(dart_board PUBLIC dart_streaming_k230)
+endif()
 if(DART_PWM_K230)
     target_compile_definitions(dart_board PRIVATE DART_APP_PWM_K230=1)
     target_link_libraries(dart_board PUBLIC dart_pwm_k230)

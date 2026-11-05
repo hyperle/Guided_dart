@@ -1,34 +1,34 @@
-module;
+#include "src/startup/services.hpp"
+
 #include <chrono>
 #include <expected>
 #include <memory>
 #include <utility>
 
-export module dart.app.startup.services;
+#include "logging/logger.hpp"
+#include "runtime/imu/session.hpp"
+#include "src/diagnostics/camera_error.hpp"
+#include "src/startup/argument_parser.hpp"
+#include "src/vision/capture_pipeline.hpp"
+#include "streaming/interface.hpp"
+#include "system/device_services.hpp"
+#include "system/monotonic_clock.hpp"
+#include "system/run_control.hpp"
 
-import dart.app.diagnostics.camera_error;
-import dart.app.startup.argument_parser;
-import dart.app.vision.capture_pipeline;
-import dart.logging.logger;
-import dart.runtime.imu.session;
-import dart.system.device_services;
-import dart.system.monotonic_clock;
-import dart.system.run_control;
-
-export namespace dart::app {
+namespace dart::app {
 
 int run_services(
     const Arguments& args, platform::CameraFactory factory, platform::RunControl& control,
-    logging::Logger& log, imu::Session* imu_session = nullptr,
-    platform::WriteControl* writes = nullptr,
-    platform::PwmFactory pwm_factory = nullptr) noexcept {
+    logging::Logger& log, imu::Session* imu_session, platform::WriteControl* writes,
+    platform::PwmFactory pwm_factory, streaming::TransportFactory wifi_factory) noexcept {
     log.line(
         "level=INFO module=app op=start version=4 exposure=fixed exp_lines=%u "
-        "vision=%d pwm=%d record=%d record_auto=%d rec_fps=%u rec_keep=%u seconds=%u imu=%d "
+        "vision=%d pwm=%d record=%d record_auto=%d rec_fps=%u rec_timeout_ms=%u rec_keep=%u "
+        "seconds=%u imu=%d "
         "capture=mcm_raw10 output=gray8 raw_layout=%u threshold=%u\n",
-        args.exposure_lines, args.vision_on, args.pwm_on, args.record_on, args.record_auto, args.record_fps, args.record_keep,
-        args.seconds, imu_session != nullptr, static_cast<unsigned>(args.raw10_layout),
-        args.threshold);
+        args.exposure_lines, args.vision_on, args.pwm_on, args.record_on, args.record_auto,
+        args.record_fps, args.record_timeout_ms, args.record_keep, args.seconds,
+        imu_session != nullptr, static_cast<unsigned>(args.raw10_layout), args.threshold);
     camera::Controls controls{};
     controls.initial_exposure_lines = args.exposure_lines;
     controls.raw10_layout = args.raw10_layout;
@@ -37,10 +37,10 @@ int run_services(
     if (!created) {
         log_camera_error(log, "create", "disable_capture", created.error());
     } else {
-        camera_failed =
-            CapturePipeline::execute(args, std::move(created.value()), control, log, imu_session, writes,
-                                     pwm_factory)
-            != 0;
+        camera_failed = CapturePipeline::execute(
+                            args, std::move(created.value()), control, log, imu_session, writes,
+                            pwm_factory, wifi_factory)
+                     != 0;
     }
     if (camera_failed) {
         log.line(

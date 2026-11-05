@@ -4,9 +4,9 @@
 
 | 文件 | 层 | 内容 |
 |---|---|---|
-| `math_types.cpp` | L3 数据 | 向量与四元数，字段直接表达数学值 |
-| `sample.cpp` | L3 数据 | 原始计数、采样值、单位和时间戳 |
-| `interface.cpp` | L3 抽象 | `IImu` 采样源接口 |
+| `math_types.hpp` | L3 数据 | 向量与四元数，字段直接表达数学值 |
+| `sample.hpp` | L3 数据 | 原始计数、采样值、单位和时间戳 |
+| `interface.hpp` | L3 抽象 | `IImu` 采样源接口 |
 | `estimator.cpp` | 计算 | `Estimator`、嵌套的 `Config` / `Estimate` / `SeedResult` / `QualityEvent` 及无分配估计逻辑 |
 | `k230/iim42652.cpp` | L2 适配器 | `k230::Iim42652`，唯一包含 `spi/iim42652.h` 的 C++ 类 |
 
@@ -36,8 +36,8 @@
 六轴 IMU 的偏航角靠陀螺积分，
 没有绝对航向传感器就会漂移；速度同样会受加速度计零偏和姿态误差影响。
 
-消费者导入 `dart.imu.estimator`、`dart.imu.interface` 或 `dart.imu.k230.iim42652`。
-CMake 的 `dart_imu` / `dart_imu_k230` 为静态模块库，各 `.cpp` 独立编译并参与最终链接。
+消费者包含 `imu/estimator.hpp`、`imu/interface.hpp` 或 `imu/k230/iim42652.hpp`。
+CMake 的 `dart_imu` / `dart_imu_k230` 为静态库，普通 `.cpp` 实现参与最终链接。
 
 ## 构建
 

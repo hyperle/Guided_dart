@@ -17,18 +17,18 @@
 
 #include "camera/c_api/raw10.h"
 
-import dart.app.startup.services;
-import dart.recorder.encoding.binary_decoder;
+#include "src/startup/services.hpp"
+#include "recorder/encoding/binary_decoder.hpp"
 
-import dart.app.startup.argument_parser;
-import dart.camera.interface;
-import dart.logging.logger;
-import dart.pwm.interface;
-import dart.recorder.encoding.binary_format;
+#include "src/startup/argument_parser.hpp"
+#include "camera/interface.hpp"
+#include "logging/logger.hpp"
+#include "pwm/interface.hpp"
+#include "recorder/encoding/binary_format.hpp"
 
-import dart.system.run_control;
-import dart.system.write_control;
-import dart.system.device_services;
+#include "system/run_control.hpp"
+#include "system/write_control.hpp"
+#include "system/device_services.hpp"
 
 namespace dart::tests {
 
@@ -210,6 +210,7 @@ public:
             channel.horizontal_us_per_pixel = i % 2 == 0 ? 1.0F : -1.0F;
             channel.vertical_us_per_pixel = i < 2 ? 2.0F : -2.0F;
         }
+        args.servo.max_delta_us = 100;
         if (compact)
             args.record_format = recorder::ImageFormat::kDbv;
         else
@@ -230,7 +231,7 @@ public:
             assert(pwm_writes_ >= 1);
             // Tracker retains the sampled acquisition centroid (103,103)
             // inside its deadband. Automatic aim is (160,120).
-            const pwm::Pulses expected{1487, 1611, 1439, 1563};
+            const pwm::Pulses expected{1419, 1543, 1507, 1631};
             for (std::size_t i = 0; i < expected.size(); ++i)
                 assert(std::abs(last_pwm_[i] - expected[i]) < 0.01F);
         }

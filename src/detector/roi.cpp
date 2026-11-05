@@ -1,4 +1,5 @@
-module;
+#include "src/detector/roi.hpp"
+
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -7,102 +8,26 @@ module;
 #include <expected>
 #include <limits>
 
-export module dart.detection.roi;
+#include "src/detector/armor.hpp"
+#include "src/detector/blob_workspace.hpp"
+#include "src/detector/geometry.hpp"
+#include "src/detector/interface.hpp"
+#include "src/detector/light.hpp"
+#include "src/detector/numeric.hpp"
+#include "src/detector/tracking.hpp"
 
-export import dart.detection.armor;
-import dart.detection.blob_workspace;
-import dart.detection.geometry;
-export import dart.detection.interface;
-export import dart.detection.light;
-import dart.detection.numeric;
-import dart.detection.tracking;
+namespace dart::detection {
 
-export namespace dart::detection {
-
-class RoiDetector final : public IDetector {
-public:
-    struct Config {
-        struct Window {
-            std::uint32_t min_width = 24;
-            std::uint32_t min_height = 64;
-            float size_k = 2.6F;
-            float margin = 12.0F;
-            float grow_per_miss = 0.5F;
-            float full_area_fraction = 0.75F;
-            std::uint32_t reset_after_misses = 3;
-            std::uint32_t full_scan_interval = 0;
-            std::chrono::milliseconds max_gap{250};
-        };
-        std::uint8_t threshold = 50;
-        BlobWorkspace::Config workspace{};
-        LightDetector::Config light{};
-        ArmorDetector::Config armor{};
-        TargetTracker::Config track{};
-        Window roi{};
-    };
-    RoiDetector() noexcept;
-    explicit RoiDetector(Config config) noexcept;
-    RoiDetector(const RoiDetector&) = delete;
-    RoiDetector& operator=(const RoiDetector&) = delete;
-
-    std::expected<void, DetectionError>
-        Prepare(std::uint32_t max_width, std::uint32_t max_height) noexcept;
-    std::expected<DetectResult, DetectionError>
-        Detect(const camera::FrameView& frame) noexcept override;
-    void Reset() noexcept override;
-    std::uint32_t run_high_water() const noexcept { return workspace_.run_high_water(); }
-
-private:
-    struct RoiState {
-        std::uint32_t missed_frames = 0;
-        std::uint32_t frames_since_full = 0;
-    };
-
-    bool ValidRoiConfig() const noexcept;
-    Rect NextWindow(std::uint32_t width, std::uint32_t height, const Target& predicted_light,
-                    const Target& predicted_armor, bool validate) const noexcept;
-
-    struct FrameHistory {
-        std::uint32_t width = 0;
-        std::uint32_t height = 0;
-        std::uint64_t sequence = 0;
-        std::chrono::microseconds received{};
-        bool valid = false;
-    };
-
-    struct TargetHistory {
-        std::uint32_t armor_misses = 0;
-    };
-
-    std::expected<void, DetectionError>
-        Measure(const camera::FrameView& frame, Rect window, DetectResult& result, bool tracking,
-                bool validate, const Target& predicted_light, const Target& predicted_armor) noexcept;
-    void UpdateTracking(DetectResult& result, bool tracking) noexcept;
-    bool ConfirmArmor(const Target& armor) noexcept;
-    bool QualityDropped(const Target& value, const Target& validated) const noexcept;
-    void ResetTracking() noexcept;
-
-    Config config_;
-    LightDetector light_;
-    ArmorDetector armor_;
-    BlobWorkspace workspace_;
-    LightTracker light_tracker_;
-    TargetTracker light_motion_, armor_motion_;
-    Target validated_light_{}, validated_armor_{}, pending_armor_{}, published_light_{};
-    std::uint32_t armor_hits_ = 0, tracking_frames_ = 0;
-    TargetHistory targets_{};
-    FrameHistory frame_{};
-    RoiState roi_state_{};
-};
-
-RoiDetector::RoiDetector() noexcept : RoiDetector(Config{}) {}
+RoiDetector::RoiDetector() noexcept
+    : RoiDetector(Config{}) {}
 
 RoiDetector::RoiDetector(Config config) noexcept
     : config_(config)
     , light_(config.light)
     , armor_(config.armor)
     , light_tracker_(config.light, config.track)
-    , light_motion_(config.track), armor_motion_(config.track) {}
+    , light_motion_(config.track)
+    , armor_motion_(config.track) {}
 
 std::expected<void, DetectionError>
     RoiDetector::Prepare(std::uint32_t max_width, std::uint32_t max_height) noexcept {
@@ -137,39 +62,51 @@ std::expected<DetectResult, DetectionError>
     const auto predicted_light = light_motion_.Predict(frame.received, frame.width, frame.height);
     const auto predicted_armor = armor_motion_.Predict(frame.received, frame.width, frame.height);
     const bool validate = tracking_frames_ + 1 >= config_.track.validation_interval
-        || pending_armor_.valid || targets_.armor_misses > 0;
-    const Rect window = NextWindow(frame.width, frame.height, predicted_light, predicted_armor, validate);
-    auto measured = Measure(frame, window, result, tracking, validate, predicted_light, predicted_armor);
-    if (!measured) return std::unexpected(measured.error());
+                       || pending_armor_.valid || targets_.armor_misses > 0;
+    const Rect window =
+        NextWindow(frame.width, frame.height, predicted_light, predicted_armor, validate);
+    auto measured =
+        Measure(frame, window, result, tracking, validate, predicted_light, predicted_armor);
+    if (!measured)
+        return std::unexpected(measured.error());
     if (tracking && !result.scan.full_frame
         && (!result.light.valid || result.light.clipped || result.armor.clipped)) {
         // The recovery scan still associates with the original target. A new
         // identity cannot inherit its lock through a same-frame rescan.
         result = {};
-        result.source = {frame.sequence, frame.source_pts, frame.received, frame.source_pts_timebase_validated};
+        result.source = {
+            frame.sequence, frame.source_pts, frame.received, frame.source_pts_timebase_validated};
         result.scan.rescanned = true;
-        measured = Measure(frame, FullWindow(frame.width, frame.height), result, true, true,
-                           predicted_light, predicted_armor);
-        if (!measured) return std::unexpected(measured.error());
+        measured = Measure(
+            frame, FullWindow(frame.width, frame.height), result, true, true, predicted_light,
+            predicted_armor);
+        if (!measured)
+            return std::unexpected(measured.error());
     }
     if (!tracking) {
         const bool armor_confirmed = ConfirmArmor(result.armor);
-        if (!light_tracker_.Confirm(result.light, frame.sequence, {})) result.light = {};
-        if (!result.light.valid || !armor_confirmed) result.armor = {};
+        if (!light_tracker_.Confirm(result.light, frame.sequence, {}))
+            result.light = {};
+        if (!result.light.valid || !armor_confirmed)
+            result.armor = {};
     } else if (!armor_motion_.last().valid) {
-        if (!ConfirmArmor(result.armor)) result.armor = {};
+        if (!ConfirmArmor(result.armor))
+            result.armor = {};
     }
     result.target = result.armor.valid ? result.armor : result.light;
     result.kind = result.armor.valid ? TargetKind::kArmor
-                : result.light.valid ? TargetKind::kLight : TargetKind::kNone;
+                : result.light.valid ? TargetKind::kLight
+                                     : TargetKind::kNone;
     UpdateTracking(result, tracking);
     // Stabilize published coordinates only; motion estimation always sees the
     // unsmoothed current measurement, so a slow-moving target is not frozen.
     if (result.light.valid && published_light_.valid && config_.light.deadband_px > 0
         && std::fabs(result.light.center.x - published_light_.center.x) <= config_.light.deadband_px
-        && std::fabs(result.light.center.y - published_light_.center.y) <= config_.light.deadband_px) {
+        && std::fabs(result.light.center.y - published_light_.center.y)
+               <= config_.light.deadband_px) {
         result.light.center = published_light_.center;
-        if (result.kind == TargetKind::kLight) result.target.center = result.light.center;
+        if (result.kind == TargetKind::kLight)
+            result.target.center = result.light.center;
     }
     published_light_ = result.light;
     frame_ = {frame.width, frame.height, frame.sequence, frame.received, true};
@@ -186,7 +123,10 @@ void RoiDetector::ResetTracking() noexcept {
     armor_hits_ = tracking_frames_ = 0;
 }
 
-void RoiDetector::Reset() noexcept { ResetTracking(); frame_ = {}; }
+void RoiDetector::Reset() noexcept {
+    ResetTracking();
+    frame_ = {};
+}
 
 bool RoiDetector::QualityDropped(const Target& value, const Target& validated) const noexcept {
     return value.valid && validated.valid
@@ -195,12 +135,19 @@ bool RoiDetector::QualityDropped(const Target& value, const Target& validated) c
 }
 
 bool RoiDetector::ConfirmArmor(const Target& armor) noexcept {
-    if (!armor.valid) { pending_armor_ = {}; armor_hits_ = 0; return false; }
-    if (!pending_armor_.valid || !std::isfinite(TargetTracker::MatchCost(
-            armor, pending_armor_, pending_armor_, config_.track))) armor_hits_ = 0;
+    if (!armor.valid) {
+        pending_armor_ = {};
+        armor_hits_ = 0;
+        return false;
+    }
+    if (!pending_armor_.valid
+        || !std::isfinite(
+            TargetTracker::MatchCost(armor, pending_armor_, pending_armor_, config_.track)))
+        armor_hits_ = 0;
     pending_armor_ = armor;
     IncrementSaturated(armor_hits_);
-    if (armor_hits_ < config_.armor.confirm_frames) return false;
+    if (armor_hits_ < config_.armor.confirm_frames)
+        return false;
     pending_armor_ = {};
     armor_hits_ = 0;
     return true;
@@ -212,11 +159,13 @@ void RoiDetector::UpdateTracking(DetectResult& result, bool tracking) noexcept {
         if (result.scan.full_validation) {
             validated_light_ = result.light;
             tracking_frames_ = 0;
-        } else IncrementSaturated(tracking_frames_);
+        } else
+            IncrementSaturated(tracking_frames_);
         if (result.armor.valid) {
             armor_motion_.Observe(result.armor, result.source.received);
             targets_.armor_misses = 0;
-            if (result.scan.full_validation) validated_armor_ = result.armor;
+            if (result.scan.full_validation)
+                validated_armor_ = result.armor;
         } else if (armor_motion_.last().valid) {
             IncrementSaturated(targets_.armor_misses);
             if (targets_.armor_misses >= config_.armor.track_hold) {
@@ -228,7 +177,8 @@ void RoiDetector::UpdateTracking(DetectResult& result, bool tracking) noexcept {
         roi_state_.missed_frames = 0;
     } else {
         IncrementSaturated(roi_state_.missed_frames);
-        if (!tracking && !light_tracker_.has_measurement()) light_tracker_.ClearConfirmation();
+        if (!tracking && !light_tracker_.has_measurement())
+            light_tracker_.ClearConfirmation();
         if (tracking && roi_state_.missed_frames >= config_.roi.reset_after_misses) {
             const auto misses = roi_state_.missed_frames;
             ResetTracking();
@@ -236,21 +186,26 @@ void RoiDetector::UpdateTracking(DetectResult& result, bool tracking) noexcept {
         }
     }
     result.missed_frames = roi_state_.missed_frames;
-    if (result.scan.full_frame) roi_state_.frames_since_full = 0;
-    else IncrementSaturated(roi_state_.frames_since_full);
+    if (result.scan.full_frame)
+        roi_state_.frames_since_full = 0;
+    else
+        IncrementSaturated(roi_state_.frames_since_full);
 }
 
 std::expected<void, DetectionError> RoiDetector::Measure(
-    const camera::FrameView& frame, Rect window, DetectResult& result, bool tracking,
-    bool validate, const Target& predicted_light, const Target& predicted_armor) noexcept {
+    const camera::FrameView& frame, Rect window, DetectResult& result, bool tracking, bool validate,
+    const Target& predicted_light, const Target& predicted_armor) noexcept {
     result.scan.phase = tracking ? DetectionPhase::kTrack : DetectionPhase::kDetect;
     result.scan.search_window = window;
     result.scan.full_frame = IsFullWindow(window, frame.width, frame.height);
-    const bool sampled_acquire = !tracking && result.scan.full_frame && config_.light.search_step > 1;
-    auto blobs = workspace_.Scan(frame, window, config_.threshold,
+    const bool sampled_acquire =
+        !tracking && result.scan.full_frame && config_.light.search_step > 1;
+    auto blobs = workspace_.Scan(
+        frame, window, config_.threshold,
         std::min(config_.light.min_area, config_.armor.area_floor),
         sampled_acquire ? config_.light.search_step : 1, !tracking);
-    if (!blobs) return std::unexpected(blobs.error());
+    if (!blobs)
+        return std::unexpected(blobs.error());
     const auto collect_stats = [&] {
         result.scan.candidates += static_cast<std::uint32_t>(blobs->size());
         result.scan.rejected_contrast += workspace_.rejected_contrast();
@@ -260,8 +215,9 @@ std::expected<void, DetectionError> RoiDetector::Measure(
     };
     const Blob* selected_light = nullptr;
     const auto frame_area = static_cast<std::uint64_t>(frame.width) * frame.height;
-    result.light = tracking ? light_.Track(*blobs, frame_area, light_motion_, predicted_light, &selected_light)
-                            : light_.Detect(*blobs, frame_area, &selected_light);
+    result.light =
+        tracking ? light_.Track(*blobs, frame_area, light_motion_, predicted_light, &selected_light)
+                 : light_.Detect(*blobs, frame_area, &selected_light);
     Blob light_blob = selected_light ? *selected_light : Blob{};
     validate = !tracking || validate || QualityDropped(result.light, validated_light_);
     std::array<Blob, 2> pair{};
@@ -270,9 +226,11 @@ std::expected<void, DetectionError> RoiDetector::Measure(
         collect_stats();
         const auto armor_window = armor_.SearchWindow(result.light, frame.width, frame.height);
         if (armor_window.width > 0 && armor_window.height > 0) {
-            blobs = workspace_.Scan(frame, armor_window, config_.threshold,
+            blobs = workspace_.Scan(
+                frame, armor_window, config_.threshold,
                 std::min(config_.light.min_area, config_.armor.area_floor), 1, true);
-            if (!blobs) return std::unexpected(blobs.error());
+            if (!blobs)
+                return std::unexpected(blobs.error());
             result.armor = armor_.Detect(*blobs, result.light, nullptr, &frame, false, &pair);
         } else {
             // No second scan was made; its statistics were already collected.
@@ -280,27 +238,35 @@ std::expected<void, DetectionError> RoiDetector::Measure(
             return {};
         }
     } else if (result.light.valid && (associate_armor || validate)) {
-        result.armor = armor_.Detect(*blobs, result.light, associate_armor ? &predicted_armor : nullptr,
-                                     &frame, associate_armor, &pair);
-        if (associate_armor && !std::isfinite(armor_motion_.MatchCost(result.armor, predicted_armor)))
+        result.armor = armor_.Detect(
+            *blobs, result.light, associate_armor ? &predicted_armor : nullptr, &frame,
+            associate_armor, &pair);
+        if (associate_armor
+            && !std::isfinite(armor_motion_.MatchCost(result.armor, predicted_armor)))
             result.armor = {};
     }
     validate = validate || QualityDropped(result.armor, validated_armor_);
     result.scan.full_validation = validate;
     if (tracking && validate && result.light.valid) {
         auto accepted = workspace_.ValidateStability(frame, light_blob, config_.threshold, window);
-        if (!accepted) return std::unexpected(accepted.error());
+        if (!accepted)
+            return std::unexpected(accepted.error());
         result.light = *accepted ? LightDetector::TargetFromBlob(light_blob) : Target{};
-        if (!result.light.valid) result.armor = {};
+        if (!result.light.valid)
+            result.armor = {};
         if (result.armor.valid) {
             bool pair_ok = true;
             for (auto& bar : pair) {
                 auto stable = workspace_.ValidateStability(frame, bar, config_.threshold, window);
-                if (!stable) return std::unexpected(stable.error());
+                if (!stable)
+                    return std::unexpected(stable.error());
                 pair_ok = pair_ok && *stable;
             }
-            result.armor = pair_ok ? armor_.Detect(pair, result.light,
-                associate_armor ? &predicted_armor : nullptr, &frame, associate_armor) : Target{};
+            result.armor = pair_ok
+                             ? armor_.Detect(
+                                   pair, result.light, associate_armor ? &predicted_armor : nullptr,
+                                   &frame, associate_armor)
+                             : Target{};
         }
     }
     collect_stats();
@@ -317,29 +283,33 @@ bool RoiDetector::ValidRoiConfig() const noexcept {
         && config.max_gap.count() > 0;
 }
 
-Rect RoiDetector::NextWindow(std::uint32_t width, std::uint32_t height,
-    const Target& predicted_light, const Target& predicted_armor, bool validate) const noexcept {
+Rect RoiDetector::NextWindow(
+    std::uint32_t width, std::uint32_t height, const Target& predicted_light,
+    const Target& predicted_armor, bool validate) const noexcept {
     const auto& config = config_.roi;
     const auto& state = roi_state_;
     const bool has_light = predicted_light.valid;
     if (!has_light || state.missed_frames >= config.reset_after_misses
-        || (config.full_scan_interval > 0 && state.frames_since_full >= config.full_scan_interval)) {
+        || (config.full_scan_interval > 0
+            && state.frames_since_full >= config.full_scan_interval)) {
         return FullWindow(width, height);
     }
     Rect envelope = predicted_light.bounds;
-    if (predicted_armor.valid) envelope = UniteWindows(envelope, predicted_armor.bounds);
-    else if (validate) envelope = UniteWindows(envelope, armor_.SearchWindow(predicted_light, width, height));
+    if (predicted_armor.valid)
+        envelope = UniteWindows(envelope, predicted_armor.bounds);
+    else if (validate)
+        envelope = UniteWindows(envelope, armor_.SearchWindow(predicted_light, width, height));
     const double grow = 1.0 + static_cast<double>(config.grow_per_miss) * state.missed_frames;
     const double rw = std::min<double>(
-        width, std::max<double>(
-                   config.min_width, (envelope.width * static_cast<double>(config.size_k)
-                                      + 2.0 * config.margin)
-                                         * grow));
+        width,
+        std::max<double>(
+            config.min_width,
+            (envelope.width * static_cast<double>(config.size_k) + 2.0 * config.margin) * grow));
     const double rh = std::min<double>(
-        height, std::max<double>(
-                    config.min_height, (envelope.height * static_cast<double>(config.size_k)
-                                        + 2.0 * config.margin)
-                                           * grow));
+        height,
+        std::max<double>(
+            config.min_height,
+            (envelope.height * static_cast<double>(config.size_k) + 2.0 * config.margin) * grow));
     const auto w = static_cast<std::uint32_t>(std::ceil(rw));
     const auto h = static_cast<std::uint32_t>(std::ceil(rh));
     if (static_cast<double>(w) * h

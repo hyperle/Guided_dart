@@ -10,7 +10,7 @@
 
 #include "camera/c_api/camera.h"
 
-import dart.detection.roi;
+#include "src/detector/roi.hpp"
 
 namespace dart::canmv {
 

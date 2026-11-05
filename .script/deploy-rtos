@@ -174,4 +174,4 @@ fi
 info "部署完成；请重启板子以加载新文件（读卡器模式先卸载 SD 卡再插回板子）"
 info "板端验证:"
 info "  msh> ${BOARD_DIR}/launcher -t"
-info "本轮清单上电自动运行 imu_raw_probe；不与其它 IMU/SPI1 使用者同时运行"
+info "本轮清单启用 dart_app 视觉识别、坐标与四路 PWM；重启后按清单加载"

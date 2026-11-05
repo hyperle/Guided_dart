@@ -1,4 +1,5 @@
-module;
+#include "tools/video_player/recording_paths.hpp"
+
 #include <QDir>
 #include <QFileInfo>
 #include <QRegularExpression>
@@ -6,21 +7,7 @@ module;
 #include <QStringList>
 #include <algorithm>
 
-export module dart.tools.video_player.recording_paths;
-
-
-
-export namespace dart::tools::video_player {
-
-// Paths on the host may differ from the session path recorded on the board.
-struct RecordingPaths {
-    QString images;
-    QString frames_csv;
-    QString detection_csv;
-
-    static RecordingPaths resolve(const QString& directory);
-    static QStringList directories(const QString& directory);
-};
+namespace dart::tools::video_player {
 
 QStringList RecordingPaths::directories(const QString& directory) {
     const QDir input(QFileInfo(directory).absoluteFilePath());
@@ -28,10 +15,12 @@ QStringList RecordingPaths::directories(const QString& directory) {
     if (input.exists("img") || input.exists("frames.csv") || input.exists("logs/frames.csv"))
         return {input.absolutePath()};
     const QRegularExpression image_entry(QStringLiteral(
-        "^(?:b[0-9]{7}|part_[0-9]{6}|recording\\.(pgm|pbm|dbv)|(?:frame_)?[0-9]+\\.(png|pgm|pbm))$"));
+        "^(?:b[0-9]{7}|part_[0-9]{6}|recording\\.(pgm|pbm|dbv)|(?:frame_)?[0-9]+\\.(png|pgm|pbm))"
+        "$"));
     const QRegularExpression session_name(QStringLiteral("^rec_([0-9]+)$"));
     QStringList sessions;
-    for (const auto& entry : input.entryInfoList(QDir::AllEntries | QDir::NoDotAndDotDot | QDir::NoSymLinks)) {
+    for (const auto& entry :
+         input.entryInfoList(QDir::AllEntries | QDir::NoDotAndDotDot | QDir::NoSymLinks)) {
         if (image_entry.match(entry.fileName()).hasMatch())
             return {input.absolutePath()};
         if (entry.isDir() && session_name.match(entry.fileName()).hasMatch())

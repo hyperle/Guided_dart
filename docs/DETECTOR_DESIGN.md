@@ -1,6 +1,8 @@
 # 识别与跟踪设计基线
 
-状态：算法规格，含尚未落地的目标接口。当前检测实现在 `src/detector/`，应用组装在 `src/startup/services.cpp`，相机资源管理在 `include/firmware/src/camera/`。板端流程见 [`DEBUG_GUIDE.md`](DEBUG_GUIDE.md)，C 化和迁移顺序见 [`VISION_C_REFACTOR_PLAN.md`](VISION_C_REFACTOR_PLAN.md)。
+状态：算法设计参考，包含尚未实施的候选方案；不规定当前工程的文件布局、
+实现语言或迁移任务。实际接口见 [检测器说明](../src/detector/README.md)，
+工程约束见 [AGENTS.md](../AGENTS.md)，板端流程见 [调试手册](DEBUG_GUIDE.md)。
 
 ## 1. 两个工况
 
@@ -14,36 +16,18 @@
 
 贯穿两态：
 
-1. 所有识别模块只读同一张带 stride/有效位的二值图；不重复读取或修改采集缓冲。
+1. 识别模块只读带 stride/有效位的输入图像；不重复读取或修改采集缓冲。
 2. 单帧不能区分坏点和目标时，用连续帧、位移/尺度物理性和质量做确认。
 3. 离群、病态矩阵、非法窗口一律作为“本帧没有有效测量”，不能悄悄污染状态。
 4. 识别结果是值类型（坐标、尺度、质量、时间戳、状态、有效位），不把帧指针传进控制层。
 
-## 2. 数据流和模块边界
+## 2. 代码边界
 
-```
-固定帧池（C）
-  → 二值化（C）
-  → TileScanner / RoiMeasurer（C，固定工作区）
-  → BlipConfirmer / ScaleAwareTracker（C++，策略和状态）
-  → DetectResult（值类型）
-  → JointObserver / FlightController（C++）
-```
+当前检测器位于 `src/detector/`，使用常规 C++ 头文件和源文件，只消费只读帧数据，
+不持有相机或厂商句柄。相机的 C ABI 与硬件适配位于 `include/firmware/src/camera/`。
+接口、配置和内部状态按所属功能组织，具体声明以源码及检测器说明为准。
 
-目标接口（路径是规划，不代表当前文件已存在）：
-
-| 模块 | 语言/目标位置 | 只负责 |
-|---|---|---|
-| 二值化 | C，`src/detector/binarize.c`（规划，当前集成在 `detector.cpp`） | Y 平面和阈值到 0/255，检查 stride/边界 |
-| 帧池 | C，`include/firmware/src/camera/{c_api,k230}/` | 槽位状态、VB/MMZ 所有权、cache/DMA 契约 |
-| 全图扫描 | C，`src/detection/scanner/tile_scanner.c` | 瓦片统计、候选合并、Top-K |
-| ROI 测量 | C，`src/detection/measure/roi_measure.c` | 窗口内连通域、质心、面积、形状质量 |
-| 几何纯函数 | C，`src/detection/geometry/*.c` | POD 输入输出，不读全局状态 |
-| 确认器 | C++，`src/detection/track/blip_confirmer.cpp` | 滑窗、关联门、运动/贴边判据 |
-| 跟踪器 | C++，`src/detection/track/target_tracker.cpp` | 状态迁移、滤波和 ROI 策略 |
-| 编排 | C++，`src/detection/pipeline.cpp` | 一帧调度、时钟注入、诊断计数和 C ABI 翻译 |
-
-C 模块不认识状态机、日志和控制；C++ 不直接读像素或调用 MPP。工作区采用“查询大小 → 调用方提供存储 → init → process”，运行态不得分配。
+下文的瓦片扫描、滤波器和状态机属于设计参考，不代表已实现，也不授权自动改写当前模块。
 
 ## 3. 启动阶段：全图和时间确认
 
@@ -129,7 +113,7 @@ LOST
 
 ## 7. 验证顺序
 
-1. 主机：只测 C 内核的标量参考、几何、窗口边界和固定矩阵；C++ 测状态迁移和错误传播。
+1. 主机：只测算法内核的标量参考、几何、窗口边界和固定矩阵；C++ 测状态迁移和错误传播。
 2. 交叉：检查 C ABI、RVV 编译、段大小、工作区不足和 `-fno-exceptions`。
 3. 板端：先跑帧池/二值化/扫描探针，再接真实采集；验证 cache/DMA、stride、曝光和帧时间戳。
 4. 最后接跟踪和控制，保存原始帧、检测结果、状态迁移和失败样本。

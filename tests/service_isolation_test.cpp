@@ -15,21 +15,21 @@
 #include <unistd.h>
 #include "camera/error_codes.h"
 
-import dart.app.startup.services;
+#include "src/startup/services.hpp"
 
-import dart.camera.error;
-import dart.camera.interface;
-import dart.imu.sample;
+#include "camera/error.hpp"
+#include "camera/interface.hpp"
+#include "imu/sample.hpp"
 
-import dart.imu.interface;
-import dart.runtime.imu.session;
-import dart.app.startup.argument_parser;
-import dart.logging.logger;
-import dart.system.run_control;
-import dart.system.write_control;
-import dart.system.device_services;
+#include "imu/interface.hpp"
+#include "runtime/imu/session.hpp"
+#include "src/startup/argument_parser.hpp"
+#include "logging/logger.hpp"
+#include "system/run_control.hpp"
+#include "system/write_control.hpp"
+#include "system/device_services.hpp"
 
-import dart.app.diagnostics.camera_error;
+#include "src/diagnostics/camera_error.hpp"
 
 namespace dart::tests {
 

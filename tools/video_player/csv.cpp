@@ -1,4 +1,5 @@
-module;
+#include "tools/video_player/csv.hpp"
+
 #include <QFile>
 #include <QString>
 #include <QStringList>
@@ -8,11 +9,9 @@ module;
 #include <utility>
 #include <vector>
 
-export module dart.tools.video_player.csv;
+#include "tools/video_player/recording_types.hpp"
 
-import dart.tools.video_player.recording_types;
-
-export namespace dart::tools::video_player {
+namespace dart::tools::video_player {
 
 bool split_csv(const QString& line, QStringList& fields) {
     QString field;

@@ -1,4 +1,5 @@
-module;
+#include "system/launcher_exit.hpp"
+
 #include <cstddef>
 #include <cstdio>
 #include <cstdlib>
@@ -6,11 +7,7 @@ module;
 #include <fcntl.h>
 #include <unistd.h>
 
-export module dart.system.launcher_exit;
-
-
-
-export namespace dart::platform {
+namespace dart::platform {
 
 void notify_launcher_exit() noexcept {
     const char* marker = std::getenv("DART_EXIT_MARKER");

@@ -6,9 +6,9 @@
 #include "drv_fpioa.h"
 #include "drv_pwm.h"
 
-import dart.pwm.k230.output;
+#include "pwm/k230/output.hpp"
 
-import dart.pwm.interface;
+#include "pwm/interface.hpp"
 
 namespace dart::tests {
 

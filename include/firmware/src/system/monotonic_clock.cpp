@@ -1,14 +1,11 @@
-module;
+#include "system/monotonic_clock.hpp"
+
 #include <cerrno>
 #include <chrono>
 #include <cstdint>
 #include <time.h>
 
-export module dart.system.monotonic_clock;
-
-
-
-export namespace dart::platform {
+namespace dart::platform {
 
 std::int64_t mono_ms() noexcept {
     const auto now = std::chrono::steady_clock::now().time_since_epoch();

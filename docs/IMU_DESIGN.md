@@ -1,6 +1,8 @@
 # IMU 模块设计基线
 
-状态：接口/并发设计；当前没有 IMU 驱动或控制消费者实现。
+状态：历史接口/并发设计目标；当前已有 IMU 驱动、估计器和采样服务。
+实际接口见 `include/firmware/src/imu/README.md` 与 `runtime/imu/README.md`；
+下述目标 ABI 和 seqlock/history 方案不代表当前实现，也不是本轮迁移要求。
 
 IMU 模块是 L2/L3 的数据服务，不属于控制算法。原厂 C 驱动在 ACL 内完成采样、标定和时间戳；上层只接收稳定的 C ABI 或 C++ 抽象，不包含厂商头文件。
 

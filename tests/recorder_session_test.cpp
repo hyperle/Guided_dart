@@ -17,8 +17,8 @@
 # include <thread>
 # include <unistd.h>
 
-import dart.camera.frame_lease;
-import dart.recorder.recorder;
+#include "camera/frame_lease.hpp"
+#include "recorder/recorder.hpp"
 
 namespace dart::tests {
 
@@ -232,6 +232,8 @@ private:
             if (i < 2) {
                 submit(recorder, slot);
             } else {
+                for (unsigned wait = 0; wait < 1000 && recorder.started(); ++wait)
+                    std::this_thread::sleep_for(std::chrono::milliseconds{1});
                 assert(recorder.limit_reached() && !recorder.started());
                 auto lease = dart::camera::FrameLeaseAccess::make(&slot);
                 assert(

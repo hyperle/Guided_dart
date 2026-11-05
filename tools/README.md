@@ -26,6 +26,11 @@ bag 写入边界，无需创建 ROS package 或运行 colcon。
 [`wifi/video_server.py`](wifi/video_server.py) 在电脑端用 FFmpeg 编码 H.264/HLS，
 供手机网页播放，可通过公网隧道跨网络访问。运行方法、实测和固件要求见 [Wi-Fi 说明](wifi/README.md)。
 
+[`wifi_receiver/`](wifi_receiver/README.md) 是原生 RT-Smart 回传配套的 Rust 主机服务。
+`dart_app --wifi on --wifi-config /data/app/wifi.conf` 将同一张采集图异步 JPEG 压缩并上传；
+Rust 接收后调用 FFmpeg 编码 H.264，提供本地网页/HLS，同时保存每轮 MP4。
+构建、配置、网络条件和验收命令见该工具说明。
+
 ## 录像逐帧播放器
 
 [`video_player/`](video_player/README.md) 移植远程 `k230_v1` 的 Qt 播放器，

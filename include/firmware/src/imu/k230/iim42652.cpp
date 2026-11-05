@@ -1,55 +1,33 @@
-module;
+#include "imu/k230/iim42652.hpp"
+
 #include <expected>
 
 #include "spi/iim42652.h"
 
-export module dart.imu.k230.iim42652;
+#include "imu/interface.hpp"
 
-export import dart.imu.interface;
+namespace dart::imu::k230 {
 
-export namespace dart::imu::k230 {
+const dart_iim42652_diagnostic_t& Iim42652::initialization_diagnostic() const noexcept {
+    return diagnostic_;
+}
 
-class Iim42652 final : public IImu {
-public:
-    explicit Iim42652(const dart_iim42652_config_t& config) noexcept
-        : config_(config) {}
-    ~Iim42652() override;
-
-    Iim42652(const Iim42652&) = delete;
-    Iim42652& operator=(const Iim42652&) = delete;
-    Iim42652(Iim42652&&) = delete;
-    Iim42652& operator=(Iim42652&&) = delete;
-
-    std::expected<void, ErrorCode> initialize() noexcept;
-    std::expected<Sample, ErrorCode> read_sample() noexcept override;
-    void deinitialize() noexcept;
-    const dart_iim42652_diagnostic_t& initialization_diagnostic() const noexcept {
-        return diagnostic_;
+ErrorCode Iim42652::convert_error(dart_iim42652_status_t status) noexcept {
+    switch (status) {
+    case DART_IIM42652_ALREADY_INITIALIZED: return ErrorCode::kAlreadyInitialized;
+    case DART_IIM42652_NOT_INITIALIZED: return ErrorCode::kNotInitialized;
+    case DART_IIM42652_NO_MEMORY: return ErrorCode::kNoMemory;
+    case DART_IIM42652_UNEXPECTED_DEVICE_ID: return ErrorCode::kUnexpectedDeviceId;
+    case DART_IIM42652_CLOCK_ERROR: return ErrorCode::kClock;
+    case DART_IIM42652_READY_TIMEOUT: return ErrorCode::kReadyTimeout;
+    case DART_IIM42652_NO_DATA: return ErrorCode::kNoData;
+    case DART_IIM42652_INVALID_ARGUMENT: return ErrorCode::kInvalidConfiguration;
+    case DART_IIM42652_CONFIGURATION_MISMATCH: return ErrorCode::kInvalidConfiguration;
+    case DART_IIM42652_BUS_ERROR:
+    case DART_IIM42652_OK: return ErrorCode::kBusTransfer;
     }
-
-private:
-    dart_iim42652_config_t config_{};
-    dart_iim42652_t* sensor_ = nullptr;
-    dart_iim42652_diagnostic_t diagnostic_{};
-
-private:
-    static ErrorCode convert_error(dart_iim42652_status_t status) noexcept {
-        switch (status) {
-        case DART_IIM42652_ALREADY_INITIALIZED: return ErrorCode::kAlreadyInitialized;
-        case DART_IIM42652_NOT_INITIALIZED: return ErrorCode::kNotInitialized;
-        case DART_IIM42652_NO_MEMORY: return ErrorCode::kNoMemory;
-        case DART_IIM42652_UNEXPECTED_DEVICE_ID: return ErrorCode::kUnexpectedDeviceId;
-        case DART_IIM42652_CLOCK_ERROR: return ErrorCode::kClock;
-        case DART_IIM42652_READY_TIMEOUT: return ErrorCode::kReadyTimeout;
-        case DART_IIM42652_NO_DATA: return ErrorCode::kNoData;
-        case DART_IIM42652_INVALID_ARGUMENT: return ErrorCode::kInvalidConfiguration;
-        case DART_IIM42652_CONFIGURATION_MISMATCH: return ErrorCode::kInvalidConfiguration;
-        case DART_IIM42652_BUS_ERROR:
-        case DART_IIM42652_OK: return ErrorCode::kBusTransfer;
-        }
-        return ErrorCode::kBusTransfer;
-    }
-};
+    return ErrorCode::kBusTransfer;
+}
 
 Iim42652::~Iim42652() { deinitialize(); }
 

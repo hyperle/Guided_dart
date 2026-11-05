@@ -1,3 +1,3 @@
-import dart.tools.video_player.player;
+#include "tools/video_player/player.hpp"
 
 int main(int argc, char** argv) { return dart::tools::video_player::run_application(argc, argv); }

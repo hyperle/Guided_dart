@@ -11,13 +11,13 @@
 #include <string>
 #include <thread>
 
-import dart.logging.csv_writer;
-import dart.logging.logger;
-import dart.recorder.recorder;
-import dart.runtime.imu.session;
-import dart.app.recording.trigger;
+#include "logging/csv_writer.hpp"
+#include "logging/logger.hpp"
+#include "recorder/recorder.hpp"
+#include "runtime/imu/session.hpp"
+#include "src/recording/trigger.hpp"
 
-import dart.system.write_control;
+#include "system/write_control.hpp"
 
 namespace dart::tests {
 

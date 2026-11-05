@@ -1,16 +1,23 @@
 # .script/ —— 仓库短命令
 
-日常命令在仓库里任何位置都能跑（脚本自己会定位仓库根）。C++ 构建要求
-CMake >= 3.28、Ninja >= 1.11，以及 GCC >= 14 或 Clang >= 19 + clang-tools；
-交叉构建可由 Clang 复用现有 GCC musl 工具链。安装与首次更新缓存见 [工具链说明](../README.md#3-工具链与-sdk一次性)。
+日常命令在仓库里任何位置都能跑（脚本自己会定位仓库根）。构建使用 CMake >= 3.28
+和 C11 / C++23 编译器，预设生成器为 Ninja；交叉编译使用 SDK 配套 RISC-V musl 工具链。
+不需要命名模块扫描工具。环境配置见 [工具链说明](../README.md#3-工具链与-sdk一次性)。
 
 | 命令 | 作用 | 参数 |
 |---|---|---|
 | `build-rtos` | 交叉编译板端可执行文件 | `-r`（清 build-cross 重编）/ `--host`（host 编译检查）/ `launcher` / `dart_app` / `pwm_swing` / `imu_raw_probe` |
 | `deploy-rtos` | 把产物上板到 `/sdcard/app/` | `launcher` / `dart_app` / `pwm_swing` / `imu_raw_probe` / `list`（只推清单）；可加 `--keep-logs` |
 | `clean-rtos-data` | 设置暂停后清除两个分区上的空闲日志与录像，跳过写入中的项 | `--dry-run` / `--keep-paused` / `logs` / `records` |
+| `stream-rtos` | 运行时关闭/恢复回传编码和 Wi-Fi 发送，不等待板端应答 | `off` 暂停 / `on` 解除暂停；仅 `--wifi on` 启动的应用会恢复 |
 | `write-rtos` | 暂停或恢复录像与日志写入，不等待板端应答 | `off` 暂停 / `on` 解除暂停 |
 | `clean-rtos` | 清除板端内容（**保留目录本身**；固件自带的 `examples/` 默认不动） | `launcher` / `dart_app` / `list` / `logs` / `records` / `examples` |
+
+`stream-rtos off` 仅创建 `/sdcard/app/control/stream.pause`，由回传管理线程异步关闭
+编码与发送并回收自身像素缓冲。日志 `module=wifi state=paused active=0 buffers=0`
+表示完成回收；`state=stopping active=0` 表示已停止接收新帧，仍在等待旧调用结束。
+`stream-rtos on` 清除此标记，重新加载回传配置并恢复；它不改变 `write.pause`，
+也不控制本地录像、日志或其他任务。共享网卡关联保留，避免断开其他使用者。
 
 清理不等待板端停写应答；成功后释放本次暂停，有跳过项或失败时保持暂停。
 处理完成后可运行 `write-rtos on` 恢复。详见 [写入控制](../runtime/WRITE_CONTROL.md)。
@@ -40,16 +47,26 @@ deploy-rtos pwm_swing
 接线、333 Hz / 1420～1620 µs 参数和波形验收见
 [`pwm_swing` 说明](../tools/pwm_swing/README.md)。
 
-当前启动清单为 IMU 示波器直读测试，SPI1 / CS IO14，先唤醒 IMU、等待 50 ms 再读数：
+当前启动清单为 `dart_app` 完整视觉控制：识别、全图坐标、两轴映射与四路 PWM，
+启用录像，IMU 和 Wi-Fi 关闭。零点、方向、增益和增量限幅以清单参数为准，说明见 [舵机控制说明](../src/control/README.md)。
 
 ```bash
-build-rtos imu_raw_probe
-deploy-rtos imu_raw_probe
+build-rtos dart_app
+build-rtos launcher
+deploy-rtos dart_app
+deploy-rtos launcher
 deploy-rtos list
-# 重启已部署 launcher 的板子后开始循环读数。
+# 重启后由 launcher 加载 startup_final.list。
 ```
 
-读取命令、波形和恢复视觉版本见 [IMU 测试说明](../runtime/imu/README.md)。
+坐标写入 `/data/app/records/detection.csv`，实际下发脉宽在
+`/data/app/logs/dart_app.log` 的 `module=servo` 状态行。
+IMU 直读程序仅保留为手动测试，读取命令及波形见 [IMU 测试说明](../runtime/imu/README.md)。
+
+固件的开机命令必须实际指向 launcher。若仍为 `/sdcard/micropython &`，
+仅部署 `app/launcher` 不会启动应用；本轮用原生 launcher ELF 补到该旧入口，
+断电重上电后核对 `launcher.log` 和 `dart_app.log`，详见
+[旧固件入口说明](../runtime/launcher/README.md#保留旧固件自启路径的原生入口)。
 
 需要指定其它板子时，可通过环境变量或 `.script/board.env` 配置：
 

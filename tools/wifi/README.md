@@ -1,5 +1,10 @@
 # CanMV Wi-Fi 相机回传与诊断
 
+原生 RT-Smart 的 `dart_app` 已接入 JPEG 压缩/发送线程，配套的
+[Rust 主机接收端](../wifi_receiver/README.md) 负责 HLS/MP4 编码输出。
+板端配置示例见 [wifi.conf.example](wifi.conf.example)。本页以下保留 MicroPython
+诊断、手机中继与历史固件验证说明，便于迁移对照。
+
 打开 [wifi_test.py](wifi_test.py)，在 CanMV VS Code 插件中连接板子并运行当前文件。
 脚本独立运行，无需交叉编译。上电开关、Wi-Fi 机械开关由用户手动打开；建议在启动前
 打开 Wi-Fi 开关，让固件开机时能枚举到模块。

@@ -18,13 +18,13 @@
 #include <stdexcept>
 #include <vector>
 
-import dart.recorder.encoding.binary_encoder;
-import dart.tools.video_player.player;
+#include "recorder/encoding/binary_encoder.hpp"
+#include "tools/video_player/player.hpp"
 
-import dart.recorder.encoding.binary_format;
-import dart.tools.video_player.csv;
-import dart.tools.video_player.image_reader;
-import dart.tools.video_player.recording_paths;
+#include "recorder/encoding/binary_format.hpp"
+#include "tools/video_player/csv.hpp"
+#include "tools/video_player/image_reader.hpp"
+#include "tools/video_player/recording_paths.hpp"
 
 namespace dart::tools::video_player::tests {
 

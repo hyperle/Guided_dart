@@ -1,15 +1,14 @@
-module;
+#include "tools/video_player/image_reader.hpp"
+
 #include <QBuffer>
 #include <QFile>
 #include <QImageReader>
 #include <QString>
 
-export module dart.tools.video_player.image_reader;
+#include "tools/video_player/binary_stream.hpp"
+#include "tools/video_player/recording_types.hpp"
 
-import dart.tools.video_player.binary_stream;
-import dart.tools.video_player.recording_types;
-
-export namespace dart::tools::video_player {
+namespace dart::tools::video_player {
 
 QImage read_frame_image(const Frame& frame, QString& error) {
     error.clear();

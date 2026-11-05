@@ -1,4 +1,5 @@
-module;
+#include "recorder/storage/image_writer.hpp"
+
 #include <cerrno>
 #include <chrono>
 #include <cstddef>
@@ -11,139 +12,98 @@ module;
 #include <span>
 #include <unistd.h>
 
-export module dart.recorder.storage.image_writer;
+#include "camera/frame_view.hpp"
+#include "recorder/config.hpp"
+#include "recorder/encoding/binary_encoder.hpp"
+#include "recorder/encoding/binary_format.hpp"
+#include "recorder/encoding/png_encoder.hpp"
+#include "recorder/error.hpp"
+#include "recorder/storage/image_files.hpp"
+#include "recorder/storage/session.hpp"
 
-import dart.camera.frame_view;
-import dart.recorder.config;
-import dart.recorder.encoding.binary_encoder;
-import dart.recorder.encoding.binary_format;
-import dart.recorder.encoding.png_encoder;
-import dart.recorder.error;
-import dart.recorder.storage.image_files;
-import dart.recorder.storage.session;
+namespace dart::recorder {
 
-export namespace dart::recorder {
-
-class ImageWriter final {
-public:
-    ImageWriter(const Config& config, const Session& session) noexcept
-        : config_(config)
-        , session_(session) {}
-    ~ImageWriter() { (void)close(); }
-    bool prepare(std::size_t frame_bytes) noexcept {
-        frame_bytes_ = frame_bytes;
-        if (config_.image_format == ImageFormat::kPng)
-            return png_.prepare(config_.width, config_.height, config_.pbm_threshold);
-        if (config_.image_format == ImageFormat::kDbv) {
-            file_buffer_.reset(new (std::nothrow) char[kFileBufferBytes]);
-            return file_buffer_
-                && binary_.prepare(config_.width, config_.height, config_.pbm_threshold);
-        }
-        const bool pbm = config_.image_format == ImageFormat::kPbm;
-        const int n =
-            pbm ? std::snprintf(
-                      header_, sizeof(header_), "P4\n%u %u\n", config_.width, config_.height)
-                : std::snprintf(
-                      header_, sizeof(header_), "P5\n%u %u\n255\n", config_.width, config_.height);
-        if (n <= 0 || static_cast<std::size_t>(n) >= sizeof(header_))
-            return false;
-        header_bytes_ = static_cast<std::size_t>(n);
+bool ImageWriter::prepare(std::size_t frame_bytes) noexcept {
+    frame_bytes_ = frame_bytes;
+    if (config_.image_format == ImageFormat::kPng)
+        return png_.prepare(config_.width, config_.height, config_.pbm_threshold);
+    if (config_.image_format == ImageFormat::kDbv) {
         file_buffer_.reset(new (std::nothrow) char[kFileBufferBytes]);
-        if (!file_buffer_)
-            return false;
-        if (config_.image_format == ImageFormat::kPbm) {
-            pbm_row_bytes_ = (static_cast<std::size_t>(config_.width) + 7U) / 8U;
-            pbm_frame_.reset(new (std::nothrow) std::byte[payload_bytes()]);
-            return pbm_frame_ != nullptr;
-        }
-        return true;
+        return file_buffer_
+            && binary_.prepare(config_.width, config_.height, config_.pbm_threshold);
     }
-    bool open(RecorderError& error) noexcept {
-        files_.reset();
-        bytes_written_ = last_record_bytes_ = 0;
-        last_offset_ = 0;
-        binary_.reset();
-        image_name_[0] = '\0';
-        if (config_.image_format == ImageFormat::kPng) {
-            last_flush_ = std::chrono::steady_clock::now();
-            return true;
-        }
-        if (record_bytes() > session_.file_limit_bytes()) {
-            errno = ENOSPC;
-            error.set_file_error(Error::kStorage, session_.directory());
-            return false;
-        }
-        file_ = std::fopen(session_.image_path(), "wb");
-        if (file_ == nullptr) {
-            error.set_file_error(Error::kImageFile, session_.image_path());
-            return false;
-        }
-        (void)std::setvbuf(file_, file_buffer_.get(), _IOFBF, kFileBufferBytes);
-        bytes_written_ = 0;
+    const bool pbm = config_.image_format == ImageFormat::kPbm;
+    const int n =
+        pbm ? std::snprintf(header_, sizeof(header_), "P4\n%u %u\n", config_.width, config_.height)
+            : std::snprintf(
+                  header_, sizeof(header_), "P5\n%u %u\n255\n", config_.width, config_.height);
+    if (n <= 0 || static_cast<std::size_t>(n) >= sizeof(header_))
+        return false;
+    header_bytes_ = static_cast<std::size_t>(n);
+    file_buffer_.reset(new (std::nothrow) char[kFileBufferBytes]);
+    if (!file_buffer_)
+        return false;
+    if (config_.image_format == ImageFormat::kPbm) {
+        pbm_row_bytes_ = (static_cast<std::size_t>(config_.width) + 7U) / 8U;
+        pbm_frame_.reset(new (std::nothrow) std::byte[payload_bytes()]);
+        return pbm_frame_ != nullptr;
+    }
+    return true;
+}
+
+bool ImageWriter::open(RecorderError& error) noexcept {
+    files_.reset();
+    bytes_written_ = last_record_bytes_ = 0;
+    last_offset_ = 0;
+    binary_.reset();
+    image_name_[0] = '\0';
+    if (config_.image_format == ImageFormat::kPng) {
         last_flush_ = std::chrono::steady_clock::now();
         return true;
     }
-    bool close() noexcept {
-        if (file_ == nullptr)
-            return true;
-        const bool synced = sync();
-        const int sync_error = errno;
-        const int result = std::fclose(file_);
-        file_ = nullptr;
-        if (!synced)
-            errno = sync_error;
-        return synced && result == 0;
+    if (record_bytes() > session_.file_limit_bytes()) {
+        errno = ENOSPC;
+        error.set_file_error(Error::kStorage, session_.directory());
+        return false;
     }
-    bool valid_view(const camera::FrameView& view) const noexcept;
-    bool copy_image(std::span<std::byte> pixels, const camera::FrameView& view) noexcept;
-    bool write_image(std::span<const std::byte> pixels, std::uint64_t index = 1) noexcept;
-    std::size_t payload_bytes() const noexcept {
-        return config_.image_format == ImageFormat::kPbm
-                 ? pbm_row_bytes_ * static_cast<std::size_t>(config_.height)
-                 : frame_bytes_;
+    file_ = std::fopen(session_.image_path(), "wb");
+    if (file_ == nullptr) {
+        error.set_file_error(Error::kImageFile, session_.image_path());
+        return false;
     }
-    std::size_t record_bytes() const noexcept {
-        return config_.variable_record_size() ? last_record_bytes_ : header_bytes_ + payload_bytes();
-    }
-    std::uint64_t file_offset() const noexcept { return last_offset_; }
-    const char* image_name() const noexcept { return image_name_; }
-    std::uint64_t pack_us() const noexcept { return pack_us_; }
-    std::uint64_t io_us() const noexcept { return io_us_; }
-    std::uint64_t space_us() const noexcept { return space_us_; }
-    std::uint64_t open_us() const noexcept { return open_us_; }
-    std::uint64_t write_us() const noexcept { return write_us_; }
-    std::uint64_t close_us() const noexcept { return close_us_; }
+    (void)std::setvbuf(file_, file_buffer_.get(), _IOFBF, kFileBufferBytes);
+    bytes_written_ = 0;
+    last_flush_ = std::chrono::steady_clock::now();
+    return true;
+}
 
-private:
-    bool write_png(std::span<const std::byte> pixels, std::uint64_t index) noexcept;
-    bool write_binary(std::span<const std::byte> pixels) noexcept;
-    bool sync() noexcept {
-        // fflush only drains libc. FAT updates the directory size and cluster
-        // chain on fsync; without it a reset can leave a zero-byte recording.
-        return std::fflush(file_) == 0 && ::fsync(::fileno(file_)) == 0;
-    }
-    static constexpr std::size_t kFileBufferBytes = 256U * 1024U;
-    const Config& config_;
-    const Session& session_;
-    ImageFiles files_{config_, session_};
-    std::size_t frame_bytes_ = 0;
-    std::size_t pbm_row_bytes_ = 0;
-    char header_[64]{};
-    std::size_t header_bytes_ = 0;
-    std::unique_ptr<std::byte[]> pbm_frame_{};
-    std::unique_ptr<char[]> file_buffer_{};
-    PngEncoder png_{};
-    BinaryEncoder binary_{};
-    std::size_t last_record_bytes_ = 0;
-    std::uint64_t last_offset_ = 0;
-    char image_name_[48]{};
-    std::FILE* file_ = nullptr;
-    std::uint64_t bytes_written_ = 0;
-    std::uint64_t pack_us_ = 0;
-    std::uint64_t io_us_ = 0;
-    std::uint64_t space_us_ = 0, open_us_ = 0, write_us_ = 0, close_us_ = 0;
-    std::chrono::steady_clock::time_point last_flush_{};
-};
+bool ImageWriter::close() noexcept {
+    if (file_ == nullptr)
+        return true;
+    const bool synced = sync();
+    const int sync_error = errno;
+    const int result = std::fclose(file_);
+    file_ = nullptr;
+    if (!synced)
+        errno = sync_error;
+    return synced && result == 0;
+}
+
+std::size_t ImageWriter::payload_bytes() const noexcept {
+    return config_.image_format == ImageFormat::kPbm
+             ? pbm_row_bytes_ * static_cast<std::size_t>(config_.height)
+             : frame_bytes_;
+}
+
+std::size_t ImageWriter::record_bytes() const noexcept {
+    return config_.variable_record_size() ? last_record_bytes_ : header_bytes_ + payload_bytes();
+}
+
+bool ImageWriter::sync() noexcept {
+    // fflush only drains libc. FAT updates the directory size and cluster
+    // chain on fsync; without it a reset can leave a zero-byte recording.
+    return std::fflush(file_) == 0 && ::fsync(::fileno(file_)) == 0;
+}
 
 bool ImageWriter::valid_view(const camera::FrameView& view) const noexcept {
     if (view.width != config_.width || view.height != config_.height || view.stride < view.width
@@ -154,8 +114,7 @@ bool ImageWriter::valid_view(const camera::FrameView& view) const noexcept {
     return required <= view.luma.size();
 }
 
-bool
-    ImageWriter::copy_image(std::span<std::byte> pixels, const camera::FrameView& view) noexcept {
+bool ImageWriter::copy_image(std::span<std::byte> pixels, const camera::FrameView& view) noexcept {
     if (!valid_view(view) || pixels.size() < frame_bytes_)
         return false;
     auto* destination = pixels.data();
@@ -166,8 +125,7 @@ bool
     return true;
 }
 
-bool
-    ImageWriter::write_png(std::span<const std::byte> pixels, std::uint64_t index) noexcept {
+bool ImageWriter::write_png(std::span<const std::byte> pixels, std::uint64_t index) noexcept {
     const auto begin = std::chrono::steady_clock::now();
     const auto encoded = png_.encode(pixels);
     const auto io_begin = std::chrono::steady_clock::now();
@@ -238,8 +196,7 @@ bool
     return true;
 }
 
-bool
-    ImageWriter::write_binary(std::span<const std::byte> pixels) noexcept {
+bool ImageWriter::write_binary(std::span<const std::byte> pixels) noexcept {
     if (!file_)
         return false;
     const auto begin = std::chrono::steady_clock::now();
@@ -277,14 +234,14 @@ bool
     bytes_written_ += size;
     (void)std::snprintf(image_name_, sizeof(image_name_), "img/recording.dbv");
     io_us_ = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
-                                          std::chrono::steady_clock::now() - encoded_at).count());
+                                            std::chrono::steady_clock::now() - encoded_at)
+                                            .count());
     write_us_ = io_us_ - space_us_;
     open_us_ = close_us_ = 0;
     return true;
 }
 
-bool
-    ImageWriter::write_image(std::span<const std::byte> pixels, std::uint64_t index) noexcept {
+bool ImageWriter::write_image(std::span<const std::byte> pixels, std::uint64_t index) noexcept {
     if (config_.image_format == ImageFormat::kDbv)
         return write_binary(pixels);
     if (config_.image_format == ImageFormat::kPng)

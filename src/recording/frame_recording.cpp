@@ -1,15 +1,15 @@
-module;
+#include "src/recording/frame_recording.hpp"
+
+#include <chrono>
 #include <cstdint>
 #include <string_view>
 
-export module dart.app.recording.frame_recording;
+#include "logging/logger.hpp"
+#include "recorder/recorder.hpp"
+#include "src/startup/argument_parser.hpp"
+#include "system/monotonic_clock.hpp"
 
-import dart.app.startup.argument_parser;
-import dart.logging.logger;
-import dart.recorder.recorder;
-import dart.system.monotonic_clock;
-
-export namespace dart::app {
+namespace dart::app {
 
 const char* admission_text(recorder::Admission admission) noexcept {
     switch (admission) {
@@ -45,9 +45,10 @@ recorder::Config
     config.width = width;
     config.height = height;
     config.fps = args.record_fps;
+    config.frame_timeout = std::chrono::milliseconds{args.record_timeout_ms};
     config.keep_sessions = args.record_keep;
-    // About 267 ms at 60 FPS, covering observed 134 ms FAT write stalls.
-    // Pixels are copied before enqueue; this does not hold 16 camera leases.
+    // Bounded copied pixels never hold camera leases while waiting for disk.
+    // The writer discards expired entries instead of replaying a stalled queue.
     config.queue_slots = 16;
     config.image_format = args.record_format;
     config.pbm_threshold = static_cast<std::uint8_t>(args.threshold);
@@ -70,9 +71,10 @@ bool start_recording(
     const auto stats = rec.stats();
     log.line(
         "level=INFO module=app op=recorder_start result=ok dir=%s file=%s fps=%u "
-        "format=%s "
+        "frame_timeout_ms=%u format=%s "
         "max_file_bytes=%llu file_limit_bytes=%llu max_storage_bytes=%llu queued=%u\n",
         rec.directory(), rec.recording_path(), config.fps,
+        static_cast<unsigned>(config.frame_timeout.count()),
         config.image_format == recorder::ImageFormat::kDbv   ? "dbv"
         : config.image_format == recorder::ImageFormat::kPng ? "png"
         : config.image_format == recorder::ImageFormat::kPbm ? "pbm"

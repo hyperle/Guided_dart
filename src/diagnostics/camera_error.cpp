@@ -1,10 +1,9 @@
-module;
+#include "src/diagnostics/camera_error.hpp"
+
 #include <string_view>
 
-export module dart.app.diagnostics.camera_error;
-
-import dart.camera.error;
-import dart.logging.logger;
+#include "camera/error.hpp"
+#include "logging/logger.hpp"
 
 namespace dart::app {
 
@@ -31,7 +30,7 @@ std::string_view camera_operation_text(camera::Operation operation) noexcept {
 }
 
 /* Recovery belongs to the caller. This function only formats one observation. */
-export void log_camera_error(
+void log_camera_error(
     logging::Logger& log, const char* op, const char* action,
     const camera::CameraError& error) noexcept {
     const auto& context = error.context();

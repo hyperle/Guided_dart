@@ -1,4 +1,5 @@
-module;
+#include "recorder/storage/image_files.hpp"
+
 #include <algorithm>
 #include <cerrno>
 #include <cstddef>
@@ -6,45 +7,25 @@ module;
 #include <cstdio>
 #include <sys/stat.h>
 
-export module dart.recorder.storage.image_files;
+#include "recorder/config.hpp"
+#include "recorder/storage/session.hpp"
+#include "recorder/storage/storage_space.hpp"
 
-import dart.recorder.config;
-import dart.recorder.storage.session;
-import dart.recorder.storage.storage_space;
+namespace dart::recorder {
 
-export namespace dart::recorder {
+void ImageFiles::reset() noexcept {
+    image_group_ = space_budget_ = 0;
+    space_checks_remaining_ = 0;
+}
 
-// Per-image filesystem state belongs to the image worker, independently of
-// session creation and retention. Encoding never accesses the filesystem.
-class ImageFiles final {
-public:
-    ImageFiles(const Config& config, const Session& session) noexcept
-        : config_(config)
-        , session_(session) {}
-    void reset() noexcept {
-        image_group_ = space_budget_ = 0;
-        space_checks_remaining_ = 0;
-    }
-    bool png_path(
-        std::uint64_t index, char* path, std::size_t path_size, char* name,
-        std::size_t name_size) noexcept;
-    bool space_available(std::size_t bytes) noexcept;
-
-private:
-    static bool mkdir_if_needed(const char* path) noexcept {
-        if (::mkdir(path, 0777) == 0)
-            return true;
-        if (errno != EEXIST)
-            return false;
-        struct stat st{};
-        return ::stat(path, &st) == 0 && S_ISDIR(st.st_mode);
-    }
-    const Config& config_;
-    const Session& session_;
-    std::uint64_t image_group_ = 0;
-    std::uint64_t space_budget_ = 0;
-    std::uint32_t space_checks_remaining_ = 0;
-};
+bool ImageFiles::mkdir_if_needed(const char* path) noexcept {
+    if (::mkdir(path, 0777) == 0)
+        return true;
+    if (errno != EEXIST)
+        return false;
+    struct stat st{};
+    return ::stat(path, &st) == 0 && S_ISDIR(st.st_mode);
+}
 
 bool ImageFiles::png_path(
     std::uint64_t index, char* path, std::size_t path_size, char* name,
@@ -87,7 +68,7 @@ bool ImageFiles::space_available(std::size_t bytes) noexcept {
     constexpr std::uint64_t guard = 1024U * 1024U;
     const bool continuous = config_.image_format == ImageFormat::kDbv;
     const auto charge = continuous ? static_cast<std::uint64_t>(bytes)
-                                  : std::max<std::uint64_t>(bytes + guard, guard * 2U);
+                                   : std::max<std::uint64_t>(bytes + guard, guard * 2U);
     if (space_checks_remaining_ > 0 && space_budget_ >= charge) {
         --space_checks_remaining_;
         space_budget_ -= charge;
@@ -101,9 +82,9 @@ bool ImageFiles::space_available(std::size_t bytes) noexcept {
     // sizes alone substantially underestimate FAT usage for small images.
     // Continuous DBV records share clusters. Cover pending stdio bytes once
     // per query instead of charging every small record as an independent file.
-    const auto allocation = continuous
-        ? ((bytes + 256U * 1024U + block - 1U) / block) * block
-        : std::max<std::uint64_t>(charge, ((bytes + block - 1U) / block + 2U) * block);
+    const auto allocation =
+        continuous ? ((bytes + 256U * 1024U + block - 1U) / block) * block
+                   : std::max<std::uint64_t>(charge, ((bytes + block - 1U) / block + 2U) * block);
     if (available < allocation) {
         errno = ENOSPC;
         return false;

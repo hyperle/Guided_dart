@@ -7,7 +7,7 @@
 
 #include "tools/canmv_tuning/detector_bridge.h"
 
-import dart.detection.roi;
+#include "src/detector/roi.hpp"
 
 int main() {
     using dart::detection::RoiDetector;

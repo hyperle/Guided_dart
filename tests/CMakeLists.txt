@@ -19,6 +19,9 @@ foreach(_test recorder_session recorder_binary detector_behavior detector_tracki
     add_test(NAME ${_test} COMMAND ${_test}_test)
 endforeach()
 
+add_test(NAME startup_arguments
+    COMMAND argument_parser_test "${PROJECT_SOURCE_DIR}/runtime/launcher/startup.list")
+
 target_link_options(imu_session_test PRIVATE -Wl,--wrap=fwrite)
 
 add_executable(servo_mapping_test servo_mapping_test.cpp)
@@ -36,6 +39,13 @@ target_link_libraries(recorder_storage_test PRIVATE dart_recording)
 target_compile_options(recorder_storage_test PRIVATE -Werror -UNDEBUG)
 target_link_options(recorder_storage_test PRIVATE -Wl,--wrap=statvfs -Wl,--wrap=fsync)
 add_test(NAME recorder_storage COMMAND recorder_storage_test)
+
+add_executable(recorder_timeout_test recorder_timeout_test.cpp)
+target_link_libraries(recorder_timeout_test PRIVATE dart_recording)
+target_compile_options(recorder_timeout_test PRIVATE -Werror -UNDEBUG)
+target_link_options(recorder_timeout_test PRIVATE -Wl,--wrap=fsync)
+add_test(NAME recorder_timeout COMMAND recorder_timeout_test)
+set_tests_properties(recorder_timeout PROPERTIES TIMEOUT 20)
 
 find_package(PNG REQUIRED)
 add_executable(recorder_png_test recorder_png_test.cpp)
@@ -92,7 +102,7 @@ endif()
 set(_pwm_hal_include "${K230_SDK_ROOT}/src/rtsmart/libs/rtsmart_hal/drivers/pwm")
 set(_fpioa_hal_include "${K230_SDK_ROOT}/src/rtsmart/libs/rtsmart_hal/drivers/fpioa")
 if(EXISTS "${_pwm_hal_include}/drv_pwm.h" AND EXISTS "${_fpioa_hal_include}/drv_fpioa.h")
-    dart_add_modules(dart_pwm_k230_host "${PROJECT_SOURCE_DIR}/include/firmware/src/pwm/k230/output.cpp")
+    dart_add_cpp_library(dart_pwm_k230_host "${PROJECT_SOURCE_DIR}/include/firmware/src/pwm/k230/output.cpp")
     target_include_directories(dart_pwm_k230_host PRIVATE "${_pwm_hal_include}" "${_fpioa_hal_include}")
     target_link_libraries(dart_pwm_k230_host PUBLIC dart_pwm)
     add_executable(pwm_output_test pwm_output_test.cpp)
@@ -115,13 +125,15 @@ if(EXISTS "${_pwm_hal_include}/drv_pwm.h" AND EXISTS "${_fpioa_hal_include}/drv_
     endforeach()
 endif()
 
-# Independent importers must resolve to the same compiled definitions at link time.
-dart_add_modules(dart_odr_consumer odr_consumer.cpp)
+# Independent translation units must share the same definitions at link time.
+dart_add_cpp_library(dart_odr_consumer odr_consumer.cpp)
 target_link_libraries(dart_odr_consumer PUBLIC dart_detection dart_recording dart_imu dart_control dart_pwm)
 target_link_libraries(camera_contract_test PRIVATE dart_odr_consumer)
 target_link_libraries(servo_mapping_test PRIVATE dart_odr_consumer)
 
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
+add_test(NAME canmv_build_config
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test_canmv_build_config.py")
 add_test(NAME rtos_scripts
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test_rtos_scripts.py")
 add_test(NAME cpp_structure_rules
@@ -132,3 +144,32 @@ add_test(NAME launcher_restart
     COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/launcher_restart_test.sh" $<TARGET_FILE:launcher>)
 add_test(NAME launcher_write_control
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/launcher_write_control_test.py" $<TARGET_FILE:launcher>)
+
+find_package(JPEG REQUIRED)
+add_executable(streaming_jpeg_test streaming_jpeg_test.c)
+target_link_libraries(streaming_jpeg_test PRIVATE dart_streaming_data JPEG::JPEG)
+target_compile_options(streaming_jpeg_test PRIVATE -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+add_test(NAME streaming_jpeg COMMAND streaming_jpeg_test)
+add_executable(streaming_session_test streaming_session_test.cpp)
+target_link_libraries(streaming_session_test PRIVATE dart_streaming)
+target_compile_options(streaming_session_test PRIVATE -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+add_test(NAME streaming_session COMMAND streaming_session_test)
+add_executable(wifi_link_probe wifi_link_probe.c)
+target_link_libraries(wifi_link_probe PRIVATE dart_streaming_data)
+target_compile_options(wifi_link_probe PRIVATE -Wall -Wextra -Wpedantic -Werror)
+
+set(_netmgmt_hal_include "${K230_SDK_ROOT}/src/rtsmart/libs/rtsmart_hal/components/netmgmt")
+if(EXISTS "${_netmgmt_hal_include}/hal_netmgmt.h")
+    add_executable(wifi_radio_test wifi_radio_test.c
+        "${PROJECT_SOURCE_DIR}/include/firmware/src/streaming/k230/radio.c")
+    target_include_directories(wifi_radio_test PRIVATE "${PROJECT_SOURCE_DIR}/include/firmware/src")
+    target_include_directories(wifi_radio_test SYSTEM PRIVATE "${_netmgmt_hal_include}")
+    target_compile_options(wifi_radio_test PRIVATE -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    add_test(NAME wifi_radio COMMAND wifi_radio_test)
+endif()
+
+add_executable(streaming_control_test streaming_control_test.cpp)
+target_link_libraries(streaming_control_test PRIVATE dart_streaming dart_recording)
+target_compile_options(streaming_control_test PRIVATE -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+add_test(NAME streaming_control COMMAND streaming_control_test)
+set_tests_properties(streaming_control PROPERTIES TIMEOUT 30)

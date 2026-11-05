@@ -1,24 +1,9 @@
-module;
+#include "src/detector/geometry.hpp"
+
 #include <algorithm>
 #include <cstdint>
 
-export module dart.detection.geometry;
-
-
-
-export namespace dart::detection {
-
-struct Point {
-    float x = 0.0F;
-    float y = 0.0F;
-};
-
-struct Rect {
-    std::uint32_t x = 0;
-    std::uint32_t y = 0;
-    std::uint32_t width = 0;
-    std::uint32_t height = 0;
-};
+namespace dart::detection {
 
 Rect FullWindow(std::uint32_t width, std::uint32_t height) noexcept {
     return {0, 0, width, height};

@@ -147,6 +147,42 @@ sys.exit(subprocess.call(['/usr/bin/gio', *args]))
     def test_cleanup_ssh(self):
         self.check_cleanup('ssh')
 
+    def test_stream_switch_is_independent(self):
+        for mode in ('card', 'mtp', 'ssh'):
+            with self.subTest(mode=mode):
+                self.mode(mode)
+                control = self.sd / 'app/control'
+                control.mkdir(exist_ok=True)
+                writes = control / 'write.pause'
+                writes.write_text('keep recording/log policy')
+                other = control / 'other'
+                other.write_text('untouched')
+                self.run_script('stream-rtos', 'on')
+                self.run_script('stream-rtos', 'off')
+                self.run_script('stream-rtos', 'off')
+                pause = control / 'stream.pause'
+                self.assertTrue(pause.is_dir())
+                self.assertEqual(list(pause.iterdir()), [])
+                self.run_script('stream-rtos', 'on')
+                self.assertFalse(pause.exists())
+                self.assertEqual(writes.read_text(), 'keep recording/log policy')
+                self.assertEqual(other.read_text(), 'untouched')
+                self.assert_present(self.keep)
+                pause.write_text('manually paused')
+                self.run_script('stream-rtos', 'off')
+                self.assertEqual(pause.read_text(), 'manually paused')
+                self.run_script('stream-rtos', 'on')
+                self.assertFalse(pause.exists())
+                # Clearing a marker must never recursively delete its contents.
+                pause.mkdir()
+                (pause / 'keep.txt').write_text('keep')
+                self.run_script('stream-rtos', 'on', ok=False)
+                self.assertEqual((pause / 'keep.txt').read_text(), 'keep')
+                (pause / 'keep.txt').unlink()
+                pause.rmdir()
+                self.env.update(BOARD_IP='', SDCARD=str(self.sd), DATA_SDCARD=str(self.data),
+                                BOARD_DIR='/sdcard/app', BOARD_DATA_DIR='/data/app')
+
     def test_write_switch_and_cleanup_preserve_manual_pause(self):
         for mode in ('card', 'mtp', 'ssh'):
             with self.subTest(mode=mode):

@@ -4,7 +4,6 @@ project(dart_video_player LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
-include("${CMAKE_CURRENT_LIST_DIR}/../../cmake/modules.cmake")
 if(CMAKE_CROSSCOMPILING)
     message(FATAL_ERROR "video_player is a host tool")
 endif()
@@ -12,18 +11,19 @@ find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Widgets)
 find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Widgets)
 find_package(ZLIB REQUIRED)
 get_filename_component(_firmware "${CMAKE_CURRENT_LIST_DIR}/../../include/firmware/src" ABSOLUTE)
-add_library(dart_binary_codec STATIC)
-target_sources(dart_binary_codec PUBLIC FILE_SET CXX_MODULES BASE_DIRS "${_firmware}" FILES
+add_library(dart_binary_codec STATIC
     "${_firmware}/recorder/encoding/binary_format.cpp"
     "${_firmware}/recorder/encoding/binary_decoder.cpp"
     "${_firmware}/recorder/encoding/binary_encoder.cpp")
 target_compile_features(dart_binary_codec PUBLIC cxx_std_23)
+target_include_directories(dart_binary_codec PUBLIC "${_firmware}")
 target_link_libraries(dart_binary_codec PUBLIC ZLIB::ZLIB)
-add_library(dart_video_player STATIC)
-target_sources(dart_video_player PUBLIC FILE_SET CXX_MODULES FILES
+add_library(dart_video_player STATIC
     recording_types.cpp recording_paths.cpp csv.cpp binary_stream.cpp
     image_reader.cpp recording.cpp image_view.cpp player.cpp)
 target_compile_features(dart_video_player PUBLIC cxx_std_23)
+get_filename_component(_dart_root "${CMAKE_CURRENT_LIST_DIR}/../.." ABSOLUTE)
+target_include_directories(dart_video_player PUBLIC "${_dart_root}")
 target_compile_options(dart_video_player PRIVATE -Wall -Wextra -Wpedantic)
 target_link_libraries(dart_video_player PUBLIC Qt${QT_VERSION_MAJOR}::Widgets dart_binary_codec)
 add_executable(video_player main.cpp)

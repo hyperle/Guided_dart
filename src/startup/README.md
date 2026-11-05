@@ -1,8 +1,8 @@
 # dart_app —— 板端业务应用
 
 [`../dart_entry.cpp`](../dart_entry.cpp) 提供唯一业务进程入口，将板级设备工厂注入
-`run.cpp` 的 `run_application()`。`argument_parser.cpp` 定义参数、默认值和校验；
-`run.cpp` 创建唯一日志对象并组织启动、运行和退出；`services.cpp` 管理服务故障隔离。
+`run.hpp` 的 `run_application()`。`argument_parser.cpp` 定义参数、默认值和校验；
+`run.hpp` 创建唯一日志对象并组织启动、运行和退出；`services.cpp` 管理服务故障隔离。
 本目录与其余 `src/` 一样属于 L4 调用层，不包含设备或系统资源的实现。
 
 | 功能 | L4 调用与策略 | 下层实现（`include/firmware/src/`） |
@@ -10,12 +10,13 @@
 | 设备组装 | `src/dart_entry.cpp` 注入工厂，`startup/` 调用服务 | `board/k230.cpp`、`camera/`、`imu/`、`spi/` |
 | 视觉流程 | `vision/capture_pipeline.cpp` 管理采集顺序、识别和帧分发 | `camera/` 管理帧池与硬件资源 |
 | 纯视觉舵机 | `vision/visual_servo.cpp` 调用 `control/` 两轴映射与限幅 | `pwm/` 管理独立输出任务、超时与 K230 HAL |
+| Wi-Fi 回传 | `vision/capture_pipeline.cpp` 提交同一帧，启动流程接收传输工厂 | `streaming/` 管理固定缓冲、JPEG 压缩和 Wi-Fi 发送线程 |
 | 录像 | `recording/frame_recording.cpp` 映射参数、决定启停并排空租约 | `recorder/` 管理队列、线程、编码和文件 |
 | 诊断 | `diagnostics/` 定义相机错误字段和检测 CSV 行 | `logging/` 管理文件缓冲和同步 |
-| 进程时限与退出 | `startup/run.cpp` 决定调用顺序 | `system/` 管理信号、时钟和 launcher 退出标记 |
+| 进程时限与退出 | `startup/run.hpp` 决定调用顺序 | `system/` 管理信号、时钟和 launcher 退出标记 |
 
 业务目标统一在 `src/CMakeLists.txt` 声明，下层库由 `include/CMakeLists.txt` 声明。
-各功能通过 `import dart.app.*` 使用独立编译的命名模块，不提供 C++ 头文件。
+各功能通过所需 `.hpp` 声明调用接口，`.cpp` 实现独立编译；入口无需配套头文件。
 `runtime/launcher/` 负责进程启动与监督；现有 `runtime/imu/` 采样服务本轮保留。
 单进程可以有多个线程或任务：当前相机调用保持串行，
 IMU 采样独立于相机逐帧循环；PWM 任务每 10 ms 检查视觉指令，输出 333 Hz 波形。
@@ -42,8 +43,9 @@ camera->acquire(timeout) -> FrameLease（独立的 0..255 灰度 Y8 缓冲）
   -> detector.Detect(lease.view())      灰度候选提取与背景对比度过滤；同步借用像素
   -> servo.observe(result)             装甲板优先/灯回退 -> 两轴增量 -> 合成限幅
         PWM Session                   独立输出任务；过期或无目标回各路初始脉宽
+  -> wifi.try_submit(lease.view())      可选有界复制 -> JPEG 线程 -> Wi-Fi 发送线程
   -> recorder.try_submit(std::move(lease))
-        kAccepted     -> 已拷贝到固定队列；录像线程默认写灰度 PGM，可选灰度 PNG / 二值 DBV、PBM
+        kAccepted     -> 已拷贝到固定队列；写线程丢弃超时帧，其余写灰度 PGM / PNG 或二值 DBV / PBM
         其他          -> 采集线程自己 release()
   -> recorder.drain_releases()          提交前后调用：已拷贝帧的租约在采集线程释放，
                                         保证相机 ACL 的调用始终串行
@@ -71,18 +73,21 @@ dart_app [选项]
   --seconds N      有界运行秒数，0 = 跑到 SIGINT/SIGTERM（默认 0）
   --exp LINES      固定曝光行数（默认 400；0 保留传感器初始曝光）
   --raw-layout F   packed10-lsb（默认，K230 实板验证）
+  --wifi on|off    JPEG Wi-Fi 回传开关（默认 off）
+  --wifi-config P  回传配置文件（默认 /data/app/wifi.conf）
+  --wifi-pause-file P  回传独立暂停标记（默认 /sdcard/app/control/stream.pause）
   --vision on|off  识别开关（默认 on）
   --pwm on|off     纯视觉 PWM 输出（默认 on；vision off 时停用）
   --aim X,Y        全图预设像素（默认实际图像中心）
-  --servo-initial A,B,C,D     四路初始脉宽 µs（默认各 1520）
-  --servo-min A,B,C,D         四路最小脉宽 µs（默认各 1420）
-  --servo-max A,B,C,D         四路最大脉宽 µs（默认各 1620）
+  --servo-initial A,B,C,D     四路初始脉宽 µs（默认 1490,1448,1475,1150）
+  --servo-max-delta N        各路合成增量绝对值上限 µs（默认 500；0 固定初始位置）
   --servo-horizontal A,B,C,D  左右增益 µs/像素（默认各 0）
   --servo-vertical A,B,C,D    上下增益 µs/像素（默认各 0）
   --servo-timeout-ms N       无有效视觉指令时回初始位置（默认 200 ms）
   --record on|off  录像开关（默认 on）
   --rec-keep N     只保留最近 N 轮录像，0 = 不清理（默认 0）
   --rec-fps N      目标录像帧率，按时间采样（默认 60 FPS）
+  --rec-timeout-ms N  待写帧超时丢弃，0 = 一帧周期（默认 0，60 FPS 时约 16.7 ms）
   --rec-format F   pgm（灰度，默认）| png（灰度）| dbv / pbm（二值）
   --rec-dir DIR    录像根目录（默认 /data/app/records）
   --det-csv PATH   识别结果 CSV；off 关闭（默认关闭）
@@ -103,8 +108,9 @@ dart_app [选项]
 曝光/阈值默认值均为 UNVALIDATED，要用真实板端样本标定，见 [`docs/DEBUG_GUIDE.md`](../../docs/DEBUG_GUIDE.md) §5。
 PWM 默认增益为零，目标偏移不会改变脉宽。标定后通过上述参数启用各路修正，
 数值列表不含空格，通道顺序和映射符号见 [舵机控制](../control/README.md)。
-纯视觉控制不依赖 IMU，`dart_app` 默认关闭 IMU。当前启动清单暂停 `dart_app`，
-改为上电运行独立的 [IMU 硬件直读测试](../../runtime/imu/README.md)，先唤醒传感器、等待 50 ms 再读取。
+纯视觉控制不依赖 IMU，`dart_app` 默认关闭 IMU。当前启动清单启用视觉四路 PWM，
+零点、方向、增益和增量限幅以清单当前参数为准；关闭 IMU、Wi-Fi，
+启用 60 FPS 录像，待写超时丢弃。
 
 ## 故障隔离
 
@@ -161,7 +167,7 @@ SPI 时钟 1 MHz、超时 20 ms、1 kHz ODR/轮询、±16 g / ±2000 °/s 与零
 ```
 ts_ms=... level=INFO module=app op=status elapsed_s=10 frames=298 fps=29.8 no_frame=2
   lease_exhausted=0 target=37 detect_err=0 rec_input=298 rec_acc=75 rec_down=223 rec_busy=0
-  rec_queued=1 rec_pending=0 rec_written=74 rec_event_dropped=0 release_err=0 run_hw=512
+  rec_timed_out=0 rec_queued=1 rec_pending=0 rec_written=74 rec_event_dropped=0 release_err=0 run_hw=512
 ```
 
 ## 退出契约
@@ -275,3 +281,10 @@ IMU 继续采样，以及 SPI 创建失败后的清理；当时 SPI1 / CS IO14 �
 metadata 错误均为 0，已回读完整 1280×720 PGM 样本。参数注入已生效，当时的
 逐帧文件写盘链路不能维持 30 FPS。此结果不代表当前连续文件实现的性能。证据见
 `records/board-recorder-fps30-2026-10-15-175445/`（本地目录，不提交 Git）。
+
+Wi-Fi 配置、主机 Rust 服务和视频输出见 [接收端说明](../../tools/wifi_receiver/README.md)。
+回传不会创建第二个相机实例；启动配置错误只关闭 Wi-Fi，网络错误在发送线程退避恢复。
+
+回传通过 `streaming::Session::start_controlled` 将配置读取、工作线程创建/回收放到管理线程。
+`.script/stream-rtos off|on` 独立控制该分支，采集流程不等待组件停用；暂停不触碰
+本地录像、日志开关或共享相机。完成回收以 `state=paused active=0 buffers=0` 确认。

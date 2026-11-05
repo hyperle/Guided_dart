@@ -24,12 +24,13 @@ launcher 自身日志和子进程 console 日志服从 `/sdcard/app/control/writ
 | `startup.list` | 启动清单（**源码母版**；板端运行时默认文件是 `/sdcard/app/startup_final.list`，需拷贝并改名） |
 | `README.md` | 本文件 |
 
-构建目标与产物路径在 `runtime/CMakeLists.txt`（本仓库约定：模块目录只放源码，
-目标集中声明）：`build-cross/launcher/launcher`。
+当前启动器目标在 `runtime/CMakeLists.txt` 中声明，产物为
+`build-cross/launcher/launcher`。
 
-当前启动清单只启用 `imu_raw_probe`，上电后通过 SPI1 / CS IO14 写入唤醒命令，
-等待 50 ms、回读电源寄存器后循环直读 IMU。`dart_app` 与 PWM 测试行已注释。
-波形、构建和恢复视觉版本的步骤见 [IMU 直读测试说明](../imu/README.md)。
+当前启动清单只启用 `dart_app` 的识别、坐标、两轴映射和四路 PWM 链路。
+零点、两轴增益与增量限幅以 `startup.list` 当前参数为准。
+IMU、Wi-Fi 关闭，录像启用并显式设置为 60 FPS；待写帧超过一帧周期（约 16.7 ms）丢弃。
+详细控制参数见 [舵机控制说明](../../src/control/README.md)。
 
 ## 清单语法（每行一条）
 
@@ -118,6 +119,20 @@ make && 烧录固件
 
 之后日常更新只需替换 `/sdcard/app/` 下的 ELF 或编辑
 `/sdcard/app/startup_final.list`，重启即生效。
+
+## 保留旧固件自启路径的原生入口
+
+2026-11-01 联调时，板端 `/sdcard` 根目录缺少 `micropython`，只有
+`revision.txt` 和已部署的 `app/`；`/data/app/logs` 没有本轮的
+`launcher.log`、`dart_app.log`。本机 SDK 的自启配置仍为
+`CONFIG_RTT_AUTO_EXEC_CMD="/sdcard/micropython &"`。
+仅部署 `/sdcard/app/launcher` 不会改变固件已经编译进去的启动路径。
+
+本轮将交叉编译的 **原生 launcher ELF** 额外写入 `/sdcard/micropython`，
+保留 `/sdcard/app/launcher` 和默认清单位置。这只是文件路径兼容，
+入口内容不是 Python 解释器。回读 SHA-256 与 launcher 完全一致；
+需断电重上电后，以新日志确认实际运行。更新 launcher 时应同步这个副本。
+返回 CanMV 时需将此路径恢复为对应固件的真正解释器。
 
 ## 重要：不要用 @preload / fastboot 快起
 

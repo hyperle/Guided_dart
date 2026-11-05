@@ -8,8 +8,9 @@
 
 ## 构建与打开
 
-本机已具备 Qt 5 开发环境。需要 CMake >= 3.28、Ninja >= 1.11，及 GCC >= 14 或
-Clang >= 19 + clang-tools；另需 `qtbase5-dev`、`zlib1g-dev`；需要图形桌面来显示窗口。在仓库根目录运行：
+构建需要 CMake >= 3.28、支持 C++23 的编译器、Qt Widgets 和 zlib；
+脚本使用 Ninja。本机已具备 Qt 5 开发环境，对应开发包为 `qtbase5-dev`、
+`zlib1g-dev`。显示窗口需要图形桌面，在仓库根目录运行：
 
 ```bash
 # 自动增量构建并打开；也可从其他目录调用 .script/player 的绝对路径。
@@ -40,7 +41,7 @@ cmake --build build/video_player --parallel
 ```
 
 从旧版缓存迁移时，先执行 `cmake --fresh -S tools/video_player -B build/video_player -G Ninja`。
-`DART_CXX_COMPILER` 可指定模块编译器，默认自动选择 GCC >= 14 / Clang >= 19。
+`DART_CXX_COMPILER` 或 `CXX` 可指定 C++ 编译器，默认使用系统编译器。
 `DART_PLAYER_BUILD_DIR` 可覆盖脚本的默认构建目录 `build/video_player`。
 脚本透传参数，数据相对路径以调用时工作目录为准。指定一轮录像的目录，支持
 原始 `rec_NNNN`、其 `img` 目录，以及当前仓库 `records` 这样的拷贝布局：
@@ -74,10 +75,10 @@ records/
     logs/frames.csv
 ```
 
-**检测日志必须来自同一轮运行。** 当前 `src/diagnostics/detection_csv.cpp` 用 `"w"` 打开
-`records/detection.csv`，下一次启动会覆盖它；旧 `rec_NNNN` 目录可能仍在。
-每轮结束后应将对应的 `detection.csv` 连同该轮目录一起归档，或启动时通过
-`--det-csv` 指定不同路径。已被覆盖的数据无法从图片恢复，播放器会显示未匹配。
+**检测日志必须与录像对应。** 多次运行或暂停恢复可能复用同一个 CSV 路径，
+而旧 `rec_NNNN` 目录仍会保留；文件名相同不能证明属于同一轮采集。
+每轮结束后将对应的 `detection.csv` 连同录像目录一起归档，或启动时通过
+`--det-csv` 指定不同路径。缺失的检测记录无法从图片恢复，播放器会显示未匹配。
 
 ## DBV 浏览与导出
 
@@ -149,18 +150,7 @@ python3 tests/check_cpp_structure.py
 `recording_paths.cpp` 解析原始会话和拷贝布局的默认路径，`image_reader.cpp` 负责逐帧解码，
 `recording.cpp` 扫描文件并关联录像/检测记录；
 `image_view.cpp` 管理显示和原图坐标映射，`player.cpp` 组合窗口与命令入口，
-`main.cpp` 仅转交入口。组件声明 `dart.tools.video_player.*` 命名模块，
-CMake 原生扫描依赖，各 `.cpp` 独立编译并链接进播放器与测试。
-测试使用 Qt offscreen 平台，不需要实际显示器，覆盖 DBV 完整帧/差分/旧版重复/异常尾部及 PNG 导出，
-并直接调用当前板端编码器生成含相同输入、阈值边界及非整字节行宽的录像，核对每帧像素、
-顺序/向后/随机跳帧、CSV 偏移与检测关联、全部 PNG 导出及脱离 CSV 的独立解码；另覆盖真实 PNG/PGM/PBM 解码、单色 1-bit PNG、
-当前拷贝布局、缺少日志的尾部图片与空 PNG、默认 CSV 路径、PNG 跨分组目录关联及偏移/长度冲突、非整字节 PBM
-行宽、序号/时间身份、空 CSV 与空路径参数、缺图与重复记录、关闭识别、叠加边界、切帧和像素点击。
+`main.cpp` 仅转交入口。组件按需要提供 `.hpp` 声明，由 `.cpp` 实现并链接为静态库；
+不要求每个源文件建立对应头文件。播放器复用应用的 DBV 编解码实现。
 
-2026-10-16 在本机 Qt 5.15.13 / GCC 13.3 上独立构建和 CTest 通过，
-`check_cpp_structure.py` 检查通过；使用既有主机录像样本验证了 `--check`，
-并从其他工作目录运行了 `.script/player`。界面通过 offscreen 渲染与事件测试验证，
-未进行桌面窗口的人工操作；Qt 6 尚未在本机实测。
-
-2026-10-31 使用 Clang 19.1.1 / Qt 5.15.13 迁移命名模块后，独立构建、最终链接与
-offscreen CTest 通过。
+验证包括独立构建、最终链接和 Qt offscreen 回归；硬件录像格式以真实样本验证。

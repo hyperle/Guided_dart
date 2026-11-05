@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Check independently compiled C++ named modules and their dependency direction.
+"""Check ordinary C++ headers/sources and the existing dependency direction.
 
-Compilation, module scanning and final links remain the behavioral acceptance;
-this check rejects textual .cpp inclusion even outside C++ source files.
+Behavior and ODR correctness are verified by building and linking real targets.
+This check does not require a header/source pair. Each C++ file has one enclosing
+named namespace, except for process and C ABI entry points.
 """
 
 from pathlib import Path
@@ -11,54 +12,52 @@ import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
+TOKENS = r'//[^\n]*|/\*[\s\S]*?\*/|"(?:\\.|[^"\\])*"|(?<![\w])\'(?:\\.|[^\'\\\n])*\''
 
 
 def strip_literals(text):
-    return re.sub(
-        r'//[^\n]*|/\*[\s\S]*?\*/|"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'',
-        lambda match: re.sub(r'[^\n]', ' ', match.group()),
+    return re.sub(TOKENS, lambda match: re.sub(r'[^\n]', ' ', match.group()), text)
+
+
+def includes_in(text):
+    uncommented = re.sub(
+        TOKENS,
+        lambda match: re.sub(r'[^\n]', ' ', match.group())
+        if match.group().startswith(('//', '/*')) else match.group(),
         text,
     )
+    return re.findall(r'^\s*#\s*include\s*[<"]([^">]+)[">]', uncommented, re.MULTILINE)
 
 
 def source_errors(relative, text):
     errors = []
     clean = strip_literals(text)
-    includes = re.findall(r'^\s*#\s*include\s*[<"]([^">]+)[">]', text, re.MULTILINE)
-    for include in includes:
+    for include in includes_in(text):
         if include.endswith('.cpp'):
             errors.append(f'{relative}: including .cpp is forbidden: {include}')
-        if include.endswith(('.hpp', '.hxx', '.hh')):
-            errors.append(f'{relative}: C++ headers are forbidden: {include}')
-    if relative.suffix != '.cpp':
-        return errors
-    if (re.search(r'^\s*#\s*ifndef\s+(\w+)\s*\n\s*#\s*define\s+\1\b', clean, re.MULTILINE)
-            or re.search(r'^\s*#\s*pragma\s+once\b', clean, re.MULTILINE)):
-        errors.append(f'{relative}: .cpp must not use header include guards')
-    namespaces = list(re.finditer(r'\bnamespace\b', clean))
-    has_main = bool(re.search(r'\bint\s+main\s*\(', clean))
-    if len(namespaces) != 1 and not (has_main and not namespaces):
-        errors.append(f'{relative}: expected exactly one named namespace')
-    elif namespaces:
-        declaration = clean[namespaces[0].start():]
-        if not re.match(r'namespace\s+[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*\s*\{', declaration):
-            errors.append(f'{relative}: anonymous namespaces, aliases and using namespace are forbidden')
-    module = re.search(r'^(?:export\s+)?module\s+([\w.]+)\s*;', clean, re.MULTILINE)
-    production = relative.parts[0] in ('src', 'include', 'runtime', 'tools')
-    bridge = bool(re.search(r'\bextern\s+"C"', text))
-    if production and not has_main and not bridge and not module:
-        errors.append(f'{relative}: reusable C++ source must declare a named module')
-    if module:
-        if not re.match(r'\s*module\s*;', clean):
-            errors.append(f'{relative}: includes belong in a global module fragment')
-        if re.search(r'^\s*#\s*include\b', clean[module.end():], re.MULTILINE):
-            errors.append(f'{relative}: textual includes must precede the named module declaration')
-    if relative.parts[0] == 'src':
-        for include in includes:
+        if relative.parts[0] == 'src':
             if (include.startswith(('sys/', 'camera/k230/', 'spi/'))
                     or include in ('unistd.h', 'fcntl.h', 'pthread.h', 'signal.h', 'dirent.h')
                     or re.match(r'(?:mpi_|k_|drv_).*\.h$', include)):
                 errors.append(f'{relative}: L4 includes a platform implementation header: {include}')
+        if relative.parts[0] == 'include':
+            candidates = (ROOT / relative.parent / include, ROOT / include,
+                          ROOT / 'include/firmware/src' / include)
+            if any(candidate.resolve().is_relative_to(ROOT / 'src') for candidate in candidates):
+                errors.append(f'{relative}: lower-level library includes L4: {include}')
+    if re.search(r'^\s*(?:export\s+)?(?:module|import)\b', clean, re.MULTILINE):
+        errors.append(f'{relative}: use headers and sources instead of named modules')
+    if relative.suffix in ('.cpp', '.hpp'):
+        namespaces = list(re.finditer(r'\bnamespace\s*(?:(\w+(?:::\w+)*)\s*)?\{', clean))
+        entry_point = bool(re.search(r'\bint\s+main\s*\(', clean) or 'extern "C"' in text)
+        if len(namespaces) != 1 and not (entry_point and not namespaces):
+            errors.append(f'{relative}: use one enclosing named namespace per C++ file')
+        elif namespaces and not namespaces[0].group(1):
+            errors.append(f'{relative}: use a named namespace for the file')
+    if relative.suffix == '.cpp' and (
+            re.search(r'^\s*#\s*ifndef\s+(\w+)\s*\n\s*#\s*define\s+\1\b', clean, re.MULTILINE)
+            or re.search(r'^\s*#\s*pragma\s+once\b', clean, re.MULTILINE)):
+        errors.append(f'{relative}: .cpp must not use header include guards')
     return errors
 
 
@@ -67,49 +66,21 @@ def check():
         ['git', 'ls-files', '--cached', '--others', '--exclude-standard', '-z'], cwd=ROOT
     ).decode().split('\0')
     paths = sorted({ROOT / name for name in listed if name and (ROOT / name).is_file()})
-    errors, modules, consumers = [], {}, []
-    count = 0
+    errors = []
+    sources = headers = 0
     for path in paths:
         relative = path.relative_to(ROOT)
-        if path.suffix in ('.hpp', '.hxx', '.hh', '.cc', '.cxx', '.ixx', '.cppm'):
-            errors.append(f'{relative}: C++ sources must use .cpp; C++ headers are forbidden')
-        if path.suffix in ('.c', '.h', '.cpp'):
-            text = path.read_text()
-            errors.extend(source_errors(relative, text))
-            if path.suffix != '.cpp':
-                # Repository .h files describe C ABIs; SDK headers live elsewhere.
-                if path.suffix == '.h' and re.search(r'\b(?:class|template)\b', strip_literals(text)):
-                    errors.append(f'{relative}: repository headers must remain C ABI headers')
-                continue
-            count += 1
-            clean = strip_literals(text)
-            match = re.search(r'^export\s+module\s+([\w.]+)\s*;', clean, re.MULTILINE)
-            if match:
-                name = match.group(1)
-                if name in modules:
-                    errors.append(f'{relative}: duplicate module {name}')
-                modules[name] = relative
-            imports = re.findall(r'^\s*(?:export\s+)?import\s+([\w.]+)\s*;', clean, re.MULTILINE)
-            implementation = re.search(r'^module\s+([\w.]+)\s*;', clean, re.MULTILINE)
-            if implementation:
-                imports.append(implementation.group(1))
-            consumers.append((relative, imports))
+        if path.suffix in ('.c', '.h', '.cpp', '.hpp'):
+            errors.extend(source_errors(relative, path.read_text()))
+            sources += path.suffix == '.cpp'
+            headers += path.suffix == '.hpp'
         elif path.suffix in ('.cmake', '.py') or path.name == 'CMakeLists.txt':
-            # Also reject build helpers that generate a textual C++ amalgamation.
-            text = path.read_text()
-            if re.search(r'#\s*include\s*[^\n]*\.cpp(?:["\'>}]|\\["\'])', text):
+            if re.search(r'#\s*include\s*[^\n]*\.cpp(?:["\'>}]|\\["\'])', path.read_text()):
                 errors.append(f'{relative}: generated .cpp inclusion is forbidden')
-    for relative, imports in consumers:
-        for dependency in imports:
-            owner = modules.get(dependency)
-            if owner is None:
-                errors.append(f'{relative}: missing named module {dependency}')
-            elif relative.parts[0] == 'include' and owner.parts[0] == 'src':
-                errors.append(f'{relative}: lower-level library imports L4 module {dependency}')
     if errors:
         print('\n'.join(errors), file=sys.stderr)
         return 1
-    print(f'C++ structure passed: {count} translation units, {len(modules)} named modules; no .cpp includes or C++ headers')
+    print(f'C++ structure passed: {sources} sources, {headers} headers; no named modules or .cpp includes')
     return 0
 
 

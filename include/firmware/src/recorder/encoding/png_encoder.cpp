@@ -1,4 +1,5 @@
-module;
+#include "recorder/encoding/png_encoder.hpp"
+
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -7,59 +8,45 @@ module;
 #include <span>
 #include <zlib.h>
 
-export module dart.recorder.encoding.png_encoder;
+namespace dart::recorder {
 
+PngEncoder::~PngEncoder() {
+    if (initialized_)
+        (void)::deflateEnd(&stream_);
+}
 
+bool PngEncoder::prepare(
+    std::uint32_t width, std::uint32_t height, std::uint8_t threshold) noexcept {
+    if (initialized_)
+        (void)::deflateEnd(&stream_);
+    stream_ = {};
+    initialized_ = false;
+    width_ = width;
+    height_ = height;
+    threshold_ = threshold;
+    row_bytes_ = (static_cast<std::size_t>(width) + 7U) / 8U + 1U;
+    raw_bytes_ = row_bytes_ * height;
+    if (::deflateInit2(&stream_, Z_BEST_SPEED, Z_DEFLATED, 15, 8, Z_DEFAULT_STRATEGY) != Z_OK)
+        return false;
+    initialized_ = true;
+    capacity_ = static_cast<std::size_t>(::deflateBound(&stream_, raw_bytes_)) + 57U;
+    raw_.reset(new (std::nothrow) std::uint8_t[raw_bytes_]);
+    png_.reset(new (std::nothrow) std::uint8_t[capacity_]);
+    return raw_ && png_;
+}
 
-export namespace dart::recorder {
+void PngEncoder::big_endian(std::uint8_t* out, std::uint32_t value) noexcept {
+    for (unsigned i = 0; i < 4; ++i)
+        out[i] = static_cast<std::uint8_t>(value >> (24U - i * 8U));
+}
 
-// One grayscale bit per pixel, filter None, fast DEFLATE. All working memory
-// and the compressor state are allocated once, outside the capture loop.
-class PngEncoder final {
-public:
-    ~PngEncoder() {
-        if (initialized_)
-            (void)::deflateEnd(&stream_);
-    }
-    bool prepare(std::uint32_t width, std::uint32_t height, std::uint8_t threshold) noexcept {
-        if (initialized_)
-            (void)::deflateEnd(&stream_);
-        stream_ = {};
-        initialized_ = false;
-        width_ = width;
-        height_ = height;
-        threshold_ = threshold;
-        row_bytes_ = (static_cast<std::size_t>(width) + 7U) / 8U + 1U;
-        raw_bytes_ = row_bytes_ * height;
-        if (::deflateInit2(&stream_, Z_BEST_SPEED, Z_DEFLATED, 15, 8, Z_DEFAULT_STRATEGY) != Z_OK)
-            return false;
-        initialized_ = true;
-        capacity_ = static_cast<std::size_t>(::deflateBound(&stream_, raw_bytes_)) + 57U;
-        raw_.reset(new (std::nothrow) std::uint8_t[raw_bytes_]);
-        png_.reset(new (std::nothrow) std::uint8_t[capacity_]);
-        return raw_ && png_;
-    }
-    std::span<const std::byte> encode(std::span<const std::byte> pixels) noexcept;
-
-private:
-    static void big_endian(std::uint8_t* out, std::uint32_t value) noexcept {
-        for (unsigned i = 0; i < 4; ++i)
-            out[i] = static_cast<std::uint8_t>(value >> (24U - i * 8U));
-    }
-    static void chunk(std::uint8_t* out, const char* type, std::size_t size) noexcept {
-        big_endian(out, static_cast<std::uint32_t>(size));
-        std::memcpy(out + 4, type, 4);
-        big_endian(
-            out + 8 + size,
-            static_cast<std::uint32_t>(::crc32(0, out + 4, static_cast<uInt>(size + 4))));
-    }
-    z_stream stream_{};
-    bool initialized_ = false;
-    std::uint32_t width_ = 0, height_ = 0;
-    std::uint8_t threshold_ = 128;
-    std::size_t row_bytes_ = 0, raw_bytes_ = 0, capacity_ = 0;
-    std::unique_ptr<std::uint8_t[]> raw_, png_;
-};
+void PngEncoder::chunk(std::uint8_t* out, const char* type, std::size_t size) noexcept {
+    big_endian(out, static_cast<std::uint32_t>(size));
+    std::memcpy(out + 4, type, 4);
+    big_endian(
+        out + 8 + size,
+        static_cast<std::uint32_t>(::crc32(0, out + 4, static_cast<uInt>(size + 4))));
+}
 
 std::span<const std::byte> PngEncoder::encode(std::span<const std::byte> pixels) noexcept {
     if (!raw_ || !png_ || pixels.size() < static_cast<std::size_t>(width_) * height_)

@@ -18,12 +18,12 @@
 #include <thread>
 #include <vector>
 
-import dart.recorder.recorder;
+#include "recorder/recorder.hpp"
 
-import dart.recorder.encoding.png_encoder;
-import dart.recorder.storage.session;
+#include "recorder/encoding/png_encoder.hpp"
+#include "recorder/storage/session.hpp"
 
-import dart.recorder.storage.image_writer;
+#include "recorder/storage/image_writer.hpp"
 
 namespace dart::tests {
 
@@ -130,6 +130,7 @@ class RecorderPngTest final {
         config.width = 640;
         config.height = 480;
         config.queue_slots = 16;
+        config.frame_timeout = std::chrono::milliseconds{5000};
         config.image_format = recorder::ImageFormat::kPng;
         config.output_directory = directory;
         config.max_file_bytes = first_size * 2 + second_size - 1;
