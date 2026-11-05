@@ -3,8 +3,8 @@ file(GLOB _detection_sources CONFIGURE_DEPENDS "detector/*.cpp")
 dart_add_cpp_library(dart_detection ${_detection_sources})
 target_link_libraries(dart_detection PUBLIC dart_camera_types)
 
-dart_add_cpp_library(dart_control control/servo_mapping.cpp)
-target_link_libraries(dart_control PUBLIC dart_detection)
+dart_add_cpp_library(dart_control control/servo.cpp)
+target_link_libraries(dart_control PUBLIC dart_detection dart_imu)
 
 file(GLOB_RECURSE _application_sources CONFIGURE_DEPENDS
     "startup/*.cpp" "vision/*.cpp" "recording/*.cpp" "diagnostics/*.cpp")
