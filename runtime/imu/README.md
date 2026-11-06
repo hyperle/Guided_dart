@@ -233,6 +233,11 @@ RESET 后初始电源值仍为 `0x0f`，完全断电后为 `0x00`，证明两种
 同时保存为上层快照并送入日志队列。日志线程只写快照，不进行第二次积分。
 应用须保证设备已初始化，并且生命周期覆盖 Session。
 
+`imu_working()` 仅读取线程安全的缓存状态，不访问设备：首次成功读取前为 false，
+读取成功时为 true，读取失败或停止采样时为 false，后续读取成功会恢复为 true。
+它表示最近一次采样读取是否成功；估计器质量、参考系是否就绪仍由 `Estimate` 表达，
+具体读取错误继续写入日志。
+
 ```cpp
 dart::imu::Session session{device};
 if (!session.start("/data/app/logs/imu.log"))

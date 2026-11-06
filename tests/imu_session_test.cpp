@@ -38,18 +38,26 @@ __wrap_fwrite(const void* data, std::size_t size, std::size_t count, std::FILE* 
 class ImuSessionTest final {
     class Source final : public imu::IImu {
     public:
+        explicit Source(bool repeat = false) noexcept : repeat_(repeat) {}
+
         std::expected<imu::Sample, imu::ErrorCode> read_sample() noexcept override {
             std::lock_guard lock(mutex_);
             auto result = pending_;
-            pending_ = std::unexpected(imu::ErrorCode::kBusTransfer);
+            if (!repeat_)
+                pending_ = std::unexpected(imu::ErrorCode::kBusTransfer);
             return result;
         }
         void push(const imu::Sample& sample) noexcept {
             std::lock_guard lock(mutex_);
             pending_ = sample;
         }
+        void fail() noexcept {
+            std::lock_guard lock(mutex_);
+            pending_ = std::unexpected(imu::ErrorCode::kBusTransfer);
+        }
 
     private:
+        bool repeat_ = false;
         std::mutex mutex_;
         std::expected<imu::Sample, imu::ErrorCode> pending_{
             std::unexpected(imu::ErrorCode::kBusTransfer)};
@@ -266,6 +274,41 @@ public:
         assert(footer && next == expected.size());
         assert(read(path) == legacy);
         const auto first_log = read(session.log_path());
+
+        // Acquisition status follows the current read result, independently of
+        // estimator quality and cumulative error counts.
+        Source working_source{true};
+        imu::Session working{working_source};
+        assert(!working.imu_working());
+        assert(!working.start(nullptr));
+        assert(!working.imu_working());
+        assert(working.start((path.parent_path() / "working.log").c_str()));
+        for (int i = 0; i < 500 && working.stats().read_errors == 0; ++i)
+            std::this_thread::sleep_for(std::chrono::milliseconds{1});
+        assert(working.stats().read_errors > 0 && !working.imu_working());
+        const auto wait_working = [&](bool expected) {
+            for (int i = 0; i < 500 && working.imu_working() != expected; ++i)
+                std::this_thread::sleep_for(std::chrono::milliseconds{1});
+            assert(working.imu_working() == expected);
+        };
+        imu::Sample working_sample{};
+        working_sample.timestamp_ns = 1'000'000'000;
+        working_sample.acceleration_m_s2.z = 9.80665F;
+        working_sample.flags = static_cast<std::uint32_t>(imu::SampleFlag::kGyroscopeSaturated);
+        working_source.push(working_sample);
+        wait_working(true);
+        assert(!working.current().sample_accepted);
+        const auto previous_timestamp = working.current().sample.timestamp_ns;
+        working_source.fail();
+        wait_working(false);
+        assert(working.current().sample.timestamp_ns == previous_timestamp);
+        working_sample.timestamp_ns += 10'000'000;
+        working_sample.flags = 0;
+        working_source.push(working_sample);
+        wait_working(true);
+        assert(working.stats().read_errors > 0);
+        working.stop();
+        assert(!working.imu_working());
 
         // Startup seed is a one-time request. Reset must wait for a new command.
         Source initial_source;

@@ -235,6 +235,10 @@ void Session::stop() noexcept {
         std::lock_guard lock(sleep_mutex_);
         sampling_.store(false);
     }
+    {
+        std::lock_guard lock(state_mutex_);
+        imu_working_.store(false);
+    }
     sample_wake_.notify_all();
     if (sample_started_) {
         (void)::pthread_join(sample_thread_, nullptr);
@@ -355,6 +359,7 @@ void Session::sample_loop() noexcept {
             observer_(*sample, observer_context_);
         {
             std::lock_guard lock(state_mutex_);
+            imu_working_.store(sampling_.load() && sample.has_value());
             Event event{};
             if (sample) {
                 ++samples_;

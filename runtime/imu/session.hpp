@@ -51,6 +51,8 @@ public:
         platform::WriteControl* writes = nullptr, SampleObserver observer = nullptr,
         void* observer_context = nullptr) noexcept;
     void stop() noexcept;
+    // Cached acquisition status; querying it never accesses the device.
+    bool imu_working() const noexcept { return imu_working_.load(); }
     Estimator::Estimate current() const noexcept;
     Estimator::SeedResult seed(const Quaternionf& sensor_to_reference) noexcept;
     void reset() noexcept;
@@ -104,6 +106,7 @@ private:
     std::mutex sleep_mutex_;
     std::condition_variable sample_wake_;
     std::atomic<bool> sampling_{false};
+    std::atomic<bool> imu_working_{false};
     std::uint32_t period_us_ = 1000;
     pthread_t sample_thread_{}, writer_thread_{};
     bool sample_started_ = false, writer_started_ = false, used_ = false;
