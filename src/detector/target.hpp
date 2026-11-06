@@ -1,25 +1,352 @@
-#include "src/detector/armor.hpp"
+#pragma once
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <expected>
 #include <limits>
+#include <numbers>
 #include <span>
 #include <utility>
 
-#include "src/detector/blob_workspace.hpp"
-#include "src/detector/numeric.hpp"
-#include "src/detector/result.hpp"
+#include "camera/frame_view.hpp"
 
 namespace dart::detection {
 
+struct Point {
+    float x = 0.0F;
+    float y = 0.0F;
+
+    static constexpr Point missing() noexcept { return {-1.0F, -1.0F}; }
+};
+
+struct Rect {
+    std::uint32_t x = 0, y = 0, width = 0, height = 0;
+
+    static constexpr Rect full(std::uint32_t width, std::uint32_t height) noexcept {
+        return {0, 0, width, height};
+    }
+    bool is_full(std::uint32_t frame_width, std::uint32_t frame_height) const noexcept {
+        return x == 0 && y == 0 && width == frame_width && height == frame_height;
+    }
+    Rect unite(Rect other) const noexcept {
+        if (width == 0 || height == 0)
+            return other;
+        if (other.width == 0 || other.height == 0)
+            return *this;
+        const auto left = std::min(x, other.x), top = std::min(y, other.y);
+        return {
+            left, top, std::max(x + width, other.x + other.width) - left,
+            std::max(y + height, other.y + other.height) - top};
+    }
+};
+
+// Numeric checks shared by target rules and their bounded calculation workspaces.
+class Numeric final {
+public:
+    static bool IsPositive(float value) noexcept { return std::isfinite(value) && value > 0; }
+    static bool IsFraction(float value) noexcept {
+        return std::isfinite(value) && value >= 0 && value <= 1;
+    }
+    static std::uint64_t SumSquares(std::uint64_t n) noexcept {
+        return n * (n + 1) * (2 * n + 1) / 6;
+    }
+    static void IncrementSaturated(std::uint32_t& value) noexcept {
+        if (value != std::numeric_limits<std::uint32_t>::max())
+            ++value;
+    }
+};
+
+inline constexpr double kPi = std::numbers::pi;
+inline constexpr float kDegrees = 180.0F / static_cast<float>(kPi);
+inline constexpr std::uint32_t kMaxCandidates = 256;
+
+enum class DetectionError : int {
+    kInvalidConfig = 1,
+    kNoMemory,
+    kNotPrepared,
+    kInvalidFrame,
+    kInvalidWindow,
+    kWorkspaceExhausted,
+    kOutOfOrderFrame,
+};
+
+class Blob {
+public:
+    Point center{};
+    Rect bounds{};
+    std::uint32_t area = 0;
+    float fill = 0.0F;
+    float circularity = 0.0F;
+    float angle = 0.0F;
+    float length = 0.0F;
+    float thickness = 0.0F;
+    float mean_luma = 0.0F;
+    float background_luma = 0.0F;
+    float contrast = 0.0F;
+    float background_stddev = 0.0F;
+    float snr = 0.0F;
+    float stability = 1.0F;
+    float gray_quality = 1.0F;
+    bool stability_checked = false;
+    bool clipped = false;
+};
+
+class Target {
+public:
+    bool valid = false;
+    Point center = Point::missing(); // No target.
+    Rect bounds{};
+    std::uint32_t area = 0;
+    float radius = 0.0F;
+    float quality = 0.0F;
+    bool clipped = false;
+    float contrast = 0.0F;
+    float snr = 0.0F;
+    float stability = 0.0F;
+    float brightness_ratio = 0.0F;
+    float gap_contrast = 0.0F;
+    bool stability_checked = false;
+};
+
+class FrameMetadata {
+public:
+    std::uint64_t frame_id = 0;
+    std::uint64_t source_pts = 0;
+    std::chrono::microseconds received{};
+    bool source_pts_timebase_validated = false;
+};
+
+enum class DetectionPhase : std::uint8_t { kDetect, kTrack };
+
+class ScanMetadata {
+public:
+    Rect search_window{};
+    bool full_frame = false;
+    bool rescanned = false;
+    std::uint32_t candidates = 0;
+    std::uint32_t rejected_contrast = 0, rejected_snr = 0, rejected_stability = 0;
+    DetectionPhase phase = DetectionPhase::kDetect;
+    bool full_validation = false;
+    std::uint32_t stability_checks = 0;
+};
+
+enum class TargetKind : std::uint8_t { kNone, kLight, kArmor };
+
+class DetectResult {
+public:
+    TargetKind kind = TargetKind::kNone;
+    Target target{};                 // Armor center when available, otherwise light center.
+    Target light{};
+    Target armor{};
+    FrameMetadata source{};
+    ScanMetadata scan{};
+    std::uint32_t missed_frames = 0;
+
+    void select_target() noexcept {
+        target = armor.valid ? armor : light;
+        kind = armor.valid ? TargetKind::kArmor
+             : light.valid ? TargetKind::kLight
+                           : TargetKind::kNone;
+    }
+    Point coordinate() const noexcept { return target.valid ? target.center : Point::missing(); }
+};
+
+class Light {
+public:
+    struct Config {
+        std::uint32_t min_area = 3;
+        std::uint32_t far_area_threshold = 30;
+        std::uint32_t far_size_px = 8;
+        // Acquisition uses sampling; locked ROI tracking scans at step 1.
+        std::uint32_t search_step = 2;
+        std::uint32_t confirm_frames = 2;
+        std::uint32_t far_confirm_frames = 3;
+        float far_jump_k = 1.5F;
+        std::uint32_t far_jump_min_px = 6;
+        std::uint32_t deadband_px = 2;
+        float min_fill = 0.5F;
+        float min_circularity = 0.0F;
+        float circularity_weight = 1.0F;
+        float aspect_min = 0.7F;
+        float aspect_max = 1.4F;
+        float max_area_fraction = 0.25F;
+    };
+    Light() noexcept;
+    explicit Light(Config config) noexcept;
+    bool ValidConfig() const noexcept;
+    Target Detect(
+        std::span<const Blob> blobs, std::uint64_t frame_area,
+        const Blob** selected = nullptr) const noexcept;
+    static Target TargetFromBlob(const Blob& blob) noexcept;
+    bool Eligible(const Blob& blob, std::uint64_t frame_area) const noexcept;
+
+private:
+    Config config_;
+};
+
+class Armor {
+public:
+    struct Config {
+        std::uint32_t length_floor = 2;
+        std::uint32_t area_floor = 2;
+        float length_min_k = 0.2F;
+        float length_max_k = 8.0F;
+        float tiny_px = 8.0F;
+        float aspect_min = 2.0F;
+        float fill_min = 0.5F;
+        float flat_deg = 12.0F;
+        float parallel_deg = 15.0F;
+        float thickness_ratio = 0.3F;
+        float length_ratio = 0.4F;
+        float overlap = 0.4F;
+        float gap_max_k = 10.0F;
+        float diagonal_min_sin = 0.30F;
+        float border_penalty = 0.0F;
+        float window_width_k = 3.0F;
+        float window_height_k = 2.0F;
+        float window_gap_k = 0.0F;
+        float window_min_side = 24.0F;
+        float near_k = 8.0F;
+        float near_min_px = 32.0F;
+        float span_min_k = 0.2F;
+        float span_max_k = 12.0F;
+        std::uint32_t plate_up_lo_pct = 0;
+        std::uint32_t plate_up_hi_pct = 1200;
+        std::uint32_t plate_offx_pct = 600;
+        float association_k = 0.6F;
+        float association_min_px = 4.0F;
+        std::uint32_t track_hold = 2;
+        std::uint32_t confirm_frames = 2;
+        float min_brightness_ratio = 0.45F;
+        float min_gap_contrast = 8.0F;
+    };
+    Armor() noexcept;
+    explicit Armor(Config config) noexcept;
+    bool ValidConfig() const noexcept;
+    Target Detect(
+        std::span<const Blob> blobs, const Target& light, const Target* previous = nullptr,
+        const camera::FrameView* frame = nullptr, bool associated_only = false,
+        std::array<Blob, 2>* selected = nullptr) const noexcept;
+    Rect
+        SearchWindow(const Target& light, std::uint32_t width, std::uint32_t height) const noexcept;
+
+private:
+    struct Bar {
+        const Blob* blob = nullptr;
+        Point center{};
+        Point axis{};
+        float length = 0.0F;
+        float thickness = 0.0F;
+    };
+
+    // Recover the dimensions of a filled rectangular bar from its axis-aligned
+    // bounds and area. A rotated bar's bounding-box aspect/fill can be poor even
+    // when its principal dimensions are still a valid light bar. The caller
+    // keeps the axis-aligned bbox interpretation if recovery fails.
+    static bool
+        RecoverRectShape(const Blob& blob, float& length, float& thickness, float& tilt) noexcept;
+
+    static float Dot(Point a, Point b) noexcept { return a.x * b.x + a.y * b.y; }
+
+    static float Cross(Point a, Point b) noexcept { return a.x * b.y - a.y * b.x; }
+
+    static Point Delta(Point a, Point b) noexcept { return {a.x - b.x, a.y - b.y}; }
+
+    static bool PlateAnchorOk(const Config& config, Point center, const Target& light) noexcept;
+
+    static bool MakeBar(const Config& config, const Blob& blob, float scale, Bar& bar) noexcept;
+
+    static void
+        BarEndpoints(const Config& config, const Bar& bar, Point& first, Point& last) noexcept;
+
+    static bool ArmorCenter(const Config& config, const Bar& a, const Bar& b, Point& out) noexcept;
+
+    static Rect UniteBounds(Rect a, Rect b) noexcept;
+
+    static float GapLuma(const camera::FrameView& frame, const Bar& a, const Bar& b) noexcept;
+
+    Config config_;
+};
+
+inline Target Light::TargetFromBlob(const Blob& blob) noexcept {
+    return {
+        true,
+        blob.center,
+        blob.bounds,
+        blob.area,
+        std::sqrt(static_cast<float>(blob.area) / static_cast<float>(kPi)),
+        blob.gray_quality * (blob.clipped ? 0.25F : 1.0F),
+        blob.clipped,
+        blob.contrast,
+        blob.snr,
+        blob.stability,
+        0.0F,
+        0.0F,
+        blob.stability_checked};
+}
+
+inline bool Light::Eligible(const Blob& blob, std::uint64_t frame_area) const noexcept {
+    if (blob.bounds.width == 0 || blob.bounds.height == 0)
+        return false;
+    const float aspect = static_cast<float>(blob.bounds.width) / blob.bounds.height;
+    const bool far = blob.area < config_.far_area_threshold
+                  || std::max(blob.bounds.width, blob.bounds.height) < config_.far_size_px;
+    return blob.area >= config_.min_area
+        && static_cast<float>(blob.area)
+               <= static_cast<float>(frame_area) * config_.max_area_fraction
+        && (far
+            || (blob.fill >= config_.min_fill && blob.circularity >= config_.min_circularity
+                && aspect >= config_.aspect_min && aspect <= config_.aspect_max));
+}
+
+inline Light::Light() noexcept
+    : Light(Config{}) {}
+
+inline Light::Light(Config config) noexcept
+    : config_(config) {}
+
+inline bool Light::ValidConfig() const noexcept {
+    return config_.min_area > 0 && config_.far_area_threshold > 0 && config_.far_size_px > 0
+        && config_.search_step > 0 && Numeric::IsFraction(config_.min_fill)
+        && Numeric::IsFraction(config_.min_circularity) && std::isfinite(config_.circularity_weight)
+        && config_.circularity_weight >= 0.0F && Numeric::IsPositive(config_.aspect_min)
+        && Numeric::IsPositive(config_.aspect_max) && config_.aspect_min <= config_.aspect_max
+        && Numeric::IsPositive(config_.max_area_fraction) && config_.max_area_fraction <= 1.0F;
+}
+
+inline Target Light::Detect(
+    std::span<const Blob> blobs, std::uint64_t frame_area, const Blob** selected) const noexcept {
+    const Blob* best = nullptr;
+    float best_score = -1.0F;
+    for (const auto& blob : blobs) {
+        if (!Eligible(blob, frame_area))
+            continue;
+        const float roundness = std::max(0.05F, blob.circularity);
+        const float weight = config_.circularity_weight;
+        const float shape = weight == 0.0F ? 1.0F
+                          : weight == 1.0F ? roundness
+                                           : std::pow(roundness, weight);
+        const float score =
+            static_cast<float>(blob.area) * shape * std::max(0.05F, blob.gray_quality);
+        if (score > best_score) {
+            best = &blob;
+            best_score = score;
+        }
+    }
+    if (selected)
+        *selected = best;
+    return best ? TargetFromBlob(*best) : Target{};
+}
+
 // Recover the dimensions of a filled rectangular bar from its axis-aligned
 // bounds and area. A rotated bar's bounding-box aspect/fill can be poor even
-// when its principal dimensions are still a valid light bar. The moment
-// The caller keeps the axis-aligned bbox interpretation if recovery fails.
-bool ArmorDetector::RecoverRectShape(
+// when its principal dimensions are still a valid light bar. The caller
+// keeps the axis-aligned bbox interpretation if recovery fails.
+inline bool Armor::RecoverRectShape(
     const Blob& blob, float& length, float& thickness, float& tilt) noexcept {
     if (blob.bounds.width == 0 || blob.bounds.height == 0 || blob.area == 0)
         return false;
@@ -56,8 +383,7 @@ bool ArmorDetector::RecoverRectShape(
     return false;
 }
 
-bool ArmorDetector::PlateAnchorOk(
-    const Config& config, Point center, const Target& light) noexcept {
+inline bool Armor::PlateAnchorOk(const Config& config, Point center, const Target& light) noexcept {
     const float scale = static_cast<float>(std::max(light.bounds.width, light.bounds.height));
     if (!(scale > 0.0F))
         return false;
@@ -68,8 +394,7 @@ bool ArmorDetector::PlateAnchorOk(
         && off_x * 100.0F <= static_cast<float>(config.plate_offx_pct) * scale;
 }
 
-bool ArmorDetector::MakeBar(
-    const Config& config, const Blob& blob, float scale, Bar& bar) noexcept {
+inline bool Armor::MakeBar(const Config& config, const Blob& blob, float scale, Bar& bar) noexcept {
     const float minimum =
         std::max(static_cast<float>(config.length_floor), std::floor(config.length_min_k * scale));
     const float maximum = std::max(minimum, std::floor(config.length_max_k * scale));
@@ -96,7 +421,7 @@ bool ArmorDetector::MakeBar(
         bar.thickness = static_cast<float>(std::min(blob.bounds.width, blob.bounds.height));
         angle = blob.bounds.height >= blob.bounds.width ? static_cast<float>(kPi * 0.5) : 0.0F;
     }
-    // Remote blobs are too quantized for shape tests; LightTracker's temporal
+    // Remote blobs are too quantized for shape tests; Track's temporal
     // confirmation is the gate. Keep only the area/pixel floor above.
     const bool far = static_cast<float>(std::max(blob.bounds.width, blob.bounds.height))
                    < static_cast<float>(config.tiny_px);
@@ -117,8 +442,8 @@ bool ArmorDetector::MakeBar(
     return true;
 }
 
-void ArmorDetector::BarEndpoints(
-    const Config& config, const Bar& bar, Point& first, Point& last) noexcept {
+inline void
+    Armor::BarEndpoints(const Config& config, const Bar& bar, Point& first, Point& last) noexcept {
     Point axis = bar.axis;
     float length = bar.length;
     // Fix endpoint order across the +/- pi/2 discontinuity of the principal axis.
@@ -138,8 +463,8 @@ void ArmorDetector::BarEndpoints(
     last = {bar.center.x + axis.x * length * 0.5F, bar.center.y + axis.y * length * 0.5F};
 }
 
-bool ArmorDetector::ArmorCenter(
-    const Config& config, const Bar& a, const Bar& b, Point& out) noexcept {
+inline bool
+    Armor::ArmorCenter(const Config& config, const Bar& a, const Bar& b, Point& out) noexcept {
     Point a0, a1, b0, b1;
     BarEndpoints(config, a, a0, a1);
     BarEndpoints(config, b, b0, b1);
@@ -160,14 +485,14 @@ bool ArmorDetector::ArmorCenter(
     return std::isfinite(out.x) && std::isfinite(out.y);
 }
 
-Rect ArmorDetector::UniteBounds(Rect a, Rect b) noexcept {
+inline Rect Armor::UniteBounds(Rect a, Rect b) noexcept {
     const auto x = std::min(a.x, b.x), y = std::min(a.y, b.y);
     return {
         x, y, std::max(a.x + a.width, b.x + b.width) - x,
         std::max(a.y + a.height, b.y + b.height) - y};
 }
 
-float ArmorDetector::GapLuma(const camera::FrameView& frame, const Bar& a, const Bar& b) noexcept {
+inline float Armor::GapLuma(const camera::FrameView& frame, const Bar& a, const Bar& b) noexcept {
     const auto offset = Delta(b.center, a.center);
     const float separation = std::fabs(Cross(offset, a.axis));
     const float lo = std::min(0.45F, a.thickness * 0.5F / separation);
@@ -191,42 +516,42 @@ float ArmorDetector::GapLuma(const camera::FrameView& frame, const Bar& a, const
     return sum / 9.0F;
 }
 
-ArmorDetector::ArmorDetector() noexcept
-    : ArmorDetector(Config{}) {}
+inline Armor::Armor() noexcept
+    : Armor(Config{}) {}
 
-ArmorDetector::ArmorDetector(Config config) noexcept
+inline Armor::Armor(Config config) noexcept
     : config_(config) {}
 
-bool ArmorDetector::ValidConfig() const noexcept {
+inline bool Armor::ValidConfig() const noexcept {
     const std::array values{
         config_.length_min_k,   config_.length_max_k,    config_.tiny_px,
         config_.aspect_min,     config_.gap_max_k,       config_.diagonal_min_sin,
         config_.window_width_k, config_.window_height_k, config_.window_min_side,
         config_.near_k,         config_.near_min_px,     config_.span_min_k,
         config_.span_max_k,     config_.association_k,   config_.association_min_px};
-    return std::all_of(values.begin(), values.end(), IsPositive) && config_.length_floor > 0
-        && config_.area_floor > 0 && config_.length_min_k <= config_.length_max_k
-        && config_.span_min_k <= config_.span_max_k && config_.diagonal_min_sin <= 1.0F
-        && config_.plate_up_lo_pct <= config_.plate_up_hi_pct && config_.plate_offx_pct > 0
-        && config_.track_hold > 0 && config_.confirm_frames > 0
-        && IsFraction(config_.thickness_ratio) && IsFraction(config_.length_ratio)
-        && IsFraction(config_.overlap) && std::isfinite(config_.window_gap_k)
+    return std::all_of(values.begin(), values.end(), Numeric::IsPositive)
+        && config_.length_floor > 0 && config_.area_floor > 0
+        && config_.length_min_k <= config_.length_max_k && config_.span_min_k <= config_.span_max_k
+        && config_.diagonal_min_sin <= 1.0F && config_.plate_up_lo_pct <= config_.plate_up_hi_pct
+        && config_.plate_offx_pct > 0 && config_.track_hold > 0 && config_.confirm_frames > 0
+        && Numeric::IsFraction(config_.thickness_ratio) && Numeric::IsFraction(config_.length_ratio)
+        && Numeric::IsFraction(config_.overlap) && std::isfinite(config_.window_gap_k)
         && config_.window_gap_k >= 0.0F && std::isfinite(config_.border_penalty)
         && config_.border_penalty >= 0.0F && std::isfinite(config_.flat_deg)
-        && config_.flat_deg >= 0.0F && config_.flat_deg <= 45.0F && IsPositive(config_.parallel_deg)
-        && config_.parallel_deg < 90.0F && IsFraction(config_.min_brightness_ratio)
+        && config_.flat_deg >= 0.0F && config_.flat_deg <= 45.0F
+        && Numeric::IsPositive(config_.parallel_deg) && config_.parallel_deg < 90.0F
+        && Numeric::IsFraction(config_.min_brightness_ratio)
         && std::isfinite(config_.min_gap_contrast) && config_.min_gap_contrast >= 0.0F
         && config_.min_gap_contrast <= 255.0F;
 }
 
 // Both selectors read measured candidates. The current light anchors the armor
 // search above it; an old target is used only for association.
-Target ArmorDetector::Detect(
+inline Target Armor::Detect(
     std::span<const Blob> blobs, const Target& light, const Target* previous,
     const camera::FrameView* frame, bool associated_only,
     std::array<Blob, 2>* selected) const noexcept {
-    if (!light.valid || !IsPositive(light.radius)
-        || blobs.size() > BlobWorkspace::Config::kMaxCandidates)
+    if (!light.valid || !Numeric::IsPositive(light.radius) || blobs.size() > kMaxCandidates)
         return {};
     if (associated_only && (!previous || !previous->valid))
         return {};
@@ -239,7 +564,7 @@ Target ArmorDetector::Detect(
     // Candidate coordinates come from a validated workspace (at most 65535).
     const Rect window = SearchWindow(light, 65535, 65535);
     const float scale = 2.0F * light.radius;
-    std::array<Bar, BlobWorkspace::Config::kMaxCandidates> bars{};
+    std::array<Bar, kMaxCandidates> bars{};
     std::size_t count = 0;
     for (const auto& blob : blobs) {
         if (blob.bounds.width == 0 || blob.bounds.height == 0
@@ -364,9 +689,9 @@ Target ArmorDetector::Detect(
     return best;
 }
 
-Rect ArmorDetector::SearchWindow(
+inline Rect Armor::SearchWindow(
     const Target& light, std::uint32_t width, std::uint32_t height) const noexcept {
-    if (!light.valid || !IsPositive(light.radius) || !std::isfinite(light.center.x)
+    if (!light.valid || !Numeric::IsPositive(light.radius) || !std::isfinite(light.center.x)
         || !std::isfinite(light.center.y))
         return {};
     const double scale = 2.0 * light.radius;

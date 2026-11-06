@@ -1,43 +1,62 @@
-# 检测与 ROI
+# 检测与跟踪
 
-纯 C++23 的 L4 算法，按职责使用 `.hpp` / `.cpp`，头文件按接口需要建立。
-相关值类型可以同文件，跟踪历史等状态保留为私有类型；消费者包含所需头文件，
-并链接 `dart_detection` 静态库。主机回归与交叉应用完成最终链接。
+`detector.cpp` 是本目录唯一的 `.cpp`，其中 `Detector` 继承
+`executor::Component`，负责取帧、组织计算和发布目标像素坐标。
+算法类在头文件中实现，配置、工作区和历史状态归所属类持有。
 
 | 文件 | 类 / 职责 |
 |---|---|
-| `blob_workspace.cpp` | 连通域提取、候选数据、`BlobWorkspace::Config` 及私有游程/组件存储 |
-| `light.cpp` | 灯候选选择、跨帧确认、配置与确认状态 |
-| `tracking.cpp` | 位置/尺寸/对比度关联、按接收时间估计速度及有限外推 |
-| `armor.cpp` | 灯条配对、板心几何与 `ArmorDetector::Config`；灯条和辅助计算为私有实现 |
-| `roi.cpp` | `RoiDetector::Config`、测量编排、窗口策略及跟踪历史 |
-| `interface.hpp` | `IDetector`，检测与重置接口 |
-| `geometry.cpp`、`numeric.cpp` | 检测功能间共享的几何与数值运算，使用普通函数 |
-| `result.hpp` | 目标、帧身份、扫描元数据和检测结果组成的公开契约 |
+| `target.hpp` | `Light`、`Armor` 的目标筛选和几何计算，以及坐标、候选和结果值类型 |
+| `detect.hpp` | `Detect` 的单帧扫描、候选提取、质量检查和有界 `Workspace`；对外 component 工厂契约 |
+| `track.hpp` | `Track` 的目标关联、连续确认、速度预测、ROI 规划和丢失状态 |
+| `detector.cpp` | 唯一执行 component `Detector`，参数读取、相机生命周期和 Blackboard 输出 |
 
-只依赖 `camera/frame_view.hpp` 的只读帧数据；不持有相机、不释放租约、不保留像素指针。
+`DetectorFactory::create()` 接受 component 的 `Spec`、相机接口、目标输出端口、
+诊断状态及可选的同步帧消费者，返回 `std::unique_ptr<executor::Component>`。
+将 `executor::Output<Point>` 绑定到 `BlackBoard::target` 后，Detector 只写该槽位，
+无需读取 Blackboard。`BlackBoard::update()` 只刷新 IMU，不再搬运视觉坐标。
 
-初始化时构造 `dart::detection::RoiDetector` 并调用
-`Prepare(max_width, max_height)`。在现有采集线程拿到 `AcquireStatus::kFrame` 后调用：
+生命周期沿用 `initialze()`、`run(stop_token)` / `step()`、`shutdown()`：
+
+- 初始化校验配置、一次性分配计算工作区、重置历史并启动相机。
+- `capture_inputs()` 取帧；`update()` 调用 Detect 和 Track；`publish_outputs()`
+  先发布坐标，再让录像、回传和诊断同步消费当前帧。
+- 有效 Armor 优先于 Light；无当前有效目标、无帧、容量丢帧和识别错误均发布
+  `(-1, -1)`。预测和短时保留的历史只用于搜索与关联，不发布为识别结果。
+- 相机错误保留独立诊断，连续取帧错误达到 `max_acquire_errors` 时退出。
+  返回错误而跳过后续生命周期阶段的路径，也会清除目标坐标。
+- 同步消费者只在回调期间借用帧。录像接受时可以移动租约；其余租约由 Detector
+  释放。退出前调用方先停止消费者并排空已转移的租约，再关闭 Detector 和相机。
+  销毁 component 时，相机、目标通道和诊断状态必须仍然存活。
+
+`Spec::parameter` 使用配置字段路径，如 `threshold`、`workspace.min_contrast`、
+`light.confirm_frames`、`armor.confirm_frames`、`track.validation_interval` 和 `roi.max_gap`。
+另有 `enabled`（0/1）、`acquire_ms` 和 `max_acquire_errors`；后两项为 1..10000 的整数。
+未知参数、非有限值和非整数的计数参数会被拒绝。`enabled=0` 时仍取帧供录像等消费者使用，
+目标槽位保持无效坐标。
+
+计算类仅借用 `camera::FrameView`，不操作相机或保留像素指针，可独立调用：
 
 ```cpp
-#include "src/detector/roi.hpp"  // target_link_libraries(... dart_detection)
+#include "src/detector/detect.hpp"
 
-auto result = detector.Detect(acquired.lease.view());
-if (result && result->target.valid) {
-    const auto center = result->target.center;  // 全图像素坐标，允许半像素
-    // 将 center 和 result->source.frame_id / result->source.received 交给下一层。
-}
-// 其他同步消费者结束后，现有流水线在同一线程释放 acquired.lease。
-// kNoFrame / kLeaseExhausted 不调用 Detect()，不构造假帧推进 ROI 状态。
+using namespace dart::detection;
+Detect::Config config;
+Detect detect{config};
+Track track{config.light, config.armor, config.track, config.roi};
+auto prepared = detect.Prepare(max_width, max_height);
+// prepared 成功后，在帧租约有效期间调用：
+auto result = detect.update(frame, track);
+// 重新启动图像源后清除历史：
+track.Reset();
 ```
 
-`Prepare()` 和 `Detect()` 返回 `std::expected`。无目标是成功结果，表现为
-`kind == TargetKind::kNone`、`target.valid == false`；工作区不足、非法输入和乱序帧
-返回 `DetectionError`。启动分配失败由调用方处理，热路径没有动态分配。一个实例用于
-一条按序调用的流水线；相机停止重启后调用 `Reset()`，再接受新的帧号。
+无目标是成功结果，`kind == TargetKind::kNone`、`target.valid == false`，
+`target.center` 和 `coordinate()` 均为 `(-1, -1)`。
+工作区不足、非法输入和乱序帧返回 `DetectionError`。初始化后算法热路径不动态分配；
+一个 Detect / Track 组合由同一条按帧顺序执行的流水线使用。
 
-`blob_workspace.cpp`、`light.cpp` 与 `armor.cpp` 分别实现游程测量、灯检测和装甲板检测：
+当前测量与跟踪规则：
 
 - 直接在 ROI 的 Y8 上用可配置阈值提取 8 邻域连通域，按游程计算面积、质心、
   二阶矩、圆度和主轴；常规 step=1 扫描中两个检测类读同一组候选。首次全图获取时灯用 search_step 采样，装甲只在灯锚定的小窗 step=1 精扫。
@@ -67,12 +86,12 @@ if (result && result->target.valid) {
   （`armor.min_brightness_ratio`）。沿灯条方向和条间方向布置 3×3 个内部采样点，
   要求较暗灯条均值减条间均值至少 8（`armor.min_gap_contrast`）。两项也参与配对排序与
   质量评分，设为 0 可放宽相应门限；gap 门限为 0 时仍要求条间不比灯条亮。
-  `RoiDetector` 始终传入原始灰度帧；直接调用 `ArmorDetector::Detect` 不传 frame
+  `Detect` 始终传入原始灰度帧；直接调用 `Armor::Detect` 不传 frame
   时仅检查几何，供已有几何消费者兼容使用，不会假造灰度证据。
 - 跟踪时先过滤上一对灯条预测包围框附近的候选，再进行配对，仍保留形状检查。
   关联失败返回本帧装甲板无效，不直接换到最高分的其他灯条对。
 
-`roi.cpp` 明确区分 Detect 与 Track：
+`Detect` 与 `Track` 区分获取和跟踪阶段：
 
 - Detect 全图按 `light.search_step` 获取，完整检查所有候选的灰度稳定性。
   灯连续确认默认 2 帧（远档 3 帧），新装甲板对默认确认 2 帧（`armor.confirm_frames`）。
@@ -95,7 +114,7 @@ if (result && result->target.valid) {
   没有已知装甲板时，常规帧只搜索灯附近；完整复查时扩展到灯上方的装甲板搜索窗。
 - ROI 灯丢失或目标贴边时，同帧全图精扫，仍只关联原目标；不会让其他目标继承锁定。
   连续 3 帧失配后解除锁定，再进入 Detect 并重新确认新目标。短时丢失会扩大 ROI，
-  大小变化、接收间隔超过 `roi.max_gap` 或 `Reset()` 会清除全部预测与确认历史。
+  大小变化、接收间隔超过 `roi.max_gap` 或 `Track::Reset()` 会清除全部预测与确认历史。
   `roi.full_scan_interval` 保留显式周期全图检查，默认 0 关闭。
 
 窗口靠图像边缘时整体平移，保持尺寸。只用单调接收时间 `received` 估计速度和判断
@@ -125,7 +144,7 @@ quality 只含本帧 SNR 和配对结构分，不沿用历史稳定性作为本�
 工作区最大宽高为 65535，默认最多 16384 个游程和 256 个有效连通域；超过上限明确
 返回 `kWorkspaceExhausted`，不静默截断。较小帧可以使用原有工作区，超过准备尺寸则拒收。
 默认工作区约 1.5 MiB；每帧只清理实际使用的组件槽，不申请整图二值副本。
-两个单独检测类消费 `BlobWorkspace::Scan()` 产生的候选，输入须遵守其几何和数值约定。
+两个单独检测类消费 `Detect::Workspace::Scan()` 产生的候选，输入须遵守其几何和数值约定。
 
 算法来源：[Guided_dart / k230_v1](https://github.com/hyperle/Guided_dart/tree/k230_v1)，
 参考版本 `a7390262203f2565876aef1d2a8b628b2722d79f`，
@@ -133,5 +152,5 @@ quality 只含本帧 SNR 和配对结构分，不沿用历史稳定性作为本�
 `src/detection/armor/armor_{rules,geometry,windows}.cpp` 和
 `include/detection/math/shape_metrics（上游历史路径）`。
 
-代码通过主机逐文件编译、行为回归和 K230 交叉链接验证；
-实际识别质量、耗时和 DMA/流水线行为仍需板端验证。
+验证应覆盖主机行为、component 生命周期、租约转移和 K230 交叉编译与链接；
+实际识别质量、耗时和 DMA/流水线行为须单独在板端验证。
