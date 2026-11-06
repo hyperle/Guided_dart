@@ -178,6 +178,87 @@ bool Recording::append_stream(const QFileInfo& file_info, QString& error) {
     return true;
 }
 
+bool Recording::append_png_stream(const QFileInfo& file_info, QString& error) {
+    QFile file(file_info.absoluteFilePath());
+    if (!file.open(QIODevice::ReadOnly)) {
+        error = file.errorString();
+        return false;
+    }
+    const auto header = file.read(16);
+    const auto le32 = [](const char* data) {
+        quint32 value = 0;
+        for (unsigned i = 0; i < 4; ++i)
+            value |= static_cast<quint32>(static_cast<unsigned char>(data[i])) << (8U * i);
+        return value;
+    };
+    const auto be32 = [](const char* data) {
+        quint32 value = 0;
+        for (unsigned i = 0; i < 4; ++i)
+            value = (value << 8U) | static_cast<unsigned char>(data[i]);
+        return value;
+    };
+    if (header.size() != 16 || header.left(8) != QByteArray("DPNG\1\0\20\0", 8)) {
+        error = file_info.absoluteFilePath() + ": invalid DPNG header";
+        return false;
+    }
+    const auto width = le32(header.constData() + 8), height = le32(header.constData() + 12);
+    if (width == 0 || height == 0 || width > 16384 || height > 16384) {
+        error = file_info.absoluteFilePath() + ": invalid DPNG geometry";
+        return false;
+    }
+    quint64 index = 1;
+    while (file.pos() < file.size()) {
+        const auto offset = file.pos();
+        const auto signature = file.read(8);
+        bool complete = false, first = true;
+        if (signature.size() == 8 && signature != QByteArray("\x89PNG\r\n\x1a\n", 8)) {
+            error = file_info.absoluteFilePath() + ": invalid PNG signature";
+            return false;
+        }
+        while (signature.size() == 8 && file.pos() < file.size()) {
+            const auto chunk = file.read(8);
+            if (chunk.size() != 8)
+                break;
+            const auto size = be32(chunk.constData());
+            if (static_cast<qint64>(size) + 4 > file.size() - file.pos())
+                break;
+            const auto kind = chunk.mid(4, 4);
+            if (first) {
+                if (kind != "IHDR" || size != 13) {
+                    error = file_info.absoluteFilePath() + ": invalid PNG IHDR";
+                    return false;
+                }
+                const auto geometry = file.read(13);
+                if (geometry.size() != 13 || be32(geometry.constData()) != width
+                    || be32(geometry.constData() + 4) != height) {
+                    error = file_info.absoluteFilePath() + ": PNG geometry differs from DPNG";
+                    return false;
+                }
+                if (!file.seek(file.pos() + 4))
+                    break;
+                first = false;
+            } else if (!file.seek(file.pos() + static_cast<qint64>(size) + 4)) {
+                break;
+            }
+            if (kind == "IEND" && size == 0) {
+                complete = true;
+                break;
+            }
+        }
+        if (!complete) {
+            notes_ << file_info.absoluteFilePath() + ": incomplete final PNG ignored";
+            break;
+        }
+        Frame frame;
+        frame.image_index = index++;
+        frame.path = file_info.absoluteFilePath();
+        frame.file_offset = offset;
+        frame.file_bytes = file.pos() - offset;
+        frames_.push_back(std::move(frame));
+    }
+    return true;
+}
+
 bool Recording::load(
     const QString& image_directory, const QString& frames_csv, const QString& detection_csv,
     const QString& extension, QString& error) {
@@ -200,6 +281,11 @@ bool Recording::load(
             continue;
         if (relative == "recording.dbv") {
             if (!append_binary(file, error))
+                return false;
+            continue;
+        }
+        if (relative == "recording.pngs") {
+            if (!append_png_stream(file, error))
                 return false;
             continue;
         }
@@ -244,7 +330,7 @@ bool Recording::load(
     std::map<QString, std::vector<const CsvRow*>> by_image;
     const QRegularExpression image_name(QStringLiteral(
         "^img/((?:(?:part_[0-9]{6}|b[0-9]{7}/p[0-9]{7})/"
-        ")?(?:frame_)?[0-9]+\\.(pgm|pbm|png)|recording\\.(pgm|pbm|dbv))$"));
+        ")?(?:frame_)?[0-9]+\\.(pgm|pbm|png)|recording\\.(pgm|pbm|dbv|pngs))$"));
     for (const CsvRow& row : events) {
         if (!frame_identity(row, "source_sequence")) {
             error = row.location() + QStringLiteral(": invalid frame identity");
@@ -259,7 +345,7 @@ bool Recording::load(
         }
         QString key = name;
         if (name == "img/recording.pgm" || name == "img/recording.pbm"
-            || name == "img/recording.dbv") {
+            || name == "img/recording.dbv" || name == "img/recording.pngs") {
             const auto offset = unsigned_value(row.value("file_offset"));
             const auto bytes = unsigned_value(row.value("file_bytes"));
             if (!offset || !bytes || *bytes == 0) {

@@ -16,7 +16,8 @@
 #include <vector>
 
 #include "recorder/encoding/binary_decoder.hpp"
-#include "recorder/recorder.hpp"
+#include "tests/recorder_fixture.hpp"
+#include "src/recorder/storage.hpp"
 
 #include "recorder/encoding/binary_encoder.hpp"
 #include "recorder/encoding/binary_format.hpp"
@@ -117,7 +118,7 @@ class RecorderBinaryTest final {
         recorder::BinaryDecoder decoder;
         recorder::PngEncoder png;
         assert(encoder.prepare(640, 480, 128) && decoder.prepare(640, 480));
-        assert(png.prepare(640, 480, 128));
+        assert(png.prepare(640, 480));
         std::vector<std::byte> background(640 * 480), pixels;
         std::uint32_t random = 0x12345678;
         for (auto& pixel : background) {
@@ -167,14 +168,14 @@ class RecorderBinaryTest final {
         recorder::Config config;
         config.width = 9;
         config.height = 2;
-        config.queue_slots = 4;
+
         config.image_format = recorder::ImageFormat::kDbv;
         config.output_directory = directory;
         config.max_file_bytes = 22; // 12-byte geometry + two identical 5-byte raw frames.
         std::vector<recorder::FrameEvent> events;
         config.event_sink = sink;
         config.event_sink_context = &events;
-        recorder::Recorder rec{config};
+        RecorderFixture rec{config};
         assert(rec.start());
         std::vector<std::byte> pixels(18);
         camera::FrameLeaseAccess::Slot slot;
@@ -191,8 +192,10 @@ class RecorderBinaryTest final {
             (void)lease.release();
             while (rec.pending_releases())
                 (void)rec.drain_releases();
-            if (admission == recorder::Admission::kAccepted)
+            if (admission == recorder::Admission::kAccepted) {
+                rec.wait_released();
                 ++frame;
+            }
             else
                 assert(admission == recorder::Admission::kBusy);
         }
@@ -235,7 +238,7 @@ class RecorderBinaryTest final {
         recorder::RecorderError error;
         recorder::Session session{config, error};
         assert(session.open());
-        recorder::ImageWriter writer{config, session};
+        ImageWriterFixture writer{config, session};
         assert(writer.prepare(18) && writer.open(error));
         std::vector<std::byte> pixels(18);
         assert(writer.write_image(pixels) && writer.record_bytes() == 17);

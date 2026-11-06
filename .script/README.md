@@ -98,10 +98,22 @@ MTP 部署会核对 `revision.txt`；缺少该文件时，必须存在已部署�
 gvfs 的本地路径（含冒号，记得加引号）。
 
 MTP 部署由 `deploy-rtos` 转交 `deploy-mtp.sh`，用 `gio copy` 直接操作
-存储 URI。先备份旧文件，再上传临时文件并完整回读校验 SHA-256，改名替换后再次校验。
+存储 URI。先完整回读备份旧文件，再删除目标名并重新上传，完整回读校验 SHA-256；
+替换或校验失败时用备份恢复。当前 GIO 后端不可靠地支持覆盖和改名，脚本使用此序列。
 主机上的 `/tmp/dart-mtp-backup.*` 备份会保留；板上日志和录像也会保留。
 此前通过 GVfs FUSE 路径运行 `cp` 出现过 0 字节文件，但原生 GIO 上传和改名已在当前
 连接上验证成功，不能将 FUSE 写入失败直接判定为所有 MTP 写入都不可用。
+
+回读录像前先用 `write-rtos off` 关闭写入。若在录制期间已经查询或读取过文件，
+GVfs/gphoto2 可能继续缓存旧大小，`gio cat` 也可能只返回旧长度；应重新挂载主机端会话后再读取：
+
+```bash
+gio mount -u gphoto2://Kendryte_CanMV_001000000/
+gio mount gphoto2://Kendryte_CanMV_001000000/
+```
+
+这不会重启板子或解除写入暂停。下载后仍需将文件大小、完整帧边界与 `frames.csv`
+的 `file_offset` / `file_bytes` 核对；仅凭 `gio cat` 成功退出不能证明录像完整。
 
 ## 怎么直接敲 `build-rtos -r`（一次性，不用 `./`）
 

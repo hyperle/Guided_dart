@@ -18,7 +18,7 @@
 # include <unistd.h>
 
 #include "camera/frame_lease.hpp"
-#include "recorder/recorder.hpp"
+#include "tests/recorder_fixture.hpp"
 
 namespace dart::tests {
 
@@ -35,7 +35,7 @@ public:
         config.keep_sessions = 2;
 
         for (int i = 1; i <= 3; ++i) {
-            dart::recorder::Recorder recorder(config);
+            dart::tests::RecorderFixture recorder(config);
             assert(recorder.start());
             recorder.stop();
             const auto session = root / ("rec_000" + std::to_string(i));
@@ -47,7 +47,7 @@ public:
         assert(std::filesystem::exists(root / "rec_0003"));
 
         std::ofstream(root / "rec_0002/img/user.txt") << "keep";
-        dart::recorder::Recorder guarded(config);
+        dart::tests::RecorderFixture guarded(config);
         assert(!guarded.start());
         assert(guarded.last_system_error() == EPERM);
         assert(std::filesystem::exists(root / "rec_0002/img/user.txt"));
@@ -67,34 +67,6 @@ public:
     }
 
 private:
-    // Hold the metadata consumer outside its queue mutex. Image tests can then
-    // require specific CSV rows without racing the allowed try-lock drops.
-    class MetadataGate final {
-    public:
-        static void sink(const dart::recorder::FrameEvent&, void* context) noexcept {
-            auto& gate = *static_cast<MetadataGate*>(context);
-            if (!gate.entered_.exchange(true, std::memory_order_release))
-                gate.resume_.wait();
-        }
-        void hold(dart::recorder::Recorder& recorder) {
-            for (int attempt = 0; attempt < 1000; ++attempt) {
-                if (entered_.load(std::memory_order_acquire))
-                    return;
-                dart::camera::FrameLease empty;
-                assert(
-                    recorder.try_submit(std::move(empty))
-                    == dart::recorder::Admission::kInvalidFrame);
-                std::this_thread::sleep_for(std::chrono::milliseconds{1});
-            }
-            assert(false && "metadata consumer did not reach its callback");
-        }
-        void resume() { resume_.count_down(); }
-
-    private:
-        std::atomic<bool> entered_{false};
-        std::latch resume_{1};
-    };
-
     static std::expected<void, dart::camera::CameraError>
         release(dart::camera::FrameLeaseAccess::Slot* slot) noexcept {
         slot->state = dart::camera::FrameLeaseAccess::SlotState::kFree;
@@ -119,12 +91,8 @@ private:
         config.height = 2;
         config.image_format = format;
         config.output_directory = path;
-        MetadataGate metadata;
-        config.event_sink = MetadataGate::sink;
-        config.event_sink_context = &metadata;
-        dart::recorder::Recorder recorder{config};
+        dart::tests::RecorderFixture recorder{config};
         assert(recorder.start());
-        metadata.hold(recorder);
         auto lease = dart::camera::FrameLeaseAccess::make(&slot);
         bool accepted = false;
         for (int attempt = 0; attempt < 100; ++attempt) {
@@ -141,7 +109,6 @@ private:
         }
         assert(accepted);
         assert(!lease.valid());
-        metadata.resume();
         recorder.stop();
         assert(recorder.pending_releases() == 1);
         assert(!recorder.start()); // Restart cannot discard an outstanding camera lease.
@@ -182,7 +149,7 @@ private:
     }
 
     static void
-        submit(dart::recorder::Recorder& recorder, dart::camera::FrameLeaseAccess::Slot& slot) {
+        submit(dart::tests::RecorderFixture& recorder, dart::camera::FrameLeaseAccess::Slot& slot) {
         auto lease = dart::camera::FrameLeaseAccess::make(&slot);
         for (int attempt = 0; attempt < 100; ++attempt) {
             const auto admission = recorder.try_submit(std::move(lease));
@@ -209,16 +176,12 @@ private:
         config.image_format = format;
         config.output_directory = path;
         config.max_file_bytes = 2 * frame_bytes + (slack ? frame_bytes - 1 : 0);
-        MetadataGate metadata;
-        config.event_sink = MetadataGate::sink;
-        config.event_sink_context = &metadata;
         std::array<std::byte, 18> pixels{};
         pixels.fill(std::byte{255});
         pixels[0] = pixels[8] = std::byte{0};
         std::array<dart::camera::FrameLeaseAccess::Slot, 3> slots{};
-        dart::recorder::Recorder recorder{config};
+        dart::tests::RecorderFixture recorder{config};
         assert(recorder.start());
-        metadata.hold(recorder);
         for (std::size_t i = 0; i < slots.size(); ++i) {
             auto& slot = slots[i];
             slot.view.luma = pixels;
@@ -231,6 +194,7 @@ private:
             slot.release = &RecorderSessionTest::release;
             if (i < 2) {
                 submit(recorder, slot);
+                recorder.wait_released();
             } else {
                 for (unsigned wait = 0; wait < 1000 && recorder.started(); ++wait)
                     std::this_thread::sleep_for(std::chrono::milliseconds{1});
@@ -241,9 +205,8 @@ private:
                 assert(lease.valid() && lease.release());
             }
         }
-        metadata.resume();
         recorder.stop();
-        assert(recorder.drain_releases() == 2);
+        assert(recorder.drain_releases() == 0);
         assert(recorder.pending_releases() == 0);
         for (const auto& slot : slots)
             assert(slot.state == dart::camera::FrameLeaseAccess::SlotState::kFree);
@@ -277,7 +240,7 @@ private:
             != std::string::npos);
 
         // Simulate another boot. The first stream must survive unchanged.
-        dart::recorder::Recorder next{config};
+        dart::tests::RecorderFixture next{config};
         assert(next.start());
         next.stop();
         assert(std::filesystem::exists(std::filesystem::path{path} / "rec_0002/img"));
@@ -285,7 +248,7 @@ private:
         for (const auto cap :
              {std::uint64_t{0}, frame_bytes - 1, dart::recorder::Config::kMaxFileBytes + 1}) {
             config.max_file_bytes = cap;
-            dart::recorder::Recorder invalid{config};
+            dart::tests::RecorderFixture invalid{config};
             assert(!invalid.start());
             assert(invalid.last_error() == dart::recorder::Error::kInvalidConfig);
         }
@@ -300,7 +263,7 @@ private:
         config.width = 1;
         config.height = 1;
         config.output_directory = path;
-        dart::recorder::Recorder recorder{config};
+        dart::tests::RecorderFixture recorder{config};
         assert(recorder.start());
         std::array<std::byte, 1> pixels{};
         dart::camera::FrameLeaseAccess::Slot slot{};
@@ -315,10 +278,7 @@ private:
             auto lease = dart::camera::FrameLeaseAccess::make(&slot);
             const auto admission = recorder.try_submit(std::move(lease));
             if (admission == dart::recorder::Admission::kAccepted) {
-                for (int attempt = 0; recorder.stats().queued != 0 && attempt < 1000; ++attempt)
-                    std::this_thread::sleep_for(std::chrono::milliseconds{1});
-                while (recorder.pending_releases() != 0)
-                    recorder.drain_releases();
+                recorder.wait_released();
                 assert(slot.state == dart::camera::FrameLeaseAccess::SlotState::kFree);
             } else {
                 assert(lease.valid() && lease.release());

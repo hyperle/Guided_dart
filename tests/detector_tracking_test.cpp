@@ -6,7 +6,7 @@
 #include <cmath>
 #include <vector>
 
-#include "src/detector/roi.hpp"
+#include "tests/detector_fixture.hpp"
 
 namespace dart::tests {
 
@@ -27,7 +27,7 @@ class DetectorTrackingTest {
                     pixels[yy * frame.stride + xx] = static_cast<std::byte>(value);
         }
         void plate(unsigned x = 144) { box(x, 140, 2, 12); box(x + 20, 140, 2, 12); }
-        detection::DetectResult next(detection::RoiDetector& detector, unsigned us = 10000) {
+        detection::DetectResult next(DetectionCalculator& detector, unsigned us = 10000) {
             ++frame.sequence;
             frame.received += std::chrono::microseconds{us};
             auto result = detector.Detect(frame);
@@ -36,8 +36,8 @@ class DetectorTrackingTest {
         }
     };
 
-    static detection::RoiDetector::Config config() {
-        detection::RoiDetector::Config c{};
+    static DetectionCalculator::Config config() {
+        DetectionCalculator::Config c{};
         c.light.search_step = 1;
         c.light.confirm_frames = c.light.far_confirm_frames = 1;
         c.light.deadband_px = 0;
@@ -58,7 +58,7 @@ public:
         auto c = config();
         c.light.confirm_frames = 2;
         c.track.validation_interval = 100;
-        detection::RoiDetector detector{c};
+        DetectionCalculator detector{c};
         assert(detector.Prepare(320, 240));
         Scene s;
         s.box(40, 80, 8, 8);
@@ -87,7 +87,7 @@ public:
 
     static void validation_schedule() {
         auto c = config();
-        detection::RoiDetector detector{c};
+        DetectionCalculator detector{c};
         assert(detector.Prepare(320, 240));
         Scene s;
         s.box(150, 160, 8, 8); s.plate();
@@ -111,7 +111,7 @@ public:
 
     static void periodic_rejection_and_snr() {
         auto c = config();
-        detection::RoiDetector detector{c};
+        DetectionCalculator detector{c};
         assert(detector.Prepare(320, 240));
         Scene s;
         s.box(150, 160, 8, 8, 80);
@@ -141,7 +141,7 @@ public:
         c.armor.confirm_frames = 2;
         c.armor.window_width_k = 10;
         c.track.validation_interval = 100;
-        detection::RoiDetector detector{c};
+        DetectionCalculator detector{c};
         assert(detector.Prepare(320, 240));
         Scene s;
         s.box(150, 160, 8, 8); s.plate();
@@ -161,7 +161,7 @@ public:
 
     static void acquisition_and_association_gates() {
         auto c = config(); c.light.confirm_frames = 2;
-        detection::RoiDetector detector{c};
+        DetectionCalculator detector{c};
         assert(detector.Prepare(320, 240));
         Scene s;
         s.box(30, 80, 12, 12);
@@ -175,7 +175,7 @@ public:
         s.box(80, 80, 8, 8, 80);
         assert(!s.next(detector).target.valid); // Contrast changed beyond the association gate.
         c.track.min_size_ratio = 0.75F;
-        detection::RoiDetector size_detector{c};
+        DetectionCalculator size_detector{c};
         assert(size_detector.Prepare(320, 240));
         s.clear(); s.box(80, 80, 8, 8);
         assert(!s.next(size_detector).target.valid);
@@ -186,7 +186,7 @@ public:
 
     static void time_reset_and_config() {
         auto c = config();
-        detection::RoiDetector detector{c};
+        DetectionCalculator detector{c};
         assert(detector.Prepare(320, 240));
         Scene s; s.box(100, 100, 8, 8);
         assert(s.next(detector).scan.phase == detection::DetectionPhase::kDetect);
@@ -195,11 +195,11 @@ public:
         const auto duplicate = detector.Detect(s.frame);
         assert(!duplicate && duplicate.error() == detection::DetectionError::kOutOfOrderFrame);
         c.track.validation_interval = 0;
-        detection::RoiDetector invalid{c}; assert(!invalid.Prepare(320, 240));
+        DetectionCalculator invalid{c}; assert(!invalid.Prepare(320, 240));
         c.track.validation_interval = 3; c.track.min_size_ratio = 0;
-        detection::RoiDetector invalid_ratio{c}; assert(!invalid_ratio.Prepare(320, 240));
+        DetectionCalculator invalid_ratio{c}; assert(!invalid_ratio.Prepare(320, 240));
         c.track.min_size_ratio = 0.5F; c.track.velocity_alpha = 1.1F;
-        detection::RoiDetector invalid_alpha{c}; assert(!invalid_alpha.Prepare(320, 240));
+        DetectionCalculator invalid_alpha{c}; assert(!invalid_alpha.Prepare(320, 240));
     }
 };
 

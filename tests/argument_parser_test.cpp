@@ -10,8 +10,8 @@
 #include <string>
 #include <vector>
 
-#include "src/startup/argument_parser.hpp"
-#include "src/recording/frame_recording.hpp"
+#include "runtime/argument_parser.hpp"
+#include "runtime/argument_parser.hpp"
 
 namespace dart::tests {
 
@@ -109,7 +109,7 @@ public:
         assert(servo->servo.channels[1].horizontal_us_per_pixel == -2);
         assert(servo->servo.channels[3].vertical_us_per_pixel == -0.5F);
         assert(servo->servo_timeout_ms == 300);
-        assert(parsed->servo.max_delta_us == 500 && servo->servo.max_delta_us == 200);
+        assert(parsed->servo.max_delta_us == 150 && servo->servo.max_delta_us == 200);
         assert(parse({"--servo-max-delta", "0"})->servo.max_delta_us == 0);
         assert(parse({"--servo-max-delta", "500.5"})->servo.max_delta_us == 500.5F);
         assert(parse({"--servo-max-delta", "1000"})->servo.max_delta_us == 1000);
@@ -118,8 +118,8 @@ public:
             assert(!parse({"--servo-max-delta", bad}));
         assert(!parse({"--servo-max-delta"}));
         assert(!parse({"--servo-max-delta", "1150"})); // One zero would reach 0 us.
-        assert(!parse({"--servo-initial", "500,1490,1150,1475"}));
-        assert(!parse({"--servo-initial", "2600,1490,1150,1475"})); // Above the PWM period.
+        assert(!parse({"--servo-max-delta", "500", "--servo-initial", "500,1490,1150,1475"}));
+        assert(!parse({"--servo-max-delta", "500", "--servo-initial", "2600,1490,1150,1475"})); // Above the PWM period.
         assert(!parse({"--servo-max-delta", "0", "--servo-initial", "0.0005,1490,1150,1475"}));
         assert(parse({"--servo-max-delta", "0", "--servo-initial", "3000,1490,1150,1475"}));
         assert(!parse({"--pwm", "off"})->pwm_on);
@@ -153,6 +153,7 @@ public:
         }
         char* bad_options[] = {program, format, bad_format};
         assert(!app::parse_args(3, bad_options));
+        assert(parse({"--rec-format", "pngs"})->record_format == recorder::ImageFormat::kPngStream);
         assert(parsed->raw10_layout == camera::Raw10Layout::kPackedLsb);
         assert(!parsed->imu_on && !parsed->imu_ignore_id);
         char record[] = "--record";

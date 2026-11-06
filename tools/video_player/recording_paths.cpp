@@ -15,7 +15,7 @@ QStringList RecordingPaths::directories(const QString& directory) {
     if (input.exists("img") || input.exists("frames.csv") || input.exists("logs/frames.csv"))
         return {input.absolutePath()};
     const QRegularExpression image_entry(QStringLiteral(
-        "^(?:b[0-9]{7}|part_[0-9]{6}|recording\\.(pgm|pbm|dbv)|(?:frame_)?[0-9]+\\.(png|pgm|pbm))"
+        "^(?:b[0-9]{7}|part_[0-9]{6}|recording\\.(pgm|pbm|dbv|pngs)|(?:frame_)?[0-9]+\\.(png|pgm|pbm))"
         "$"));
     const QRegularExpression session_name(QStringLiteral("^rec_([0-9]+)$"));
     QStringList sessions;

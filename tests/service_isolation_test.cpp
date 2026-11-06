@@ -15,7 +15,7 @@
 #include <unistd.h>
 #include "camera/error_codes.h"
 
-#include "src/startup/services.hpp"
+#include "runtime/application.hpp"
 
 #include "camera/error.hpp"
 #include "camera/interface.hpp"
@@ -23,13 +23,13 @@
 
 #include "imu/interface.hpp"
 #include "runtime/imu/session.hpp"
-#include "src/startup/argument_parser.hpp"
+#include "runtime/argument_parser.hpp"
 #include "logging/logger.hpp"
 #include "system/run_control.hpp"
 #include "system/write_control.hpp"
 #include "system/device_services.hpp"
 
-#include "src/diagnostics/camera_error.hpp"
+#include "tests/diagnostics/camera_error.hpp"
 
 namespace dart::tests {
 
@@ -141,7 +141,7 @@ class ServiceIsolationTest final {
             }
             logging::Logger log;
             assert(log.open(args.log_path));
-            assert(app::run_services(args, create, control, log, imu_on ? &session : nullptr) == 0);
+            assert((app::Application{args, create, control, log, imu_on ? &session : nullptr}.run() == 0));
             if (stop.joinable())
                 stop.join();
         }

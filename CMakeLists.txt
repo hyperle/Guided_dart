@@ -4,7 +4,7 @@ cmake_minimum_required(VERSION 3.28)
 # K230D / K230 RT-Smart 用户态业务应用仓库（与固件无关）
 #
 # src/ 按功能放 L4 调用与策略；include/ 声明下层接口和实现库，
-# runtime/ 保留启动器和独立 IMU 服务。各目录分别声明本目录目标。
+# runtime/ 负责应用装配、组件执行、启动器和独立 IMU 服务。各目录分别声明本目录目标。
 # 业务应用 dart_app 与进程启动器 launcher 分别生成 RT-Smart 可执行程序（ELF）。
 #
 # 构建方式（交叉编译，目标 rv64imafdcv / lp64d，musl 静态链接）：
@@ -18,6 +18,8 @@ cmake_minimum_required(VERSION 3.28)
 # ============================================================================
 
 project(k230d_rtos_apps LANGUAGES C CXX)
+
+option(DART_BUILD_TOOLS "Configure optional developer tools and examples" ON)
 
 # C data-plane modules use a strict C11 ABI; the orchestration/control plane
 # uses C++23 (notably std::expected) with ordinary headers and sources.
@@ -138,6 +140,11 @@ endif()
 include(CTest)
 if(BUILD_TESTING AND NOT CMAKE_CROSSCOMPILING)
   add_subdirectory(tests)
+endif()
+
+# Standalone component reference; build explicitly with --target component_example.
+if(DART_BUILD_TOOLS)
+  add_subdirectory(tools/component_example EXCLUDE_FROM_ALL)
 endif()
 
 message(STATUS "K230_SDK_ROOT        = ${K230_SDK_ROOT}")

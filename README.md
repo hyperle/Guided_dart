@@ -28,18 +28,20 @@
 
 ## 1. 业务代码放在哪里？（最重要）
 
-`src/` 全部属于 L4，按启动、视觉、录像、诊断和检测功能组织调用与策略。
-设备、线程、文件系统、日志和编码的下层实现统一放在 `include/firmware/src/`。
-`runtime/` 保留进程启动器与现有 IMU 采样服务。
+`src/` 按检测、控制、录像组织功能组件和计算方法。
+应用装配、组件执行、启动器与 IMU 采样服务放在 `runtime/`，
+设备、文件系统、日志和编码的下层实现放在 `include/firmware/src/`。
 各目录的 `CMakeLists.txt` 分别声明本目录目标，模块依赖保持分离。
 
 | 目录 | 内容 | 当前目标 / 产物 |
 |---|---|---|
 | `runtime/launcher/` | 开机自启动器（纯 POSIX C11，平台无关）+ `startup.list` 母版 | `launcher` → `build-cross/launcher/launcher` |
-| `src/dart_entry.cpp`、`src/{startup,vision,recording,diagnostics}/` | L4 入口、配置、流程与故障决策 | `dart_app` → `build-cross/dart_app/dart_app` |
+| `runtime/dart_entry.cpp`、`runtime/application.*` | 应用入口、组件接线与生命周期 | `dart_app` → `build-cross/dart_app/dart_app` |
+| `runtime/component.hpp`、`runtime/tunner.hpp` | Component 接口与独立执行线程 | 头文件接口 |
+| `src/recorder/` | Recorder 组件、单帧通道和编码/存储方法类 | `dart_recording` |
 | `src/detector/` | L4 灯/装甲板检测与 ROI，只消费帧数据 | `dart_detection` |
-| [`src/control/`](src/control/README.md) | L4 四路舵机初始位置、左右/上下坐标映射与脉宽合成 | `dart_control` |
-| `include/firmware/src/recorder/` | 录像队列、线程、紧凑 DBV 与兼容 PNG/PGM/PBM | `dart_recording` |
+| `src/control/` | Blackboard 输入、姿态计算和四路 PWM 输出 | `dart_control` |
+| `include/firmware/src/recorder/` | 共享格式、编解码和存储适配 | `dart_recording_formats` |
 | `runtime/imu/` | 独立 IMU 采样、上层共用的积分状态和异步原始/积分日志 | `dart_imu_logging` |
 | `runtime/imu/raw_probe.cpp` | 先唤醒传感器的 SPI 硬件直读测试 | `imu_raw_probe` → `build-cross/imu_raw_probe/imu_raw_probe` |
 | `include/firmware/src/camera/` | L3 帧数据/相机抽象 + L2/C 数据面实现 | `dart_camera_types` / `dart_camera_core` / `dart_camera_k230` / `dart_camera_acl` |
@@ -49,17 +51,17 @@
 | `.script/` | 构建、部署、板端清理和相机回归检查；`install-rtos` 可注册短命令 | — |
 | [`tools/`](tools/README.md) | Rust Wi-Fi 接收/视频编码、主机播放器、IMU 日志工具与独立 RAW 相机诊断探针 | 独立构建的工具 |
 
-`dart_entry.cpp` 将板级工厂注入 `startup/run.hpp`，启动流程调用视觉、录像与诊断模块；
-设备初始化和系统资源操作由 `include/` 的实现承担。可选 IMU 采样已独立运行，
-纯视觉控制通过独立 PWM 任务消费每帧的两轴映射结果，不依赖 IMU。`launcher` 负责进程启动与监督。应用说明见
-[`src/startup/README.md`](src/startup/README.md)。
+`runtime/dart_entry.cpp` 将板级工厂注入 `Application`，由它创建 Blackboard、连接
+Detector、控制组件与 Recorder。Detector 唯一取帧，控制和录像分别由 Tunner 独立执行；
+设备适配仍由 `include/` 实现，IMU 采样独立运行。`launcher` 负责进程监督。
+应用说明见 [`runtime/APPLICATION.md`](runtime/APPLICATION.md)。
 
 当前启动清单启用 `dart_app` 的“识别 → 全图坐标 → 两轴映射 → 四路 PWM”链路，
-由清单的 `--servo-max-delta` 指定各路相对零点的合成增量上限。
+由清单的 `--servo-max-delta` 限制水平、垂直目标修正的合成增量；滚转补偿在其后叠加，保持不限幅。
 零点、两轴增益与录像策略以清单当前参数为准；待写帧超过配置的一帧周期即丢弃。坐标在 `/data/app/records/detection.csv`，实际下发脉宽在
 `/data/app/logs/dart_app.log` 的 `module=servo` 状态行。
 IMU 历史测试见 [IMU 直读测试](runtime/imu/README.md)，
-标定参数与故障处理见 [舵机控制说明](src/control/README.md)。独立的
+标定参数与故障处理见 [组件接线与控制说明](runtime/APPLICATION.md)。独立的
 [`PWM 测试`](tools/pwm_swing/README.md) 保留为手动工具，与 `dart_app` 的 PWM 输出互斥。
 
 硬件资源是独占的：**同一时刻只能有一个进程持有 VICAP/VB**，所以"识别"和"录像"
@@ -100,15 +102,16 @@ dart/
 │   ├── check-camera-pool.sh           # 相机资源池与生命周期的 host 回归检查
 │   ├── board.env.example              # 板子地址配置示例（board.env 已被 gitignore）
 │   └── README.md                      # 命令用法与依赖
-├── src/                               # 业务入口、应用编排与领域算法
+├── src/                               # 功能组件与领域计算
+│   ├── detector/                      # 取帧、检测与追踪
+│   ├── control/                       # Blackboard 与四路舵面控制
+│   ├── recorder/                      # 录像组件、单帧通道与方法类
+│   └── CMakeLists.txt                 # 三个功能库
+├── runtime/                           # 应用装配、组件执行、launcher 与 IMU 服务
 │   ├── dart_entry.cpp                 # 业务进程入口
-│   ├── startup/                       # L4 参数、服务组装与生命周期
-│   ├── vision/                        # L4 采集、识别与帧分发
-│   ├── recording/                     # L4 录像配置与启停决策
-│   ├── diagnostics/                   # L4 诊断字段与检测记录
-│   ├── detector/                      # L4 检测与 ROI
-│   └── CMakeLists.txt                 # 分别声明领域库与业务应用目标
-├── runtime/                           # launcher、启动清单与现有 IMU 采样服务
+│   ├── application.hpp/.cpp           # 具体组件接线与生命周期
+│   ├── component.hpp                  # Component 接口
+│   └── tunner.hpp                     # 通用组件执行线程
 ├── include/                           # 下层接口、设备/系统/录像实现及库目标声明
 ├── docs/                              # 设计、调试与验收契约
 ├── CMakePresets.json                  # host / cross 两个预设
@@ -147,6 +150,8 @@ HAL 头文件和库只取 SDK `.config` 的 `CONFIG_BOARD_CONFIG_NAME` 对应输
 不依赖 ISP 标定文件。识别以 `--threshold`（默认 50）提取候选，再用候选与周围背景的
 灰度均值差（`--min-contrast`，默认 12）过滤低对比度干扰；阈值不改变相机图像。
 录像默认保存单文件灰度 PGM，也可选择灰度 PNG；DBV/PBM 是可选的二值导出格式。
+当前启动清单显式使用 `--rec-fps 30 --rec-format pngs`，在一个文件中保存无损灰度 PNG，
+降低写盘带宽和小文件开销。结构化日志由固定队列交给专用线程写入、同步和关闭，采集线程不等待日志存储。
 目标帧率为 60 FPS，待写帧默认超过 16,667 µs 丢弃（`rec_timed_out`），
 可用 `--rec-timeout-ms` 调整；采集线程不等待写盘，过期帧不占文件预算或输出帧号。
 每轮最多 500 MB；
@@ -160,7 +165,7 @@ HAL 头文件和库只取 SDK `.config` 的 `CONFIG_BOARD_CONFIG_NAME` 对应输
 帧长 VTS=600，通过现有传感器寄存器接口完成，无需修改固件或标定像素时钟。
 `--exp 0` 保留传感器初始化曝光；RAW 路径不支持 `--ae`。
 开机清单使用 `--exp 400`，对应帧长 VTS=600。此前连续 PBM 版本实测录像
-55.881 FPS，在 499,995,987 字节正常停录；目标场景曝光/阈值尚未标定，详见 [实板记录](src/startup/README.md#验证状态)。
+55.881 FPS，在 499,995,987 字节正常停录；目标场景曝光/阈值尚未标定，详见 [实板记录](runtime/APPLICATION.md#验证状态)。
 适配细节及板端验证步骤见 [相机说明](include/firmware/src/camera/README.md#sc038hgs--dart-v1)。
 
 ## 4. 编译

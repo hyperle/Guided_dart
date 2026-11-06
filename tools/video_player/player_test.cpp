@@ -1,6 +1,7 @@
 #include <zlib.h>
 #include <optional>
 #include <QApplication>
+#include <QBuffer>
 #include <QFile>
 #include <QImageReader>
 #include <QKeyEvent>
@@ -50,6 +51,7 @@ public:
         binary_streams();
         encoded_binary_streams();
         png_frames();
+        png_streams();
         flattened_recording();
         session_collection();
         std::puts("video player: association, CSV, DBV/PNG/PGM/PBM, export, overlays, GUI and CLI passed");
@@ -284,6 +286,45 @@ private:
             cli({"--check", root}, 0).contains("detection_matches=3"),
             "flattened archive discovers local detection CSV");
     }
+    static void png_streams() {
+        QTemporaryDir directory;
+        require(directory.isValid(), "PNG stream temp directory");
+        const auto root = directory.path();
+        require(QDir(root).mkpath("img") && QDir(root).mkpath("logs"), "PNG stream directories");
+        const auto png = [](unsigned offset) {
+            QImage image(3, 2, QImage::Format_Grayscale8);
+            for (int y = 0; y < 2; ++y)
+                for (int x = 0; x < 3; ++x)
+                    image.scanLine(y)[x] = static_cast<unsigned char>(offset + y * 3 + x);
+            QByteArray bytes;
+            QBuffer buffer(&bytes);
+            require(buffer.open(QIODevice::WriteOnly) && image.save(&buffer, "PNG"), "encode PNG");
+            return bytes;
+        };
+        const auto first = png(13), last = png(123);
+        const QByteArray header("DPNG\1\0\20\0\3\0\0\0\2\0\0\0", 16);
+        write(root + "/img/recording.pngs", header + first + last);
+        const QString columns =
+            "input_index,source_sequence,source_pts,source_pts_timebase_validated,received_us,"
+            "decision,image_index,image_file,file_offset,file_bytes\n";
+        write_text(root + "/logs/frames.csv", columns +
+            QStringLiteral("1,1,0,0,1000,accepted,1,img/recording.pngs,16,%1\n"
+                           "2,2,0,0,40000,accepted,2,img/recording.pngs,%2,%3\n")
+                .arg(first.size()).arg(16 + first.size()).arg(last.size()));
+        Recording recording;
+        QString error;
+        require(recording.load_directory(root, {}, {}, {}, error), "load DPNG directly");
+        require(recording.complete() && recording.frames().size() == 2, "DPNG CSV matches");
+        for (unsigned i = 0; i < 2; ++i) {
+            const auto image = read_frame_image(recording.frames()[i], error);
+            require(!image.isNull() && image.size() == QSize(3, 2), "decode indexed PNG");
+            require(qRed(image.pixel(2, 1)) == (i == 0 ? 18 : 128), "PNG keeps gray values");
+        }
+        write(root + "/img/recording.pngs", header + first + last.left(last.size() / 2));
+        require(recording.load_directory(root, {}, {}, {}, error), "load truncated DPNG");
+        require(recording.frames().size() == 1 && !recording.complete(), "DPNG tail reported");
+    }
+
     static void png_frames() {
         QTemporaryDir directory;
         require(directory.isValid(), "PNG directory");

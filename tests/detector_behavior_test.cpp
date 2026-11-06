@@ -7,7 +7,7 @@
 #include <cmath>
 #include <cstddef>
 
-#include "src/detector/roi.hpp"
+#include "tests/detector_fixture.hpp"
 
 namespace dart::tests {
 
@@ -22,7 +22,7 @@ public:
         frame.luma = pixels;
         frame.width = frame.height = 64;
         frame.stride = 68;
-        detection::BlobWorkspace workspace;
+        detection::Detect::Workspace workspace;
         assert(workspace.Prepare(64, 64));
         for (const auto step : {1U, 2U}) {
             for (const auto level : {50U, 61U, 180U}) {
@@ -49,7 +49,7 @@ public:
         const auto washed = workspace.Scan(frame, {0, 0, 64, 64}, 180);
         assert(washed && washed->empty());
         // Explicitly disabling all grayscale gates restores threshold-only extraction.
-        detection::BlobWorkspace::Config config{};
+        detection::Detect::Workspace::Config config{};
         config.min_contrast = 0;
         config.min_snr = 0;
         config.min_stability = 0;
@@ -85,7 +85,7 @@ public:
                 for (auto col = x; col < x + w; ++col)
                     pixels[row * frame.stride + col] = static_cast<std::byte>(level);
         };
-        detection::BlobWorkspace workspace;
+        detection::Detect::Workspace workspace;
         assert(workspace.Prepare(64, 64));
         // Equal foreground/background means, very different background variance.
         for (const auto step : {1U, 2U}) {
@@ -101,7 +101,7 @@ public:
             auto noisy = workspace.Scan(frame, {0, 0, 64, 64}, 50, 2, step);
             assert(noisy && noisy->empty());
         }
-        detection::BlobWorkspace::Config config{};
+        detection::Detect::Workspace::Config config{};
         config.min_snr = 0; // Isolate stability from the independent SNR gate.
         assert(workspace.Prepare(64, 64, config));
         pixels.fill(std::byte{20});
@@ -170,7 +170,7 @@ public:
         frame.width = frame.height = frame.stride = 64;
         for (unsigned y = 20; y < 32; ++y)
             for (const auto x : {20U, 21U, 40U, 41U}) pixels[y * 64 + x] = std::byte{180};
-        detection::BlobWorkspace workspace;
+        detection::Detect::Workspace workspace;
         assert(workspace.Prepare(64, 64));
         auto blobs = workspace.Scan(frame, {0, 0, 64, 64}, 50);
         assert(blobs && blobs->size() == 2);
@@ -180,7 +180,7 @@ public:
         anchor.center = {30.5F, 50};
         anchor.bounds = {27, 46, 8, 8};
         anchor.radius = 4;
-        detection::ArmorDetector detector;
+        detection::Armor detector;
         const auto target = detector.Detect(bars, anchor, nullptr, &frame);
         assert(target.valid && target.brightness_ratio == 1 && target.gap_contrast == 160);
         assert(target.quality > 0.99F);
@@ -192,9 +192,9 @@ public:
         for (unsigned y = 20; y < 32; ++y)
             for (unsigned x = 22; x < 40; ++x) pixels[y * 64 + x] = std::byte{175};
         assert(!detector.Detect(bars, anchor, nullptr, &frame).valid);
-        detection::ArmorDetector::Config config{};
+        detection::Armor::Config config{};
         config.min_gap_contrast = 0;
-        detection::ArmorDetector relaxed{config};
+        detection::Armor relaxed{config};
         const auto low_quality = relaxed.Detect(bars, anchor, nullptr, &frame);
         assert(low_quality.valid && low_quality.quality < target.quality);
     }
@@ -210,9 +210,9 @@ public:
         blobs[0].gray_quality = 0.2F;
         blobs[1].center = {40, 40};
         blobs[1].gray_quality = 0.9F;
-        detection::LightDetector detector;
+        detection::Light detector;
         assert(detector.Detect(blobs, 4096).center.x == 40);
-        detection::LightTracker tracker{detection::LightDetector::Config{}};
+        detection::Track::Confirmation tracker{detection::Light::Config{}};
         detection::Target light{};
         light.valid = true;
         light.area = 4;
@@ -239,7 +239,7 @@ public:
         frame.sequence = 1;
         frame.received = std::chrono::microseconds{1000};
 
-        detection::BlobWorkspace workspace;
+        detection::Detect::Workspace workspace;
         auto unprepared = workspace.Scan(frame, {0, 0, 64, 64}, 128);
         assert(!unprepared && unprepared.error() == detection::DetectionError::kNotPrepared);
         assert(workspace.Prepare(64, 64));
@@ -247,19 +247,19 @@ public:
         assert(blobs && blobs->size() == 1);
         assert((*blobs)[0].area == 64);
         assert(std::abs((*blobs)[0].center.x - 31.5F) < 0.001F);
-        detection::LightDetector light;
+        detection::Light light;
         assert(light.Detect(*blobs, 4096).valid);
         assert(!workspace.Scan(frame, {63, 0, 2, 64}, 128));
-        detection::BlobWorkspace::Config small{};
+        detection::Detect::Workspace::Config small{};
         small.max_runs = small.max_candidates = 1;
         assert(workspace.Prepare(64, 64, small));
         auto exhausted = workspace.Scan(frame, {0, 0, 64, 64}, 128);
         assert(!exhausted && exhausted.error() == detection::DetectionError::kWorkspaceExhausted);
 
-        detection::RoiDetector::Config config{};
+        DetectionCalculator::Config config{};
         config.light.search_step = 1;
         config.light.confirm_frames = config.light.far_confirm_frames = 1;
-        detection::RoiDetector detector{config};
+        DetectionCalculator detector{config};
         assert(detector.Prepare(64, 64));
         auto measured = detector.Detect(frame);
         assert(measured && measured->light.valid);
@@ -271,6 +271,9 @@ public:
         frame.received += std::chrono::milliseconds{10};
         auto missing = detector.Detect(frame);
         assert(missing && !missing->target.valid && missing->kind == detection::TargetKind::kNone);
+        assert(missing->target.center.x == -1.0F && missing->target.center.y == -1.0F);
+        assert(missing->light.center.x == -1.0F && missing->light.center.y == -1.0F);
+        assert(missing->armor.center.x == -1.0F && missing->armor.center.y == -1.0F);
         detector.Reset();
         frame.sequence = 1;
         assert(detector.Detect(frame));
@@ -291,14 +294,14 @@ public:
         anchor.center = {30.5F, 50.0F};
         anchor.bounds = {27, 46, 8, 8};
         anchor.radius = 4.0F;
-        detection::ArmorDetector armor;
+        detection::Armor armor;
         const auto plate = armor.Detect(bars, anchor);
         assert(plate.valid);
         assert(std::abs(plate.center.x - 30.5F) < 0.001F);
         assert(std::abs(plate.center.y - 25.5F) < 0.001F);
 
         // A 30-degree rotated 5x40 bar has a roughly 24x37 bounding box.
-        // Leave moment dimensions empty to ensure ArmorDetector recovers the
+        // Leave moment dimensions empty to ensure Armor recovers the
         // principal dimensions from bounds + area and still computes the center
         // from the bars' long-axis endpoints.
         std::array<detection::Blob, 2> rotated{};
@@ -312,10 +315,10 @@ public:
             bar.area = 200;
             // The moment angle is absent here; bounds + area must recover it.
         }
-        auto rotated_config = detection::ArmorDetector::Config{};
+        auto rotated_config = detection::Armor::Config{};
         rotated_config.window_width_k = 16.0F;
         rotated_config.window_height_k = 16.0F;
-        detection::ArmorDetector rotated_armor{rotated_config};
+        detection::Armor rotated_armor{rotated_config};
         detection::Target rotated_anchor{};
         rotated_anchor.valid = true;
         rotated_anchor.center = {339.0F, 190.0F};

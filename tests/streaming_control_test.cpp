@@ -14,7 +14,7 @@
 #include <utility>
 
 #include "camera/frame_lease.hpp"
-#include "recorder/recorder.hpp"
+#include "tests/recorder_fixture.hpp"
 #include "streaming/session.hpp"
 
 namespace dart::tests {
@@ -84,9 +84,9 @@ public:
         recorder::Config config;
         config.width = config.height = 32;
         config.fps = 100;
-        config.queue_slots = 4;
+
         config.output_directory = recording_path;
-        recorder::Recorder rec{config};
+        RecorderFixture rec{config};
         assert(rec.start());
         std::array<std::byte, 40 * 32> pixels;
         pixels.fill(std::byte{127});

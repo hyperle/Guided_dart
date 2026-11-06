@@ -13,9 +13,9 @@
 
 #include "logging/csv_writer.hpp"
 #include "logging/logger.hpp"
-#include "recorder/recorder.hpp"
+#include "tests/recorder_fixture.hpp"
 #include "runtime/imu/session.hpp"
-#include "src/recording/trigger.hpp"
+#include "runtime/recording_trigger.hpp"
 
 #include "system/write_control.hpp"
 
@@ -54,7 +54,7 @@ class WriteControlTest final {
         slot->state = camera::FrameLeaseAccess::SlotState::kFree;
         return {};
     }
-    static void submit(recorder::Recorder& rec, std::uint64_t sequence) {
+    static void submit(RecorderFixture& rec, std::uint64_t sequence) {
         std::array<std::byte, 64> pixels{};
         pixels.fill(std::byte{255});
         camera::FrameLeaseAccess::Slot slot{};
@@ -108,7 +108,7 @@ class WriteControlTest final {
         config.height = 2;
         config.output_directory = record_path;
         config.image_format = format;
-        recorder::Recorder rec{config};
+        RecorderFixture rec{config};
         assert(rec.start_controlled(writes));
         logging::Logger log{&writes};
         assert(log.open((logs / "app.log").string()));
@@ -165,6 +165,7 @@ class WriteControlTest final {
         rec.stop();
         imu.stop();
         csv.close();
+        assert(log.flush(std::chrono::milliseconds{5000}));
         trigger(writes);
         assert(!open_files_below(root));
         std::filesystem::remove_all(root);
@@ -172,7 +173,7 @@ class WriteControlTest final {
 public:
     static void run() {
         for (const auto format : {recorder::ImageFormat::kDbv, recorder::ImageFormat::kPng, recorder::ImageFormat::kPgm,
-                                  recorder::ImageFormat::kPbm}) {
+                                  recorder::ImageFormat::kPbm, recorder::ImageFormat::kPngStream}) {
             char path[] = "/tmp/dart-write-control-XXXXXX";
             assert(::mkdtemp(path));
             cycle(path, format);

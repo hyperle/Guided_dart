@@ -2,37 +2,80 @@ if(CMAKE_CROSSCOMPILING)
     return()
 endif()
 
+add_executable(component_io_test component_io_test.cpp)
+target_include_directories(component_io_test PRIVATE
+    "${PROJECT_SOURCE_DIR}" "${PROJECT_SOURCE_DIR}/include/firmware/src")
+target_link_libraries(component_io_test PRIVATE Threads::Threads)
+target_compile_options(component_io_test PRIVATE -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+add_test(NAME component_io COMMAND component_io_test)
+
+add_executable(detector_component_test detector_component_test.cpp)
+target_link_libraries(detector_component_test PRIVATE dart_detection)
+target_compile_options(detector_component_test PRIVATE -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+add_test(NAME detector_component COMMAND detector_component_test)
+
 add_executable(camera_raw10_test camera_raw10_test.c)
 target_link_libraries(camera_raw10_test PRIVATE dart_camera_core)
 target_compile_options(camera_raw10_test PRIVATE -Wall -Wextra -Werror -UNDEBUG)
 add_test(NAME camera_raw10 COMMAND camera_raw10_test)
 
-add_executable(canmv_detector_bridge_test canmv_detector_bridge_test.cpp)
-target_link_libraries(canmv_detector_bridge_test PRIVATE dart_canmv_detector)
-target_compile_options(canmv_detector_bridge_test PRIVATE -Wall -Wextra -Werror -UNDEBUG)
-add_test(NAME canmv_detector_bridge COMMAND canmv_detector_bridge_test)
+if(DART_BUILD_TOOLS)
+    add_executable(canmv_detector_bridge_test canmv_detector_bridge_test.cpp)
+    target_link_libraries(canmv_detector_bridge_test PRIVATE dart_canmv_detector)
+    target_compile_options(canmv_detector_bridge_test PRIVATE -Wall -Wextra -Werror -UNDEBUG)
+    add_test(NAME canmv_detector_bridge COMMAND canmv_detector_bridge_test)
+endif()
 
-foreach(_test recorder_session recorder_binary detector_behavior detector_tracking camera_contract camera_adapter imu_estimator imu_session argument_parser service_isolation binary_pipeline write_control)
+foreach(_test detector_behavior detector_tracking)
+    add_executable(${_test}_test "${_test}_test.cpp")
+    target_link_libraries(${_test}_test PRIVATE dart_detection)
+    target_compile_options(${_test}_test PRIVATE -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    add_test(NAME ${_test} COMMAND ${_test}_test)
+endforeach()
+
+foreach(_test camera_contract camera_adapter imu_estimator imu_session argument_parser service_isolation binary_pipeline)
     add_executable(${_test}_test "${_test}_test.cpp")
     target_link_libraries(${_test}_test PRIVATE dart_detection dart_recording dart_imu dart_imu_logging dart_platform dart_application)
     target_compile_options(${_test}_test PRIVATE -Werror -UNDEBUG)
     add_test(NAME ${_test} COMMAND ${_test}_test)
 endforeach()
 
-add_test(NAME startup_arguments
+foreach(_test recorder_session recorder_binary recorder_component)
+    add_executable(${_test}_test "${_test}_test.cpp")
+    target_link_libraries(${_test}_test PRIVATE dart_recording)
+    target_compile_options(${_test}_test PRIVATE -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+    add_test(NAME ${_test} COMMAND ${_test}_test)
+endforeach()
+target_link_libraries(recorder_component_test PRIVATE dart_detection)
+target_link_options(recorder_component_test PRIVATE -Wl,--wrap=fsync)
+set_tests_properties(recorder_component PROPERTIES TIMEOUT 30)
+
+add_executable(write_control_test write_control_test.cpp)
+target_link_libraries(write_control_test PRIVATE dart_application)
+target_compile_options(write_control_test PRIVATE -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+add_test(NAME write_control COMMAND write_control_test)
+
+add_test(NAME runtime_arguments
     COMMAND argument_parser_test "${PROJECT_SOURCE_DIR}/runtime/launcher/startup.list")
+
+target_sources(service_isolation_test PRIVATE diagnostics/camera_error.cpp)
 
 target_link_options(imu_session_test PRIVATE -Wl,--wrap=fwrite)
 
-add_executable(servo_mapping_test servo_mapping_test.cpp)
-target_link_libraries(servo_mapping_test PRIVATE dart_control)
-target_compile_options(servo_mapping_test PRIVATE -Werror -UNDEBUG)
-add_test(NAME servo_mapping COMMAND servo_mapping_test)
+add_executable(servo_component_test servo_component_test.cpp)
+target_link_libraries(servo_component_test PRIVATE dart_control)
+target_compile_options(servo_component_test PRIVATE -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+add_test(NAME servo_component COMMAND servo_component_test)
 
-add_executable(visual_servo_test visual_servo_test.cpp)
-target_link_libraries(visual_servo_test PRIVATE dart_application)
-target_compile_options(visual_servo_test PRIVATE -Werror -UNDEBUG)
-add_test(NAME visual_servo COMMAND visual_servo_test)
+add_executable(tunner_test tunner_test.cpp)
+target_link_libraries(tunner_test PRIVATE dart_application)
+target_compile_options(tunner_test PRIVATE -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
+add_test(NAME tunner COMMAND tunner_test)
+
+add_executable(pose_control_test pose_control_test.cpp)
+target_link_libraries(pose_control_test PRIVATE dart_control)
+target_compile_options(pose_control_test PRIVATE -Werror -UNDEBUG)
+add_test(NAME pose_control COMMAND pose_control_test)
 
 add_executable(recorder_storage_test recorder_storage_test.cpp)
 target_link_libraries(recorder_storage_test PRIVATE dart_recording)
@@ -50,7 +93,6 @@ set_tests_properties(logger_async PROPERTIES TIMEOUT 20)
 add_executable(recorder_timeout_test recorder_timeout_test.cpp)
 target_link_libraries(recorder_timeout_test PRIVATE dart_recording)
 target_compile_options(recorder_timeout_test PRIVATE -Werror -UNDEBUG)
-target_link_options(recorder_timeout_test PRIVATE -Wl,--wrap=fsync)
 add_test(NAME recorder_timeout COMMAND recorder_timeout_test)
 set_tests_properties(recorder_timeout PROPERTIES TIMEOUT 20)
 
@@ -136,9 +178,13 @@ endif()
 dart_add_cpp_library(dart_odr_consumer odr_consumer.cpp)
 target_link_libraries(dart_odr_consumer PUBLIC dart_detection dart_recording dart_imu dart_control dart_pwm)
 target_link_libraries(camera_contract_test PRIVATE dart_odr_consumer)
-target_link_libraries(servo_mapping_test PRIVATE dart_odr_consumer)
+target_link_libraries(servo_component_test PRIVATE dart_odr_consumer)
 
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
+add_test(NAME recorder_pngs_extract
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/rec_extract_pngs_test.py")
+add_test(NAME rec_stall_report
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/rec_stall_report_test.py")
 add_test(NAME canmv_build_config
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test_canmv_build_config.py")
 add_test(NAME rtos_scripts

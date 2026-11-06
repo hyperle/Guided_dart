@@ -33,6 +33,7 @@ public:
 private:
     bool append_stream(const QFileInfo& file_info, QString& error);
     bool append_binary(const QFileInfo& file_info, QString& error);
+    bool append_png_stream(const QFileInfo& file_info, QString& error);
     std::vector<Frame> frames_;
     QStringList notes_;
     std::size_t event_matches_ = 0;

@@ -16,7 +16,7 @@
 #include <thread>
 #include <vector>
 
-#include "recorder/recorder.hpp"
+#include "tests/recorder_fixture.hpp"
 
 #include "recorder/storage/image_writer.hpp"
 #include "recorder/storage/session.hpp"
@@ -89,7 +89,7 @@ public:
         recorder::Session session{config, error};
         assert(session.open());
         assert(session.file_limit_bytes() == 2 * record_bytes);
-        recorder::ImageWriter writer{config, session};
+        ImageWriterFixture writer{config, session};
         assert(writer.prepare(1) && writer.open(error));
         const std::array<std::byte, 1> pixel{std::byte{123}};
         assert(writer.write_image(pixel));
@@ -103,7 +103,7 @@ public:
         // Sync errors must propagate to the recorder instead of reporting success.
         recorder::Session failed_session{config, error};
         assert(failed_session.open());
-        recorder::ImageWriter failed_writer{config, failed_session};
+        ImageWriterFixture failed_writer{config, failed_session};
         assert(failed_writer.prepare(1) && failed_writer.open(error));
         sync_failure = true;
         assert(!failed_writer.write_image(pixel) && errno == EIO);
@@ -111,7 +111,7 @@ public:
         assert(failed_writer.close());
         std::filesystem::remove_all(path);
         packing();
-        queued_copies();
+        retained_frame();
         png_storage();
         partition_limit();
     }
@@ -135,7 +135,7 @@ private:
         for (const auto used : {config.max_storage_bytes - recorder::Config::kStorageReserveBytes,
                                 config.max_storage_bytes, config.max_storage_bytes + 1}) {
             used_bytes = used;
-            recorder::Recorder rec{config};
+            RecorderFixture rec{config};
             assert(!rec.start());
             assert(rec.last_error() == recorder::Error::kStorage);
             assert(rec.last_system_error() == ENOSPC);
@@ -154,7 +154,7 @@ private:
             recorder::Session session{config, error};
             assert(session.open());
             assert(session.file_limit_bytes() == recorder::Config::kMaxFileBytes);
-            recorder::ImageWriter writer{config, session};
+            ImageWriterFixture writer{config, session};
             assert(writer.prepare(pixels.size()) && writer.open(error));
             assert(writer.write_image(pixels, 1));
             const auto bytes = writer.record_bytes();
@@ -177,7 +177,7 @@ private:
                    - 4U * 1024U * 1024U;
         recorder::Session cached{config, error};
         assert(cached.open());
-        recorder::ImageWriter output{config, cached};
+        ImageWriterFixture output{config, cached};
         assert(output.prepare(pixels.size()) && output.open(error));
         assert(output.write_image(pixels, 1));
         assert(output.write_image(pixels, 2));
@@ -212,7 +212,7 @@ private:
         recorder::RecorderError error;
         recorder::Session session{config, error};
         assert(session.open());
-        recorder::ImageWriter writer{config, session};
+        ImageWriterFixture writer{config, session};
         assert(writer.prepare(64) && writer.open(error));
         const std::array<std::byte, 64> pixels{};
         sync_failure = true;
@@ -238,7 +238,7 @@ private:
             config.max_file_bytes = cap;
             recorder::Session limited{config, error};
             assert(limited.open());
-            recorder::ImageWriter output{config, limited};
+            ImageWriterFixture output{config, limited};
             assert(output.prepare(64) && output.open(error));
             assert(output.write_image(pixels, 1) == (cap == first_bytes));
             if (cap < first_bytes)
@@ -252,7 +252,7 @@ private:
         available_bytes = recorder::Config::kStorageReserveBytes + 4U * 1024U * 1024U;
         recorder::Session cached{config, error};
         assert(cached.open());
-        recorder::ImageWriter cached_writer{config, cached};
+        ImageWriterFixture cached_writer{config, cached};
         assert(cached_writer.prepare(64) && cached_writer.open(error));
         assert(cached_writer.write_image(pixels, 1));
         assert(cached_writer.write_image(pixels, 2));
@@ -268,17 +268,17 @@ private:
         return {};
     }
 
-    static void queued_copies() {
+    static void retained_frame() {
         char path[] = "/tmp/dart-recorder-slow-disk-XXXXXX";
         assert(::mkdtemp(path));
         recorder::Config config{};
         config.output_directory = path;
         config.width = 8;
         config.height = 1;
-        config.queue_slots = 8;
+
         config.frame_timeout = std::chrono::milliseconds{5000};
         config.flush_period = std::chrono::milliseconds{60'000};
-        recorder::Recorder rec{config};
+        RecorderFixture rec{config};
         assert(rec.start());
         std::array<std::byte, 8> pixels{};
         camera::FrameLeaseAccess::Slot slot{};
@@ -289,47 +289,35 @@ private:
         slot.view.received = std::chrono::microseconds{980'000};
         block_sync.store(true);
         sync_blocked.store(false);
-        for (unsigned frame = 0; frame < 8; ++frame) {
-            pixels.fill(static_cast<std::byte>(frame));
-            slot.state = camera::FrameLeaseAccess::SlotState::kHeld;
-            slot.view.received += std::chrono::milliseconds{20};
-            auto lease = camera::FrameLeaseAccess::make(&slot);
-            auto admission = rec.try_submit(std::move(lease));
-            for (unsigned attempt = 0;
-                 frame == 0 && admission == recorder::Admission::kBusy && attempt < 100;
-                 ++attempt) {
-                slot.view.received += std::chrono::milliseconds{20};
-                std::this_thread::sleep_for(std::chrono::milliseconds{1});
-                admission = rec.try_submit(std::move(lease));
-            }
-            assert(admission == recorder::Admission::kAccepted);
-            // Reuse the same camera memory even while the first disk sync is
-            // blocked. All queued images must retain their original pixels.
-            assert(!lease.valid());
-            assert(rec.drain_releases() == 1);
-            assert(slot.state == camera::FrameLeaseAccess::SlotState::kFree);
-            if (frame == 0) {
-                for (unsigned attempt = 0; attempt < 2000 && !sync_blocked.load(); ++attempt)
-                    std::this_thread::sleep_for(std::chrono::milliseconds{1});
-                assert(sync_blocked.load());
-            }
-        }
-        assert(rec.stats().written == 0 && rec.stats().queued == 8);
         slot.state = camera::FrameLeaseAccess::SlotState::kHeld;
-        slot.view.received += std::chrono::milliseconds{20};
         auto lease = camera::FrameLeaseAccess::make(&slot);
-        assert(rec.try_submit(std::move(lease)) == recorder::Admission::kBusy);
-        assert(lease.valid() && lease.release());
+        for (unsigned attempt = 0;; ++attempt) {
+            assert(attempt < 1000);
+            slot.view.received += std::chrono::milliseconds{20};
+            if (rec.try_submit(std::move(lease)) == recorder::Admission::kAccepted) break;
+            std::this_thread::sleep_for(std::chrono::milliseconds{1});
+        }
+        for (unsigned attempt = 0; attempt < 2000 && !sync_blocked.load(); ++attempt)
+            std::this_thread::sleep_for(std::chrono::milliseconds{1});
+        assert(sync_blocked.load() && !lease.valid());
+        // Direct PGM output retains this original frame through the stalled write.
+        assert(rec.drain_releases() == 0 && slot.state == camera::FrameLeaseAccess::SlotState::kHeld);
+        camera::FrameLeaseAccess::Slot other{};
+        other.view = slot.view;
+        other.view.received += std::chrono::milliseconds{20};
+        other.release = release;
+        other.state = camera::FrameLeaseAccess::SlotState::kHeld;
+        auto rejected = camera::FrameLeaseAccess::make(&other);
+        assert(rec.try_submit(std::move(rejected)) == recorder::Admission::kBusy);
+        assert(rejected.valid() && rejected.release());
         block_sync.store(false);
+        rec.wait_released();
         rec.stop();
-        assert(rec.stats().written == 8 && rec.pending_releases() == 0);
-        assert(rec.last_error() == recorder::Error::kNone);
+        assert(rec.stats().written == 1 && rec.pending_releases() == 0);
+        assert(rec.stats().copied == 0 && rec.last_error() == recorder::Error::kNone);
         std::ifstream input(rec.recording_path(), std::ios::binary);
         const std::string bytes{std::istreambuf_iterator<char>{input}, {}};
-        std::string expected;
-        for (unsigned frame = 0; frame < 8; ++frame)
-            expected += "P5\n8 1\n255\n" + std::string(8, static_cast<char>(frame));
-        assert(bytes == expected);
+        assert(bytes == "P5\n8 1\n255\n" + std::string(8, '\0'));
         std::filesystem::remove_all(path);
     }
 
@@ -348,7 +336,7 @@ private:
                 recorder::RecorderError error;
                 recorder::Session session{config, error};
                 assert(session.open());
-                recorder::ImageWriter writer{config, session};
+                ImageWriterFixture writer{config, session};
                 std::vector<std::byte> pixels(width * config.height);
                 assert(writer.prepare(pixels.size()) && writer.open(error));
                 for (unsigned pass = 0; pass < 2; ++pass) {

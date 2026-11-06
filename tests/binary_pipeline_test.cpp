@@ -2,6 +2,7 @@
 #include <span>
 #include <cmath>
 #include <array>
+#include <atomic>
 #include <cassert>
 #include <chrono>
 #include <cstddef>
@@ -17,10 +18,10 @@
 
 #include "camera/c_api/raw10.h"
 
-#include "src/startup/services.hpp"
+#include "runtime/application.hpp"
 #include "recorder/encoding/binary_decoder.hpp"
 
-#include "src/startup/argument_parser.hpp"
+#include "runtime/argument_parser.hpp"
 #include "camera/interface.hpp"
 #include "logging/logger.hpp"
 #include "pwm/interface.hpp"
@@ -36,7 +37,8 @@ class BinaryPipelineTest final {
     static constexpr std::uint32_t kWidth = 320, kHeight = 240;
     inline static bool low_contrast_;
     inline static camera::Raw10Layout layout_;
-    inline static unsigned pwm_starts_, pwm_stops_, pwm_writes_;
+    inline static unsigned pwm_starts_, pwm_stops_;
+    inline static std::atomic<unsigned> pwm_writes_{0};
     inline static pwm::Pulses last_pwm_;
     inline static bool pwm_failure_;
 
@@ -91,15 +93,25 @@ class BinaryPipelineTest final {
                 slot.view.width = slot.view.stride = kWidth;
                 slot.view.height = kHeight;
                 slot.release = release;
+                slot.owner = this;
             }
         }
+        ~Camera() override { assert(std::this_thread::get_id() == owner_); }
         std::expected<void, camera::CameraError> start() noexcept override {
+            assert(std::this_thread::get_id() == owner_);
             state_ = camera::State::kStarted;
             return {};
         }
         std::expected<camera::AcquireResult, camera::CameraError>
             acquire(std::chrono::milliseconds) noexcept override {
-            std::this_thread::sleep_for(std::chrono::milliseconds{20});
+            assert(std::this_thread::get_id() == owner_);
+            if (sequence_ == 5 && !pwm_failure_) {
+                const auto before = pwm_writes_.load();
+                std::this_thread::sleep_for(std::chrono::milliseconds{60});
+                assert(pwm_writes_.load() > before);
+            } else {
+                std::this_thread::sleep_for(std::chrono::milliseconds{20});
+            }
             camera::AcquireResult result{};
             for (auto& slot : slots_) {
                 if (slot.state != camera::FrameLeaseAccess::SlotState::kFree)
@@ -115,6 +127,7 @@ class BinaryPipelineTest final {
             return result;
         }
         std::expected<void, camera::CameraError> stop() noexcept override {
+            assert(std::this_thread::get_id() == owner_);
             assert(outstanding() == 0);
             state_ = camera::State::kInitialized;
             return {};
@@ -136,9 +149,11 @@ class BinaryPipelineTest final {
     private:
         static std::expected<void, camera::CameraError>
             release(camera::FrameLeaseAccess::Slot* slot) noexcept {
+            assert(std::this_thread::get_id() == static_cast<Camera*>(slot->owner)->owner_);
             slot->state = camera::FrameLeaseAccess::SlotState::kFree;
             return {};
         }
+        const std::thread::id owner_ = std::this_thread::get_id();
         camera::State state_ = camera::State::kInitialized;
         camera::FrameInfo info_{kWidth, kHeight};
         std::uint64_t sequence_ = 0;
@@ -202,7 +217,8 @@ public:
         args.seconds = 1;
         // Exercise camera -> RAW conversion -> detector -> mapping -> PWM task,
         // with recording active and no IMU session.
-        pwm_starts_ = pwm_stops_ = pwm_writes_ = 0;
+        pwm_starts_ = pwm_stops_ = 0;
+        pwm_writes_ = 0;
         pwm_failure_ = pwm_failure;
         for (std::size_t i = 0; i < args.servo.channels.size(); ++i) {
             auto& channel = args.servo.channels[i];
@@ -220,10 +236,12 @@ public:
             pbm ? camera::Raw10Layout::kLe16Lsb : camera::Raw10Layout::kLe16Msb;
         assert(app::copy_path(args.log_path, sizeof(args.log_path), (root / "app.log").string()));
         assert(app::copy_path(args.rec_dir, sizeof(args.rec_dir), (root / "records").string()));
+        assert(app::copy_path(args.det_csv, sizeof(args.det_csv), (root / "detect.csv").string()));
         platform::RunControl control{args.seconds};
         logging::Logger log_sink;
         assert(log_sink.open(args.log_path));
-        assert(app::run_services(args, create, control, log_sink, nullptr, nullptr, create_pwm) == 0);
+        assert((app::Application{args, create, control, log_sink, nullptr, nullptr, create_pwm}.run() == 0));
+        assert(log_sink.flush(std::chrono::milliseconds{5000}));
         assert(pwm_starts_ == 1 && pwm_stops_ == 1);
         if (pbm || pwm_failure || low_contrast || threshold > 200) // No accepted target, or PWM has failed.
             assert((last_pwm_ == pwm::Pulses{1510, 1520, 1530, 1540}));
@@ -235,6 +253,10 @@ public:
             for (std::size_t i = 0; i < expected.size(); ++i)
                 assert(std::abs(last_pwm_[i] - expected[i]) < 0.01F);
         }
+        const auto observations = read(root / "detect.csv");
+        assert(observations.starts_with("sequence,received_us,source_pts,kind,valid,"));
+        if (!(pbm || low_contrast || threshold > 200))
+            assert(observations.find(",light,1,") != std::string::npos);
         const auto log = read(root / "app.log");
         assert(log.find("op=detector_prepare result=ok") != std::string::npos);
         if (pwm_failure)

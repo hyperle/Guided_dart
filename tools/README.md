@@ -47,6 +47,11 @@ bash .script/player --check records/rec_0001
 同时归档对应的 `records/detection.csv`，避免后续运行覆盖。详细构建、过滤和核对规则见
 播放器说明。
 
+`pngs` 容器可直接用播放器打开；需要独立 PNG 时运行
+`python3 tools/rec_extract_pngs.py records/rec_NNNN --strict --output /tmp/frames`。
+`python3 tools/rec_stall_report.py records/rec_NNNN --log logs/dart_app.log`
+汇总实际保存帧率、采集间隙、文件边界及写盘/日志耗时，用于核对录像卡顿。
+
 ## IMU 日志转 ROS 2 bag
 
 `imu_log_to_bag.py` 读取板端 `runtime/imu/Session` 写出的 v1 CSV 格式 `.log`，
