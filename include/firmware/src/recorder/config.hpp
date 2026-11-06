@@ -1,9 +1,13 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
+#include <span>
 #include <chrono>
 #include <cstdint>
 #include <string_view>
+
+#include "recorder/encoding/video_encoder.hpp"
 
 namespace dart::recorder {
 enum class EventDecision : std::uint8_t {
@@ -31,7 +35,21 @@ public:
 
 using FrameEventSink = void (*)(const FrameEvent&, void*) noexcept;
 
-enum class ImageFormat : std::uint8_t { kPgm, kPbm, kPng, kDbv };
+enum class ImageFormat : std::uint8_t { kPgm, kPbm, kPng, kDbv, kPngStream, kH264 };
+
+// Views refer either to the held camera frame or to this encoder's workspace.
+// They remain valid until the next encode/reset; borrowed_input retains the lease.
+struct EncodedImage {
+    std::span<const std::byte> header{};
+    std::span<const std::byte> pixels{};
+    std::uint32_t width = 0, height = 0, stride = 0;
+    bool borrowed_input = false;
+    bool valid() const noexcept { return !pixels.empty(); }
+    std::size_t payload_bytes() const noexcept {
+        return borrowed_input ? static_cast<std::size_t>(width) * height : pixels.size();
+    }
+    std::size_t size() const noexcept { return header.size() + payload_bytes(); }
+};
 
 class Config {
 public:
@@ -45,7 +63,7 @@ public:
     /* Target images per second, sampled using the monotonic receipt timestamp.
      * Checked before queue availability; busy slots still drop without waiting. */
     std::uint32_t fps = 60;
-    /* Discard copied frames that wait this long before the writer starts them.
+    /* Discard frames that wait this long before the writer starts them.
      * Zero uses one target frame period (16,667 us at 60 FPS). */
     std::chrono::milliseconds frame_timeout{0};
     /* Total image bytes per session, including headers. Smaller caps are useful for
@@ -55,15 +73,14 @@ public:
      * other files. Zero leaves only the physical free-space guard enabled.
      * dart_app applies the 2 GB ceiling to recordings under /data. */
     std::uint64_t max_storage_bytes = 0;
-    /* Hard copied-image slot cap, independent of camera lease capacity. */
-    std::uint32_t queue_slots = 2;
     /* Separate bounded metadata queue for one CSV row per enqueued submission; drops
      * are counted instead of blocking capture. */
     std::uint32_t event_slots = 512;
-    /* Recheck free space at most this many images apart. DBV charges actual
-     * record bytes; other formats retain the conservative 2 MiB charge. */
+    /* Recheck free space at most this many images apart. Single-file formats
+     * charge actual bytes; independent PNGs retain the conservative 2 MiB charge. */
     std::uint32_t storage_check_frames = 32;
     ImageFormat image_format = ImageFormat::kPgm;
+    VideoEncoderFactory video_encoder_factory = nullptr;
     std::uint8_t pbm_threshold = 128;
     std::chrono::milliseconds flush_period{1000};
     std::string_view output_directory = "records";

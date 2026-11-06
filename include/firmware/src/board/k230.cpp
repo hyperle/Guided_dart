@@ -6,6 +6,9 @@
 #include <utility>
 
 #include "spi/iim42652.h"
+#ifdef DART_APP_VIDEO_K230
+# include "recorder/k230/h264.hpp"
+#endif
 
 #ifdef DART_APP_IMU_K230
 # include "imu/k230/iim42652.hpp"
@@ -24,6 +27,14 @@
 #include "system/device_services.hpp"
 
 namespace dart::board {
+
+std::unique_ptr<recorder::IVideoEncoder> create_video_encoder() noexcept {
+#ifdef DART_APP_VIDEO_K230
+    return recorder::k230::create_h264_encoder();
+#else
+    return {};
+#endif
+}
 
 std::unique_ptr<streaming::ITransport> create_wifi_transport() noexcept {
 #ifdef DART_APP_WIFI_K230

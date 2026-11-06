@@ -220,9 +220,10 @@ add_library(dart_device_services INTERFACE)
 target_include_directories(dart_device_services INTERFACE "${PROJECT_SOURCE_DIR}" "${_dart_src}")
 target_link_libraries(dart_device_services INTERFACE dart_camera_acl dart_imu dart_pwm dart_platform)
 
+# Shared recording values and DBV decoding have no execution loop.
 file(GLOB_RECURSE _recording_sources CONFIGURE_DEPENDS "${_dart_src}/recorder/*.cpp")
-dart_add_cpp_library(dart_recording ${_recording_sources})
-add_library(dart_recorder ALIAS dart_recording)
+list(FILTER _recording_sources EXCLUDE REGEX "/k230/")
+dart_add_cpp_library(dart_recording_formats ${_recording_sources})
 if(CMAKE_CROSSCOMPILING)
     set(DART_ZLIB_INCLUDE_DIR "${K230_SDK_ROOT}/src/rtsmart/libs/3rd-party/libwebsockets/libwebsockets/win32port/zlib"
         CACHE PATH "SDK zlib headers (stable zlib 1.x ABI)")
@@ -238,7 +239,13 @@ else()
     find_package(ZLIB REQUIRED)
     add_library(dart_zlib ALIAS ZLIB::ZLIB)
 endif()
-target_link_libraries(dart_recording PUBLIC dart_camera_acl dart_platform Threads::Threads dart_zlib)
+target_link_libraries(dart_recording_formats PUBLIC dart_zlib)
+if(DART_CAMERA_K230)
+    dart_add_cpp_library(dart_video_encoder_k230 "${_dart_src}/recorder/k230/h264.cpp")
+    target_link_libraries(dart_video_encoder_k230 PUBLIC dart_recording_formats
+        PRIVATE k230_rtos_app "${K230_MPP_LIB_DIR}/libvenc.a"
+        "${K230_MPP_LIB_DIR}/libvb.a" "${K230_MPP_LIB_DIR}/libsys.a")
+endif()
 
 # JPEG CPU data plane and bounded streaming workers. Device selection is injected.
 add_library(dart_streaming_data STATIC
@@ -270,6 +277,10 @@ endif()
 # The composition root selects actual backends only when they are enabled.
 dart_add_cpp_library(dart_board "${_dart_src}/board/k230.cpp")
 target_link_libraries(dart_board PUBLIC dart_device_services dart_imu_logging dart_streaming)
+if(DART_CAMERA_K230)
+    target_compile_definitions(dart_board PRIVATE DART_APP_VIDEO_K230=1)
+    target_link_libraries(dart_board PUBLIC dart_video_encoder_k230)
+endif()
 if(DART_WIFI_K230)
     target_compile_definitions(dart_board PRIVATE DART_APP_WIFI_K230=1)
     target_link_libraries(dart_board PUBLIC dart_streaming_k230)
