@@ -40,6 +40,13 @@ target_compile_options(recorder_storage_test PRIVATE -Werror -UNDEBUG)
 target_link_options(recorder_storage_test PRIVATE -Wl,--wrap=statvfs -Wl,--wrap=fsync)
 add_test(NAME recorder_storage COMMAND recorder_storage_test)
 
+add_executable(logger_async_test logger_async_test.cpp)
+target_link_libraries(logger_async_test PRIVATE dart_platform)
+target_compile_options(logger_async_test PRIVATE -Werror -UNDEBUG)
+target_link_options(logger_async_test PRIVATE -Wl,--wrap=fsync)
+add_test(NAME logger_async COMMAND logger_async_test)
+set_tests_properties(logger_async PROPERTIES TIMEOUT 20)
+
 add_executable(recorder_timeout_test recorder_timeout_test.cpp)
 target_link_libraries(recorder_timeout_test PRIVATE dart_recording)
 target_compile_options(recorder_timeout_test PRIVATE -Werror -UNDEBUG)

@@ -14,29 +14,29 @@
 
 namespace dart::logging {
 
+Logger::~Logger() { sink_.stop(); }
+
 bool Logger::open(std::string_view path) noexcept {
     if (path.empty() || path.size() >= sizeof(path_))
         return false;
     std::memcpy(path_, path.data(), path.size());
     path_[path.size()] = '\0';
     if (writes_ != nullptr && !writes_->logging_enabled())
-        return true;
+        return sink_.start(path, writes_);
     storage::ensure_parent(path_);
     const int fd = ::open(path_, O_WRONLY | O_CREAT | O_APPEND, 0666);
     if (fd < 0)
         return false;
     ::close(fd);
-    return true;
+    return sink_.start(path, writes_);
 }
 
 void Logger::end_batch() noexcept {
-    batching_ = false;
-    if (fd_ >= 0) {
-        ::fsync(fd_);
-        ::close(fd_);
-        fd_ = -1;
-    }
+    batching_.store(false, std::memory_order_relaxed);
+    sink_.request_flush();
 }
+
+bool Logger::flush(std::chrono::milliseconds deadline) noexcept { return sink_.drain(deadline); }
 
 void Logger::line(const char* fmt, ...) noexcept {
     if (writes_ != nullptr && !writes_->logging_enabled()) {
@@ -57,15 +57,9 @@ void Logger::line(const char* fmt, ...) noexcept {
         return;
     if (static_cast<std::size_t>(out_n) >= sizeof(out))
         out_n = static_cast<int>(sizeof(out)) - 1;
-    if (fd_ < 0 && path_[0] != '\0') {
-        storage::ensure_parent(path_);
-        fd_ = ::open(path_, O_WRONLY | O_CREAT | O_APPEND, 0666);
-    }
-    if (fd_ >= 0) {
-        (void)!::write(fd_, out, static_cast<std::size_t>(out_n));
-        if (!batching_)
-            end_batch();
-    }
+    sink_.enqueue(out, static_cast<std::size_t>(out_n));
+    if (!batching_.load(std::memory_order_relaxed))
+        end_batch();
 }
 
 } // namespace dart::logging
