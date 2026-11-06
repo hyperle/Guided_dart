@@ -5,6 +5,19 @@
 dart_add_cpp_library(dart_imu_logging imu/session.cpp)
 target_link_libraries(dart_imu_logging PUBLIC dart_imu dart_platform Threads::Threads)
 
+# Application assembly and concrete entry are runtime concerns.
+dart_add_cpp_library(dart_application application.cpp argument_parser.cpp recording_trigger.cpp)
+target_link_libraries(dart_application PUBLIC dart_detection dart_control dart_recording
+    dart_imu_logging dart_pwm dart_platform dart_device_services dart_streaming Threads::Threads)
+
+if(DART_CAMERA_K230)
+    add_executable(dart_app dart_entry.cpp)
+    target_compile_options(dart_app PRIVATE -Wall -Wextra -Wpedantic)
+    target_link_libraries(dart_app PRIVATE dart_application dart_board Threads::Threads)
+    set_target_properties(dart_app PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/dart_app")
+endif()
+
 # Finite board diagnostic for initialization timing comparisons. Run alone.
 if(DART_IMU_K230)
     add_executable(imu_init_probe imu/init_probe.c)

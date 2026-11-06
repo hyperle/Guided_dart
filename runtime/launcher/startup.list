@@ -29,7 +29,7 @@
 # 5 个实例几乎同时抢 VB/VICAP，只有 9 次写出日志，其余静默死掉，活下来的那个把
 # VB 占住，后面每个都撞 FATAL: vb_set_config。
 # v2 的相机 ACL 在 create() 里自建并独占 dart_media（全局 VB + VICAP/VB 池），
-# 因此"识别"与"录像"必须在同一个 dart_app 进程内完成（src/startup/services.cpp 组装）；
+# 因此"识别"与"录像"必须在同一个 dart_app 进程内完成（runtime/application.cpp 组装）；
 # 拆成两个 ELF 就需要先设计帧共享通道，当前没有。
 # 一次上电只放一条，换配置就改这一行。
 # ----------------------------------------------------------------------------
@@ -83,40 +83,41 @@
 # 本清单零点为 1445,1490,1150,1475 µs；合成增量限幅以 --servo-max-delta 为准。
 # --servo-max-delta 只限制相对初始位置的合成增量，修改零点无需同步修改绝对上下限。
 # 预设点自动取实际图像中心；无目标/超时回零点。IMU、Wi-Fi 关闭。
-# 录像目标 60 FPS；待写帧超过一帧周期（约 16.7 ms）丢弃，不补写过期帧。
+# 录像使用单文件无损灰度 PNG（pngs），目标 30 FPS；待写帧超过一帧周期（约 33.3 ms）丢弃，不补写过期帧。
+# 录像：/data/app/records/rec_NNNN/img/recording.pngs；帧边界见 logs/frames.csv。
 # 坐标：/data/app/records/detection.csv（valid/cx/cy）；
 # 输出：/data/app/logs/dart_app.log（module=servo，pulse_us 为实际下发值）。
-/sdcard/app/dart_app --exp 400 --vision on --pwm on --record on --rec-fps 60 --imu off --wifi off --threshold 50 --servo-initial 1445,1490,1150,1475 --servo-max-delta 150 --servo-horizontal -1.0,-1.0,1.0,1.0 --servo-vertical 1.0,-1.0,-1.0,1.0 --det-csv /data/app/records/detection.csv --log /data/app/logs/dart_app.log &
+/sdcard/app/dart_app --exp 250 --vision on --pwm on --record on --rec-fps 30 --rec-format h264 --threshold 50 --servo-initial 1445,1490,1150,1475 --servo-max-delta 150 --servo-horizontal -1.0,-1.0,1.0,1.0 --servo-vertical 1.0,-1.0,-1.0,1.0 --det-csv /data/app/records/detection.csv --log /data/app/logs/dart_app.log --seconds 10 &
 
 # ---- 纯视觉舵机输出 + 录像（备用配置，本轮停用）----
 # PWM 由 dart_app 独占，不能与 pwm_swing 同时运行。
 # 下方备用命令未指定两轴增益，因此四路保持各自初始脉宽。
 # 方向/比例标定后可追加 --servo-horizontal A,B,C,D 和 --servo-vertical A,B,C,D。
-# 零点标定（四路 initial_us）：见 src/control/README.md「板端零点标定」。
+# 零点标定（四路 initial_us）：由 --servo-initial 配置，组件接线见 runtime/APPLICATION.md。
 #   标定时先注释本行再重启，避免自启实例与手跑实例抢 VICAP/PWM；也可直接改本行
 #   的 --servo-initial 后重启；注意每行参数 token 上限。
-# 日志:  /data/app/logs/dart_app.log（状态与耗时两行共用一次 fsync；launcher 另写
+# 日志:  /data/app/logs/dart_app.log（日志线程按批 fsync 并关闭；launcher 另写
 #        /data/app/logs/launcher.log 与 dart_app.console.log）
-# 录像:  /data/app/records/rec_NNNN/img/recording.pgm（灰度连续流，目标 60 FPS）
+# 录像:  /data/app/records/rec_NNNN/img/recording.pgm（备用 PGM 灰度连续流，目标 30 FPS）
 #        /data/app/records/rec_NNNN/logs/frames.csv（每帧一行的放行记录）
 # 识别:  /data/app/records/detection.csv（每帧一行：目标/质心/扫描窗口/候选数）
 # 程序在 /sdcard/app，不加载 ISP 配置；录像和日志写入 /data 分区。
 #
 # 相机模式、尺寸、帧率与 CSI 由 K230 实现和固件板级配置管理，上层只消费图像。
-# 参数含义（src/startup/argument_parser.cpp 的 usage；曝光/阈值需要板端验证）：
+# 参数含义（runtime/argument_parser.cpp 的 usage；曝光/阈值需要板端验证）：
 #   --exp 400                  本轮核对固定曝光 400 行，帧长 600 行。
 #                              应用省略参数时默认 400 行，帧长 600 行，
 #                              通过现有传感器接口写入，无需标定像素时钟或修改固件。
 #                              --exp 0 保留传感器初始曝光；RAW 直采不支持 --ae。
 #   --threshold 50            灰度候选下限；相机与预览始终保留灰度。
 #   --min-contrast 12         候选均值至少比周围背景高 12 灰度级（默认值，无需追加）。
-#   --record on --rec-fps 60   目标每秒保存 60 帧灰度 PGM，按接收时间采样，与采集帧率独立；
+#   --record on --rec-fps 30   目标每秒保存 30 帧灰度 PGM，按接收时间采样，与采集帧率独立；
 #                              写盘在录像线程，输入不足或写盘忙时实际帧率会降低，
 #                              队列满即丢（rec_busy），待写超时丢弃（rec_timed_out），不阻塞采集。
-#   --rec-timeout-ms 0        默认按一帧周期设超时，60 FPS 时为 16,667 µs；可显式设置毫秒数。
+#   --rec-timeout-ms 0        默认按一帧周期设超时，30 FPS 时为 33,334 µs；可显式设置毫秒数。
 #   --rec-keep 0             每次启动新建 rec_NNNN，保留复位前的录像目录。
 #   本轮 PGM 最多 500 MB（500,000,000 字节，含每帧文件头）；下一张放不下时停止录像，
-#   640x480、60 FPS 时约 18.4 MB/s、约 27 秒达上限；写盘实际速度需重新验证。
+#   640x480、30 FPS 时约 9.2 MB/s、约 54 秒达上限；写盘实际速度需重新验证。
 #   多帧合并到一个文件，不创建续录轮次。识别和 PWM 继续运行，直到复位或停止信号。
 #   /data 分区总占用上限为 2 GB（2,000,000,000 字节），计入旧录像、日志及分配开销；
 #   在总量上限及物理剩余空间内均预留 64 MiB，不足时停录，保留已有录像。
@@ -126,7 +127,7 @@
 #                              销毁相机 → 摘要行 "step=summary"。一轮上电即可同时
 #                              回答：有没有拉起来 / 采集通不通 / 识别有没有目标 /
 #                              录像落没落盘 / 收尾干不干净。
-# /sdcard/app/dart_app --exp 400 --vision on --pwm on --record on --rec-fps 60 --rec-keep 0 --rec-format pgm --raw-layout packed10-lsb --threshold 50 --rec-dir /data/app/records --det-csv /data/app/records/detection.csv --log /data/app/logs/dart_app.log &
+# /sdcard/app/dart_app --exp 400 --vision on --pwm on --record on --rec-fps 30 --rec-keep 0 --rec-format pgm --raw-layout packed10-lsb --threshold 50 --rec-dir /data/app/records --det-csv /data/app/records/detection.csv --log /data/app/logs/dart_app.log &
 
 # 纯视觉控制不依赖 IMU。需要独立 IMU 日志时，可追加 --imu on --imu-bus 1 --imu-cs 14，
 # 同时删去其它默认参数以满足清单 token 上限。IMU 不参与 PWM 计算。
@@ -143,7 +144,7 @@
 # /sdcard/app/dart_app --exp 2560 --vision on --record off --seconds 90 &
 
 # 只录像不识别（量采集+写盘开销的基线）:
-# /sdcard/app/dart_app --exp 2560 --vision off --record on --rec-fps 60 --seconds 90 &
+# /sdcard/app/dart_app --exp 2560 --vision off --record on --rec-fps 30 --seconds 90 &
 
 # 二值化取证（DBV 自适应压缩，仅导出候选阈值位图，不保存识别用的灰度细节）:
 # /sdcard/app/dart_app --exp 2560 --record on --rec-format dbv --threshold 128 --seconds 90 &

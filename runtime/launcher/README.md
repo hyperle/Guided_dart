@@ -29,8 +29,8 @@ launcher 自身日志和子进程 console 日志服从 `/sdcard/app/control/writ
 
 当前启动清单只启用 `dart_app` 的识别、坐标、两轴映射和四路 PWM 链路。
 零点、两轴增益与增量限幅以 `startup.list` 当前参数为准。
-IMU、Wi-Fi 关闭，录像启用并显式设置为 60 FPS；待写帧超过一帧周期（约 16.7 ms）丢弃。
-详细控制参数见 [舵机控制说明](../../src/control/README.md)。
+IMU、Wi-Fi 关闭，录像启用并显式设置为 30 FPS、`pngs` 单文件无损灰度 PNG；待写帧超过一帧周期（约 33.3 ms）丢弃。
+详细控制参数见 [组件接线与控制说明](../APPLICATION.md)。
 
 ## 清单语法（每行一条）
 
