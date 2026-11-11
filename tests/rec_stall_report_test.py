@@ -77,6 +77,8 @@ def main() -> int:
         assert abs(summary.active_fps - 75 / (summary.seconds - 0.231)) < 1e-6
         assert summary.container_size - summary.container_indexed == 517
         assert 400 < summary.mean_frame_bytes < 500, summary.mean_frame_bytes
+        assert summary.target_fps == 30
+        assert summary.output_gaps
 
         # A session without stalls must report an effective rate at the target.
         clean = Path(scratch) / "rec_0002"
@@ -91,6 +93,45 @@ def main() -> int:
         assert abs(clean_summary.effective_fps - clean_summary.active_fps) < 1e-9
         # Duration spans 29 intervals of 33 ms, so 30 frames read as ~31.3 fps.
         assert abs(clean_summary.effective_fps - 30 / (29 * 0.033)) < 0.01, clean_summary.effective_fps
+
+        # Dense capture with a backed-up writer creates recorded-source gaps,
+        # while input remains continuous. H.264 shares the CSV byte index.
+        h264 = Path(scratch) / "rec_0003"
+        (h264 / "logs").mkdir(parents=True)
+        (h264 / "img").mkdir()
+        lines = []
+        image_index = 0
+        for index in range(1, 51):
+            if index <= 5 or index >= 45:
+                image_index += 1
+                lines.append(f"{index},{index},0,0,{index * 10000},accepted,{image_index},"
+                             f"img/recording.h264,{(image_index - 1) * 100},100\n")
+            else:
+                lines.append(f"{index},{index},0,0,{index * 10000},buffer_full,0,,0,0\n")
+        (h264 / "logs" / "frames.csv").write_text(CSV_HEADER + "".join(lines))
+        (h264 / "img" / "recording.h264").write_bytes(b"\0" * (image_index * 100))
+        buffered = module.summarise(h264, 80_000)
+        assert buffered.stalls == []
+        assert buffered.output_gaps == [400.0]
+        assert buffered.decisions["buffer_full"] == 39
+        assert buffered.format_note == "recording.h264"
+        assert buffered.container_size == buffered.container_indexed
+
+        # A window spans all status rows up to op=timing, rather than one line.
+        log = Path(scratch) / "app.log"
+        log.write_text(
+            "[record] ts_ms=1 op=recorder_start fps=30\n"
+            "[record] ts_ms=1 op=buffer_status rec_buffered=3 rec_buffer_dropped=4\n"
+            "[app] ts_ms=1 op=timing window_ms=1000 fps=20 telemetry_max_us=100\n"
+            "[record] ts_ms=2 op=buffer_status rec_buffered=5 rec_buffer_dropped=8\n"
+            "[record] ts_ms=2 op=recorder_timing pack_us=900 io_max_us=20000\n"
+            "[app] ts_ms=2 op=timing window_ms=1000 fps=25 telemetry_max_us=200\n"
+        )
+        series = module.log_timing(log, limit=1)
+        assert series["fps"] == [25.0]
+        assert series["rec_buffered"] == [5.0]
+        assert series["rec_buffer_dropped"] == [8.0]
+        assert series["pack_us"] == [900.0]
 
     print("rec_stall_report: ok")
     return 0

@@ -2,7 +2,7 @@
 dart_add_cpp_library(dart_detection detector/detector.cpp)
 target_link_libraries(dart_detection PUBLIC dart_camera_acl Threads::Threads)
 
-dart_add_cpp_library(dart_recording recorder/recorder.cpp)
+dart_add_cpp_library(dart_recording recorder/recorder.cpp recorder/buffered_storage.cpp)
 add_library(dart_recorder ALIAS dart_recording)
 target_link_libraries(dart_recording PUBLIC dart_recording_formats dart_camera_acl dart_platform Threads::Threads)
 

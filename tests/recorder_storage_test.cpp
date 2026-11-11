@@ -1,4 +1,6 @@
 #include <cstdint>
+#include <cstdio>
+#include <sys/types.h>
 #include <cstddef>
 #include <expected>
 #include <chrono>
@@ -28,12 +30,13 @@ static std::uint64_t volume_bytes = 4'000'000'000;
 static std::uint64_t used_bytes = 0;
 static std::uint64_t block_bytes = 1;
 static bool storage_failure = false;
-static bool sync_failure = false;
-static std::atomic<unsigned> sync_count{0};
-static std::atomic<bool> block_sync{false};
-static std::atomic<bool> sync_blocked{false};
+static bool write_failure = false;
+static std::atomic<unsigned> sync_count{0}, flush_count{0};
+static std::atomic<bool> block_write{false};
+static std::atomic<bool> write_blocked{false};
 
-extern "C" int __real_fsync(int fd);
+extern "C" std::size_t __real_fwrite(const void*, std::size_t, std::size_t, std::FILE*);
+extern "C" ssize_t __real_write(int fd, const void* data, std::size_t bytes);
 
 extern "C" int __wrap_statvfs(const char*, struct statvfs* storage) {
     if (storage_failure) {
@@ -48,18 +51,37 @@ extern "C" int __wrap_statvfs(const char*, struct statvfs* storage) {
     return 0;
 }
 
-extern "C" int __wrap_fsync(int fd) {
-    if (block_sync.load()) {
-        sync_blocked.store(true);
-        while (block_sync.load())
+static bool storage_ready() {
+    if (block_write.load()) {
+        write_blocked.store(true);
+        while (block_write.load())
             std::this_thread::sleep_for(std::chrono::milliseconds{1});
     }
-    ++sync_count;
-    if (sync_failure) {
+    if (write_failure) {
         errno = EIO;
-        return -1;
+        return false;
     }
-    return __real_fsync(fd);
+    return true;
+}
+
+extern "C" std::size_t __wrap_fwrite(const void* data, std::size_t size, std::size_t count, std::FILE* file) {
+    return storage_ready() ? __real_fwrite(data, size, count, file) : 0;
+}
+
+extern "C" ssize_t __wrap_write(int fd, const void* data, std::size_t bytes) {
+    return storage_ready() ? __real_write(fd, data, bytes) : -1;
+}
+
+extern "C" int __wrap_fflush(std::FILE*) {
+    ++flush_count;
+    errno = EIO;
+    return -1;
+}
+
+extern "C" int __wrap_fsync(int) {
+    ++sync_count;
+    errno = EIO;
+    return -1;
 }
 
 class RecorderStorageTest final {
@@ -93,30 +115,75 @@ public:
         assert(writer.prepare(1) && writer.open(error));
         const std::array<std::byte, 1> pixel{std::byte{123}};
         assert(writer.write_image(pixel));
-        assert(sync_count == 1); // First frame reaches fsync without stop().
-        assert(std::filesystem::file_size(session.image_path()) == record_bytes);
+        assert(flush_count == 0 && sync_count == 0);
+        assert(std::filesystem::file_size(session.image_path()) == 0);
         assert(writer.write_image(pixel));
         assert(!writer.write_image(pixel) && errno == EFBIG);
         assert(writer.close());
         assert(std::filesystem::file_size(session.image_path()) == 2 * record_bytes);
 
-        // Sync errors must propagate to the recorder instead of reporting success.
+        // Write errors must propagate instead of reporting success.
         recorder::Session failed_session{config, error};
         assert(failed_session.open());
         ImageWriterFixture failed_writer{config, failed_session};
         assert(failed_writer.prepare(1) && failed_writer.open(error));
-        sync_failure = true;
+        write_failure = true;
         assert(!failed_writer.write_image(pixel) && errno == EIO);
-        sync_failure = false;
+        write_failure = false;
         assert(failed_writer.close());
         std::filesystem::remove_all(path);
         packing();
-        retained_frame();
+        buffered_frame();
         png_storage();
         partition_limit();
+        h264_storage();
+        assert(sync_count == 0 && flush_count == 0);
     }
 
 private:
+    static void h264_storage() {
+        char path[] = "/tmp/dart-h264-storage-XXXXXX";
+        assert(::mkdtemp(path));
+        recorder::Config config;
+        config.output_directory = path;
+        config.width = config.height = 2;
+        config.fps = 30;
+        config.image_format = recorder::ImageFormat::kH264;
+        available_bytes = recorder::Config::kStorageReserveBytes + 1'000'000;
+        recorder::RecorderError error;
+        recorder::Session session{config, error};
+        assert(session.open());
+        recorder::ImageWriter writer{config, session};
+        recorder::EventWriter events{config};
+        assert(writer.prepare(4) && writer.open(error));
+        assert(events.prepare() && events.open(session, error));
+        // Exercise storage with already encoded bytes, independently of VENC.
+        const std::array<std::byte, 6> payload{
+            std::byte{0}, std::byte{0}, std::byte{0}, std::byte{1}, std::byte{0x65}, std::byte{0x88}};
+        for (unsigned index = 1; index <= 2; ++index) {
+            assert(writer.write_encoded({{}, payload}, index));
+            assert(writer.file_offset() == (index - 1U) * payload.size());
+            recorder::FrameEvent event{};
+            event.input_index = event.image_index = index;
+            event.decision = recorder::EventDecision::kAccepted;
+            event.file_offset = writer.file_offset();
+            event.file_bytes = writer.record_bytes();
+            std::snprintf(event.image_name.data(), event.image_name.size(), "%s", writer.image_name());
+            assert(events.write(event));
+        }
+        assert(writer.close());
+        assert(events.close());
+        std::ifstream input(session.image_path(), std::ios::binary);
+        const std::string actual{std::istreambuf_iterator<char>{input}, {}};
+        const std::string expected{reinterpret_cast<const char*>(payload.data()), payload.size()};
+        assert(actual == expected + expected);
+        std::ifstream csv(session.event_path());
+        const std::string metadata{std::istreambuf_iterator<char>{csv}, {}};
+        assert(metadata.find("accepted,1,img/recording.h264,0,6") != std::string::npos);
+        assert(metadata.find("accepted,2,img/recording.h264,6,6") != std::string::npos);
+        std::filesystem::remove_all(path);
+    }
+
     static void partition_limit() {
         char path[] = "/tmp/dart-partition-limit-XXXXXX";
         assert(::mkdtemp(path));
@@ -215,9 +282,9 @@ private:
         ImageWriterFixture writer{config, session};
         assert(writer.prepare(64) && writer.open(error));
         const std::array<std::byte, 64> pixels{};
-        sync_failure = true;
+        write_failure = true;
         assert(!writer.write_image(pixels, 1) && errno == EIO);
-        sync_failure = false;
+        write_failure = false;
         for (const auto& entry : std::filesystem::recursive_directory_iterator(session.directory()))
             assert(entry.path().extension() != ".png" && entry.path().extension() != ".tmp");
         assert(writer.write_image(pixels, 1));
@@ -268,7 +335,7 @@ private:
         return {};
     }
 
-    static void retained_frame() {
+    static void buffered_frame() {
         char path[] = "/tmp/dart-recorder-slow-disk-XXXXXX";
         assert(::mkdtemp(path));
         recorder::Config config{};
@@ -277,7 +344,7 @@ private:
         config.height = 1;
 
         config.frame_timeout = std::chrono::milliseconds{5000};
-        config.flush_period = std::chrono::milliseconds{60'000};
+        config.queue_slots = 1;
         RecorderFixture rec{config};
         assert(rec.start());
         std::array<std::byte, 8> pixels{};
@@ -287,8 +354,8 @@ private:
         slot.view.height = 1;
         slot.release = release;
         slot.view.received = std::chrono::microseconds{980'000};
-        block_sync.store(true);
-        sync_blocked.store(false);
+        block_write.store(true);
+        write_blocked.store(false);
         slot.state = camera::FrameLeaseAccess::SlotState::kHeld;
         auto lease = camera::FrameLeaseAccess::make(&slot);
         for (unsigned attempt = 0;; ++attempt) {
@@ -297,11 +364,13 @@ private:
             if (rec.try_submit(std::move(lease)) == recorder::Admission::kAccepted) break;
             std::this_thread::sleep_for(std::chrono::milliseconds{1});
         }
-        for (unsigned attempt = 0; attempt < 2000 && !sync_blocked.load(); ++attempt)
+        for (unsigned attempt = 0; attempt < 2000 && !write_blocked.load(); ++attempt)
             std::this_thread::sleep_for(std::chrono::milliseconds{1});
-        assert(sync_blocked.load() && !lease.valid());
-        // Direct PGM output retains this original frame through the stalled write.
-        assert(rec.drain_releases() == 0 && slot.state == camera::FrameLeaseAccess::SlotState::kHeld);
+        assert(write_blocked.load() && !lease.valid());
+        // The blocked sink retains an owned PGM copy and returns the camera slot.
+        rec.wait_released();
+        assert(slot.state == camera::FrameLeaseAccess::SlotState::kFree);
+        assert(rec.stats().buffered == 1 && rec.stats().buffer_high_water == 1);
         camera::FrameLeaseAccess::Slot other{};
         other.view = slot.view;
         other.view.received += std::chrono::milliseconds{20};
@@ -310,7 +379,7 @@ private:
         auto rejected = camera::FrameLeaseAccess::make(&other);
         assert(rec.try_submit(std::move(rejected)) == recorder::Admission::kBusy);
         assert(rejected.valid() && rejected.release());
-        block_sync.store(false);
+        block_write.store(false);
         rec.wait_released();
         rec.stop();
         assert(rec.stats().written == 1 && rec.pending_releases() == 0);

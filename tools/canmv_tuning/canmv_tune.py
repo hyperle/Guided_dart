@@ -2,7 +2,7 @@
 # 相机使用与 dart_app 相同的 RAW10 C 后端，需要配套解释器，见 canmv_tuning/README.md。
 
 # ---------------- 可调参数（量纲与 RT-Smart C/C++ 一致） ----------------
-CAMERA_ENABLED = False
+CAMERA_ENABLED = True
 EXPOSURE_LINES = 120                 # --exp：整行；0 保留初始化曝光，否则 4..65509
 GRAY_THRESHOLD = 60                  # --threshold：灰度候选下限 0..255；不改变预览/识别图
 MIRROR = 0                           # Controls::mirror：0 无，1 左右，2 上下，3 两者

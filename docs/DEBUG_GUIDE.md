@@ -1,7 +1,7 @@
 # 板端调试手册（v2 工作流）
 
 状态：可执行的调试手册。当前仓库已有可部署 ELF（`launcher`、`dart_app`）与
-构建/部署脚本，启动链路见 [`LAUNCHER_DESIGN.md`](LAUNCHER_DESIGN.md)。
+构建/部署脚本，启动链路见 [`runtime/launcher/README.md`](../runtime/launcher/README.md)。
 **板端尚未验证**：凡本文档中的板端结论都必须以真实串口日志与样本为准。
 
 这份手册服务于“用户态业务程序”的板端验证，不调试固件本身。每次试验记录 Git commit、应用名、参数版本、板端固件版本、工具链、日志目录和原始样本。
@@ -10,7 +10,8 @@
 
 部署前必须满足：
 
-- 业务入口位于 `src/dart_entry.cpp`，L4 编排按功能位于 `src/{startup,vision,recording,diagnostics}/`，目标在 `src/CMakeLists.txt` 中声明；
+- 业务入口位于 `runtime/dart_entry.cpp`，应用装配位于 `runtime/application.cpp`，
+  检测、控制、录像组件位于 `src/{detector,control,recorder}/`，分别由 runtime 和 src 的 CMake 声明；
 - `bash .script/build-rtos <目标名>` 能生成 ELF；
 - 交叉构建、链接脚本（SDK `link.lds`）和 SDK 依赖明确；
 - 版本化参数和日志 schema 已写入应用配置；
@@ -55,12 +56,36 @@ bash .script/deploy-rtos
 日志由应用/运行时的决策边界写出，叶子 C 模块只返回状态。每条结构化错误包含：
 
 ```text
-ts_ms level module op code native detail action count msg="..."
+[功能标签] ts_ms level module op code native detail action count msg="..."
 ```
 
-日志必须使用单调时间、稳定错误枚举和限频；一行不超过 512 字节并以换行结束。正常“未检测到目标”、ROI 无连通域、候选被拒绝只进入计数器/CSV，不刷错误日志。信号处理器只做异步信号安全的最小写入。
+日志使用单调时间、稳定错误枚举和限频；正文缓冲 512 字节，带标签的整行槽位 640 字节，
+截断后仍以换行结束。正常“未检测到目标”、ROI 无连通域、候选被拒绝只进入计数器/CSV，
+不刷错误日志。信号处理器只做异步信号安全的最小写入。
 
 启动日志应依次证明：应用版本/参数 → SDK/设备探针 → 帧池和工作区 → 线程/队列 → 第一帧时间戳。任何一步停住，先定位最后一个成功边界。
+
+### 实时查看日志
+
+默认只写文件。前台运行时显式打开后台控制台镜像：
+
+```text
+msh> /sdcard/app/dart_app --seconds 30 --record off --pwm off --log-console on
+msh> /sdcard/app/dart_app --seconds 30 --record off --pwm off --log off --log-console on
+```
+
+第二条只输出控制台。镜像写到 stderr，即当前固件提供的控制台设备；通过 launcher 启动时，
+stderr 被收集到 `<app>.console.log`，需要串口现场观察时应前台运行。
+镜像限速 30 行/秒、初始突发 30 行，超额累计并以 `op=console_dropped` 汇报；
+文件日志队列满或竞争锁时累计 `op=log_dropped`，避免串口或磁盘阻塞采集线程。
+`write.pause` 暂停时文件与镜像一起停；普通日志、检测 CSV、录像、IMU Session 与 launcher
+均不显式调用文件同步，也没有周期性 stdio 刷新。复制录像和 CSV 前应先停止写入、等待关闭。
+
+`[vision] op=vision_status` 与 `[app] op=timing` 给出窗口内采集/检测/流水线耗时；
+`[record] op=recorder_timing` 和 `op=recorder_io` 给出会话累计的编码、复制、写盘耗时。
+`op=buffer_status` 的 `rec_buffered / rec_buffer_high_water / rec_buffer_dropped` 用于判断
+短时写盘停顿是否耗尽缓冲。`tools/rec_stall_report.py` 可离线分析 PNGS、H.264、DBV、PGM/PBM，
+分别报告输入间隙、成功保存源帧间隙及 `buffer_full` 数量；CSV 时间戳不是磁盘写入完成时间。
 
 ## 4. 采集和帧池
 

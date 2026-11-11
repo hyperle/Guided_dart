@@ -14,66 +14,52 @@
 
 namespace dart::logging {
 
-// Adapted from uart-rt-log b320f32f6: producers copy bounded rows; the worker
-// owns open/write/fsync/close so slow storage cannot stall image acquisition.
+// Bounded multi-producer queue. Its worker owns file and console output;
+// producers drop on contention or a full queue and never wait for I/O.
 class LogSink final {
 public:
     static constexpr std::size_t kLogQueueRows = 256;
     static constexpr std::size_t kLogRowBytes = 640;
+    static constexpr std::uint32_t kConsoleRatePerSecond = 30;
 
-private:
-    static constexpr std::int64_t kLogIdleWaitMs = 100;
-    static constexpr std::int64_t kLogDropReportMs = 1000;
+    struct Stats {
+        std::uint64_t dropped = 0, console_dropped = 0, io_errors = 0;
+        std::uint32_t queued = 0, high_water = 0;
+    };
 
-public:
     LogSink() noexcept = default;
     ~LogSink();
     LogSink(const LogSink&) = delete;
     LogSink& operator=(const LogSink&) = delete;
 
-    // Allocate a fixed queue and start the sole owner of file I/O.
+    // Lifecycle calls are serialized by the owner. An empty path disables
+    // file output; set_console() independently selects the stderr mirror.
     bool start(std::string_view path, platform::WriteControl* writes) noexcept;
-    bool started() const noexcept;
-
-    /* Copies one formatted line (without the trailing '\0' accounting) into the
-     * queue. The mutex is only held for queue bookkeeping and a bounded memcpy;
-     * the writer thread never holds it across open/write/fsync, so waiting for
-     * it can never wait for storage. A full queue drops the line and is counted,
-     * without increasing memory use or waiting for storage. */
+    void set_console(bool on) noexcept;
     void enqueue(const char* text, std::size_t size) noexcept;
-
-    /* Asks the writer to flush and close the file after the queued lines. The
-     * request is a separate flag, not a queue slot, so a full queue can never
-     * swallow it and leave the file open. */
-    void request_flush() noexcept;
-
-    /* Blocks until every queued line is written and the following flush
-     * finished (the file is fsynced and closed again). Used by shutdown and by
-     * tests that need the file to be observable. */
+    void request_close() noexcept;
+    // Includes the in-flight row and closing the descriptor, without syncing.
     bool drain(std::chrono::milliseconds deadline) noexcept;
-
     void stop() noexcept;
-
     std::uint64_t dropped() const noexcept;
+    Stats stats() const noexcept;
 
 private:
+    static constexpr std::int64_t kIdleWaitMs = 100;
+    static constexpr std::int64_t kDropReportMs = 1000;
     struct Row {
         char text[kLogRowBytes];
         std::uint32_t size;
     };
-
     static void* entry(void* context) noexcept;
-
     void run() noexcept;
-
+    bool enabled() const noexcept;
     void write_row(const Row& row) noexcept;
-
-    /* fsync+close is the durability point of a batch; it runs on this thread. */
-    void flush_once() noexcept;
-
-    /* Emits one summary line per second when the bounded queue had to drop
-     * lines, so a diagnostic burst stays observable without blocking anyone. */
-    void report_dropped() noexcept;
+    void write_output(const char* text, std::size_t size) noexcept;
+    void close_file() noexcept;
+    void report_dropped(bool force = false) noexcept;
+    void emit_console(const char* text, std::size_t size) noexcept;
+    void report_console_dropped(bool force = false) noexcept;
 
     std::unique_ptr<Row[]> rows_{};
     char path_[512]{};
@@ -82,14 +68,18 @@ private:
     pthread_t thread_{};
     bool started_ = false;
     std::mutex mutex_;
-    std::condition_variable ready_;
-    std::condition_variable idle_cv_;
+    std::condition_variable ready_, idle_cv_;
     std::size_t head_ = 0, tail_ = 0, count_ = 0;
-    bool running_ = false, flush_requested_ = false, flushing_ = false;
-    std::atomic<std::uint64_t> dropped_{0};
-    // Only the writer thread updates the drop summary state.
-    std::uint64_t dropped_reported_ = 0;
-    std::int64_t drop_report_ms_ = 0;
+    bool working_ = false, file_closed_ = true;
+    std::atomic<bool> running_{false}, console_{false};
+    std::atomic<std::uint32_t> close_requested_{0};
+    std::atomic<std::uint64_t> dropped_{0}, console_dropped_{0}, io_errors_{0};
+    std::atomic<std::uint32_t> queued_{0}, high_water_{0};
+    // Only the writer touches reporting and token bucket state.
+    std::uint64_t dropped_reported_ = 0, console_reported_ = 0;
+    std::int64_t drop_report_ms_ = 0, console_report_ms_ = 0, console_refill_ms_ = 0;
+    std::uint64_t console_credit_ = 0; // Thousandths of a line.
+    bool console_active_ = false;
 };
 
 } // namespace dart::logging

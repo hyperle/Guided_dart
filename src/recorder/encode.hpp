@@ -58,6 +58,13 @@ public:
         return header_bytes_ + (config_.image_format == ImageFormat::kPbm
             ? packed_bytes_ : static_cast<std::size_t>(config_.width) * config_.height);
     }
+    std::size_t max_output_bytes() const noexcept {
+        if (video_) return video_->max_output_bytes();
+        if (config_.image_format == ImageFormat::kPng || config_.image_format == ImageFormat::kPngStream)
+            return png_.max_output_bytes();
+        if (config_.image_format == ImageFormat::kDbv) return binary_.max_output_bytes();
+        return record_bytes();
+    }
     Image encode(const camera::FrameView& view) noexcept {
         if (!valid_view(view)) return {};
         if (video_) return {{}, video_->encode(view)};

@@ -17,15 +17,9 @@
 
 namespace dart::tests {
 
-static std::atomic<bool> hold_png_sync{false}, png_sync_blocked{false};
-extern "C" int __real_fsync(int);
-extern "C" int __wrap_fsync(int fd) {
-    if (hold_png_sync.load()) {
-        png_sync_blocked.store(true);
-        while (hold_png_sync.load())
-            std::this_thread::sleep_for(std::chrono::milliseconds{1});
-    }
-    return __real_fsync(fd);
+extern "C" int __wrap_fsync(int) {
+    assert(false && "PNG recording must not force device synchronization");
+    return -1;
 }
 
 class RecorderPngTest final {

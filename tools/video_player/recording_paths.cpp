@@ -7,9 +7,13 @@
 #include <QStringList>
 #include <algorithm>
 
+#include "tools/video_player/video_stream.hpp"
+
 namespace dart::tools::video_player {
 
 QStringList RecordingPaths::directories(const QString& directory) {
+    if (QFileInfo(directory).isFile())
+        return {QFileInfo(directory).absoluteFilePath()};
     const QDir input(QFileInfo(directory).absoluteFilePath());
     // A session or flat image directory takes precedence over child sessions.
     if (input.exists("img") || input.exists("frames.csv") || input.exists("logs/frames.csv"))
@@ -21,7 +25,8 @@ QStringList RecordingPaths::directories(const QString& directory) {
     QStringList sessions;
     for (const auto& entry :
          input.entryInfoList(QDir::AllEntries | QDir::NoDotAndDotDot | QDir::NoSymLinks)) {
-        if (image_entry.match(entry.fileName()).hasMatch())
+        if (image_entry.match(entry.fileName()).hasMatch()
+            || (entry.isFile() && VideoStream::supports(entry.suffix())))
             return {input.absolutePath()};
         if (entry.isDir() && session_name.match(entry.fileName()).hasMatch())
             sessions.push_back(entry.absoluteFilePath());
@@ -43,8 +48,10 @@ QStringList RecordingPaths::directories(const QString& directory) {
 }
 
 RecordingPaths RecordingPaths::resolve(const QString& directory) {
-    const QDir input(QFileInfo(directory).absoluteFilePath());
-    const bool has_img = QFileInfo(input.filePath("img")).isDir();
+    const QFileInfo source(directory);
+    const bool is_file = source.isFile();
+    const QDir input(is_file ? source.absolutePath() : source.absoluteFilePath());
+    const bool has_img = !is_file && QFileInfo(input.filePath("img")).isDir();
     const QDir images(has_img ? input.filePath("img") : input.absolutePath());
     QDir session(input);
     const bool is_img = !has_img && input.dirName() == "img" && !input.exists("frames.csv")
@@ -69,7 +76,9 @@ RecordingPaths RecordingPaths::resolve(const QString& directory) {
         records.cdUp();
         detection_candidates.push_back(records.filePath("detection.csv"));
     }
-    return {images.absolutePath(), frames_csv, first_existing(detection_candidates)};
+    return {
+        is_file ? source.absoluteFilePath() : images.absolutePath(), frames_csv,
+        first_existing(detection_candidates)};
 }
 
 } // namespace dart::tools::video_player

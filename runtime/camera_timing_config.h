@@ -1,0 +1,31 @@
+#ifndef DART_CAMERA_TIMING_CONFIG_H
+#define DART_CAMERA_TIMING_CONFIG_H
+
+/* Scope the diagnostic to the sensor enum ABI of the known-good board ELF.
+ * k_type.h loads the SDK-generated comm config; remove other sensor selections
+ * afterwards because they shift SC038HGS CSI2 from type 2 to another number.
+ * No SDK file or production target is changed by this diagnostic override. */
+#include "k_type.h"
+
+#undef CONFIG_MPP_ENABLE_SENSOR_IMX335
+#undef CONFIG_MPP_ENABLE_SENSOR_OV5647
+#undef CONFIG_MPP_ENABLE_SENSOR_GC2093
+#undef CONFIG_MPP_ENABLE_SENSOR_SC132GS
+#undef CONFIG_MPP_ENABLE_SENSOR_SC130GS
+#undef CONFIG_MPP_ENABLE_SENSOR_XS9950
+#undef CONFIG_MPP_ENABLE_SENSOR_IMX675
+#undef CONFIG_MPP_ENABLE_SENSOR_IMX290
+#undef CONFIG_MPP_ENABLE_SENSOR_BF3238
+#undef CONFIG_MPP_ENABLE_SENSOR_OV13850
+#undef CONFIG_MPP_ENABLE_CSI_DEV_0
+#undef CONFIG_MPP_ENABLE_CSI_DEV_1
+#undef CONFIG_MPP_SENSOR_DEFAULT_CSI
+#undef CONFIG_MPP_SC038HGS_PHY_CLOCK
+#undef CONFIG_MPP_SC038HGS_PIXEL_CLOCK_HZ
+#define CONFIG_MPP_ENABLE_SENSOR_SC038HGS 1
+#define CONFIG_MPP_ENABLE_CSI_DEV_2 1
+#define CONFIG_MPP_SENSOR_DEFAULT_CSI 2
+#define CONFIG_MPP_SC038HGS_PHY_CLOCK 1
+#define CONFIG_MPP_SC038HGS_PIXEL_CLOCK_HZ 0
+
+#endif

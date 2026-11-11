@@ -12,7 +12,6 @@
 #include <mutex>
 #include <new>
 #include <pthread.h>
-#include <unistd.h>
 
 #include "storage/directories.hpp"
 #include "system/write_control.hpp"
@@ -30,13 +29,14 @@ bool CsvWriter::open(
     writes_ = writes;
     if (!buffer_)
         buffer_.reset(new (std::nothrow) char[kBufferBytes]);
-    if (writes_ == nullptr)
-        return open_file("w");
+    if (!buffer_)
+        return false;
     if (!rows_)
         rows_.reset(new (std::nothrow) Row[kRowCount]);
     if (!rows_)
         return false;
     head_ = tail_ = count_ = 0;
+    dropped_ = io_errors_ = 0;
     running_.store(true);
     if (::pthread_create(&thread_, nullptr, &CsvWriter::entry, this) != 0) {
         running_.store(false);
@@ -47,33 +47,24 @@ bool CsvWriter::open(
 }
 
 void CsvWriter::row(const char* format, ...) noexcept {
-    if (writes_ != nullptr && (!running_.load() || !writes_->logging_enabled()))
+    if (!running_.load() || (writes_ != nullptr && !writes_->logging_enabled()))
         return;
     va_list args;
     va_start(args, format);
-    if (writes_ == nullptr) {
-        if (file_ != nullptr)
-            (void)std::vfprintf(file_, format, args);
-    } else {
-        Row row{};
-        const int size = std::vsnprintf(row.text, sizeof(row.text), format, args);
-        std::unique_lock lock(mutex_, std::try_to_lock);
-        if (size < 0 || static_cast<std::size_t>(size) >= sizeof(row.text) || !lock.owns_lock()
-            || count_ == kRowCount) {
-            ++dropped_;
-        } else {
-            rows_[tail_] = row;
-            tail_ = (tail_ + 1) % kRowCount;
-            ++count_;
-            ready_.notify_one();
-        }
-    }
+    Row row{};
+    const int size = std::vsnprintf(row.text, sizeof(row.text), format, args);
     va_end(args);
-}
-
-void CsvWriter::flush() noexcept {
-    if (writes_ == nullptr)
-        flush_file();
+    std::unique_lock lock(mutex_, std::try_to_lock);
+    if (size < 0 || static_cast<std::size_t>(size) >= sizeof(row.text) || !lock.owns_lock()
+        || !running_.load() || count_ == kRowCount) {
+        ++dropped_;
+        return;
+    }
+    rows_[tail_] = row;
+    tail_ = (tail_ + 1) % kRowCount;
+    ++count_;
+    lock.unlock();
+    ready_.notify_one();
 }
 
 void CsvWriter::close() noexcept {
@@ -92,31 +83,28 @@ void CsvWriter::close() noexcept {
 bool CsvWriter::open_file(const char* mode) noexcept {
     storage::ensure_parent(path_);
     file_ = std::fopen(path_, mode);
-    if (file_ == nullptr)
+    if (file_ == nullptr) {
+        ++io_errors_;
         return false;
+    }
     if (buffer_)
         (void)std::setvbuf(file_, buffer_.get(), _IOFBF, kBufferBytes);
     if (std::fseek(file_, 0, SEEK_END) != 0) {
+        ++io_errors_;
         close_file();
         return false;
     }
-    if (std::ftell(file_) == 0)
-        (void)std::fputs(header_, file_);
-    flush_file();
-    return true;
-}
-
-void CsvWriter::flush_file() noexcept {
-    if (file_ != nullptr) {
-        (void)std::fflush(file_);
-        (void)::fsync(::fileno(file_));
+    if (std::ftell(file_) == 0 && std::fputs(header_, file_) < 0) {
+        ++io_errors_;
+        close_file();
+        return false;
     }
+    return true;
 }
 
 void CsvWriter::close_file() noexcept {
     if (file_ != nullptr) {
-        flush_file();
-        (void)std::fclose(file_);
+        if (std::fclose(file_) != 0) ++io_errors_;
         file_ = nullptr;
     }
 }
@@ -128,7 +116,7 @@ void* CsvWriter::entry(void* context) noexcept {
 
 void CsvWriter::run() noexcept {
     bool attempted = false;
-    auto next_flush = std::chrono::steady_clock::now() + std::chrono::seconds{1};
+    bool first_open = true;
     for (;;) {
         Row row{};
         bool have_row = false, empty = false;
@@ -145,26 +133,28 @@ void CsvWriter::run() noexcept {
             }
             empty = count_ == 0;
         }
-        const bool wanted = writes_->logging_enabled();
-        if (wanted && running_.load() && !attempted) {
+        const bool wanted = writes_ == nullptr || writes_->logging_enabled();
+        if (wanted && (running_.load() || have_row) && !attempted) {
             attempted = true;
-            (void)open_file("a");
+            (void)open_file(first_open && writes_ == nullptr ? "w" : "a");
+            first_open = false;
         }
         if (have_row) {
-            if (file_ != nullptr)
-                (void)std::fputs(row.text, file_);
-            else
+            if (wanted && file_ != nullptr) {
+                if (std::fputs(row.text, file_) < 0) {
+                    ++io_errors_;
+                    ++dropped_;
+                    close_file();
+                }
+            } else {
                 ++dropped_;
+            }
         }
-        if (empty && (!wanted || !running_.load())) {
+        if (!wanted || (empty && !running_.load())) {
             close_file();
             attempted = false;
-            if (!running_.load())
+            if (empty && !running_.load())
                 break;
-        }
-        if (std::chrono::steady_clock::now() >= next_flush) {
-            flush_file();
-            next_flush = std::chrono::steady_clock::now() + std::chrono::seconds{1};
         }
     }
 }

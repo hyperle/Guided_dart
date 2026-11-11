@@ -16,6 +16,8 @@ class IVideoEncoder {
 public:
     virtual ~IVideoEncoder() = default;
     virtual bool prepare(std::uint32_t width, std::uint32_t height, std::uint32_t fps) noexcept = 0;
+    // Bound for a complete access unit after prepare(), including codec headers.
+    virtual std::size_t max_output_bytes() const noexcept = 0;
     virtual bool reset() noexcept = 0;
     virtual std::span<const std::byte> encode(const camera::FrameView& frame) noexcept = 0;
 };

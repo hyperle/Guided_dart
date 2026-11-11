@@ -107,7 +107,8 @@ void usage(const char* argv0) {
     std::printf("  --rec-duration-ms N    触发后录像时长，0 = 持续请求（默认 0）\n");
     std::printf(
         "  --rec-fps N      目标录像帧率，按时间采样（默认 %u FPS）\n", recorder::Config{}.fps);
-    std::printf("  --rec-timeout-ms N  待写帧超时丢弃，0 = 一帧周期（默认 0，最大 60000）\n");
+    std::printf("  --rec-timeout-ms N  输入帧等待超时丢弃，0 = 一帧周期（默认 0，最大 60000）\n");
+    std::printf("  --rec-queue N    写盘缓冲帧数 1..64，满时丢新帧（默认 %u）\n", recorder::Config{}.queue_slots);
     std::printf("  --rec-keep N     只保留最近 N 轮录像，0 = 不清理（默认 0）\n");
     std::printf("  --rec-format F   h264（硬件编码）| pgm（灰度）| png（灰度）| pngs（单文件灰度 PNG）| dbv / pbm（二值）\n");
     std::printf(
@@ -117,8 +118,9 @@ void usage(const char* argv0) {
     std::printf("  --threshold N    灰度候选阈值 0..255（默认 50），不改变相机灰度图\n");
     std::printf("  --min-contrast N 候选与背景最小灰度差 0..255，可小数（默认 12，0 关闭）\n");
     std::printf(
-        "  --log PATH       结构化日志（默认 %.*s）\n", static_cast<int>(kDefaultLog.size()),
+        "  --log PATH       结构化文件日志；off 关闭（默认 %.*s）\n", static_cast<int>(kDefaultLog.size()),
         kDefaultLog.data());
+    std::printf("  --log-console on|off  后台输出到 stderr，限速 30 行/秒（默认 off）\n");
     std::printf("  --status-ms N    状态行间隔（默认 1000）\n");
     std::printf("  --imu on|off     IMU 独立采样与日志（默认 off）\n");
     std::printf("  --imu-bus N      SPI 总线 0..2，启用 IMU 时必填\n");
@@ -215,7 +217,7 @@ std::expected<Arguments, int> parse_args(int argc, char* argv[]) {
             continue;
         }
         if (a == "--seconds" || a == "--exp" || a == "--rec-fps" || a == "--rec-timeout-ms"
-            || a == "--rec-keep" || a == "--threshold" || a == "--status-ms" || a == "--acquire-ms"
+            || a == "--rec-keep" || a == "--rec-queue" || a == "--threshold" || a == "--status-ms" || a == "--acquire-ms"
             || a == "--max-acquire-errors" || a == "--rec-trigger-accel" || a == "--rec-trigger-ms"
             || a == "--rec-duration-ms" || a == "--servo-timeout-ms") {
             if (!need_value(value)) {
@@ -255,6 +257,12 @@ std::expected<Arguments, int> parse_args(int argc, char* argv[]) {
                     return std::unexpected<int>(2);
                 }
                 args.record_fps = static_cast<std::uint32_t>(n);
+            } else if (a == "--rec-queue") {
+                if (n == 0 || n > 64) {
+                    std::fprintf(stderr, "%s: --rec-queue 必须在 1..64\n", argv[0]);
+                    return std::unexpected<int>(2);
+                }
+                args.record_queue = static_cast<std::uint32_t>(n);
             } else if (a == "--rec-keep")
                 args.record_keep = static_cast<std::uint32_t>(n);
             else if (a == "--threshold")
@@ -349,14 +357,19 @@ std::expected<Arguments, int> parse_args(int argc, char* argv[]) {
             }
             continue;
         }
-        if (a == "--rec-dir" || a == "--det-csv" || a == "--log" || a == "--imu-log"
+        if (a == "--rec-dir" || a == "--det-csv" || a == "--log" || a == "--log-console" || a == "--imu-log"
             || a == "--wifi-config" || a == "--wifi-pause-file") {
             if (!need_value(value)) {
                 std::fprintf(
                     stderr, "%s: %.*s 缺少参数\n", argv[0], static_cast<int>(a.size()), a.data());
                 return std::unexpected<int>(2);
             }
-            if (a == "--wifi-pause-file") {
+            if (a == "--log-console") {
+                if (!parse_on_off(value, args.log_console)) {
+                    std::fprintf(stderr, "%s: --log-console 需要 on|off\n", argv[0]);
+                    return std::unexpected<int>(2);
+                }
+            } else if (a == "--wifi-pause-file") {
                 if (value.empty()
                     || !copy_path(args.wifi_pause_file, sizeof(args.wifi_pause_file), value)) {
                     std::fprintf(stderr, "%s: --wifi-pause-file 路径为空或过长\n", argv[0]);
@@ -385,7 +398,9 @@ std::expected<Arguments, int> parse_args(int argc, char* argv[]) {
                     std::fprintf(stderr, "%s: --det-csv 路径过长\n", argv[0]);
                     return std::unexpected<int>(2);
                 }
-            } else if (!copy_path(args.log_path, sizeof(args.log_path), value)) {
+            } else if (value == "off") {
+                args.log_path[0] = '\0';
+            } else if (value.empty() || !copy_path(args.log_path, sizeof(args.log_path), value)) {
                 std::fprintf(stderr, "%s: --log 路径过长\n", argv[0]);
                 return std::unexpected<int>(2);
             }
@@ -454,6 +469,7 @@ recorder::Config recording_config(
     config.width = width;
     config.height = height;
     config.fps = args.record_fps;
+    config.queue_slots = args.record_queue;
     config.frame_timeout = std::chrono::milliseconds{args.record_timeout_ms};
     config.keep_sessions = args.record_keep;
     config.image_format = args.record_format;

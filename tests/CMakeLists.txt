@@ -47,7 +47,8 @@ foreach(_test recorder_session recorder_binary recorder_component)
     add_test(NAME ${_test} COMMAND ${_test}_test)
 endforeach()
 target_link_libraries(recorder_component_test PRIVATE dart_detection)
-target_link_options(recorder_component_test PRIVATE -Wl,--wrap=fsync)
+target_link_options(recorder_component_test PRIVATE
+    -Wl,--wrap=fsync -Wl,--wrap=fwrite -Wl,--wrap=write)
 set_tests_properties(recorder_component PROPERTIES TIMEOUT 30)
 
 add_executable(write_control_test write_control_test.cpp)
@@ -80,13 +81,15 @@ add_test(NAME pose_control COMMAND pose_control_test)
 add_executable(recorder_storage_test recorder_storage_test.cpp)
 target_link_libraries(recorder_storage_test PRIVATE dart_recording)
 target_compile_options(recorder_storage_test PRIVATE -Werror -UNDEBUG)
-target_link_options(recorder_storage_test PRIVATE -Wl,--wrap=statvfs -Wl,--wrap=fsync)
+target_link_options(recorder_storage_test PRIVATE
+    -Wl,--wrap=statvfs -Wl,--wrap=fsync -Wl,--wrap=fflush
+    -Wl,--wrap=fwrite -Wl,--wrap=write)
 add_test(NAME recorder_storage COMMAND recorder_storage_test)
 
 add_executable(logger_async_test logger_async_test.cpp)
 target_link_libraries(logger_async_test PRIVATE dart_platform)
 target_compile_options(logger_async_test PRIVATE -Werror -UNDEBUG)
-target_link_options(logger_async_test PRIVATE -Wl,--wrap=fsync)
+target_link_options(logger_async_test PRIVATE -Wl,--wrap=fsync -Wl,--wrap=fflush -Wl,--wrap=write)
 add_test(NAME logger_async COMMAND logger_async_test)
 set_tests_properties(logger_async PROPERTIES TIMEOUT 20)
 
@@ -187,6 +190,8 @@ add_test(NAME rec_stall_report
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/rec_stall_report_test.py")
 add_test(NAME canmv_build_config
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test_canmv_build_config.py")
+add_test(NAME sc132gs_canmv_test
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test_sc132gs_test.py")
 add_test(NAME rtos_scripts
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test_rtos_scripts.py")
 add_test(NAME cpp_structure_rules

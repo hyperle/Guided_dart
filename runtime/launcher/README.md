@@ -72,7 +72,7 @@ launcher [选项] [清单路径]
 
 | 文件 | 内容 |
 |---|---|
-| `launcher.log` | 启动器自身的结构化日志（每行 open/write/fsync/close） |
+| `launcher.log` | 启动器自身的结构化日志（每行 open/write/close） |
 | `<应用名>.console.log` | 被拉起程序的 stdout/stderr（每个应用一份，便于归因） |
 | `<应用名>.pid` | 后台项 pid，退出时删除 |
 | `launcher.pid` | 单实例锁，正常退出时删除 |

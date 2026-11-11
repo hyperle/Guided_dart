@@ -11,6 +11,8 @@
 #include <cerrno>
 #include <chrono>
 #include <cstddef>
+#include <cstdio>
+#include <sys/types.h>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
@@ -21,15 +23,30 @@
 
 namespace dart::tests {
 
-static std::atomic<bool> stall_sync{false}, sync_entered{false}, fail_sync{false};
-extern "C" int __real_fsync(int);
-extern "C" int __wrap_fsync(int fd) {
-    if (stall_sync.load()) {
-        sync_entered = true;
-        while (stall_sync.load()) std::this_thread::sleep_for(std::chrono::milliseconds{1});
+static std::atomic<bool> stall_write{false}, write_entered{false}, fail_write{false};
+
+static bool storage_ready() {
+    if (stall_write.load()) {
+        write_entered = true;
+        while (stall_write.load()) std::this_thread::sleep_for(std::chrono::milliseconds{1});
     }
-    if (fail_sync.load()) { errno = EIO; return -1; }
-    return __real_fsync(fd);
+    if (fail_write.load()) { errno = EIO; return false; }
+    return true;
+}
+
+extern "C" std::size_t __real_fwrite(const void*, std::size_t, std::size_t, std::FILE*);
+extern "C" std::size_t __wrap_fwrite(const void* data, std::size_t size, std::size_t count, std::FILE* file) {
+    return storage_ready() ? __real_fwrite(data, size, count, file) : 0;
+}
+
+extern "C" ssize_t __real_write(int, const void*, std::size_t);
+extern "C" ssize_t __wrap_write(int fd, const void* data, std::size_t size) {
+    return storage_ready() ? __real_write(fd, data, size) : -1;
+}
+
+extern "C" int __wrap_fsync(int) {
+    assert(false && "recorder must not force device synchronization");
+    return -1;
 }
 
 class RecorderComponentTest final {
@@ -193,6 +210,8 @@ class RecorderComponentTest final {
         config.height = camera.info.height;
         config.image_format = format;
         config.frame_timeout = std::chrono::seconds{5};
+        constexpr unsigned buffer_slots = 3;
+        config.queue_slots = buffer_slots;
         config.output_directory = path;
         recorder::FrameChannel frames;
         recorder::RecorderStatus status;
@@ -211,25 +230,46 @@ class RecorderComponentTest final {
         assert(detector_result);
         auto detector = std::move(*detector_result);
         assert(detector->initialze());
-        sync_entered = false;
-        stall_sync = true;
+        write_entered = false;
+        stall_write = true;
         assert(detector->step());
-        until([&] { return sync_entered.load(); });
+        until([&] { return write_entered.load(); });
+        // A blocked sink owns its output bytes, never the camera's pixels.
+        until([&] {
+            (void)frames.drain_releases();
+            return frames.quiescent() && camera.outstanding() == 0;
+        });
+        for (unsigned count = 2; count <= buffer_slots; ++count) {
+            until([&] {
+                (void)frames.drain_releases();
+                assert(detector->step());
+                return status.stats().accepted == count;
+            });
+            until([&] {
+                (void)frames.drain_releases();
+                return status.stats().buffered == count && frames.quiescent();
+            });
+        }
+        const auto before = status.stats();
+        const auto acquired_before = camera.acquires;
         const auto begin = std::chrono::steady_clock::now();
         for (unsigned i = 0; i < 100; ++i) {
             (void)frames.drain_releases();
             assert(detector->step());
             assert(detection_status.acquisition == camera::AcquireStatus::kFrame);
-            assert(camera.outstanding() <= (format == recorder::ImageFormat::kPgm ? 1U : 0U));
+            assert(camera.outstanding() == 0);
         }
         assert(std::chrono::steady_clock::now() - begin < std::chrono::seconds{1});
-        assert(camera.acquires == 101 && status.stats().busy == 100 && status.stats().accepted == 1);
+        assert(camera.acquires == acquired_before + 100 && status.stats().busy == before.busy + 100);
+        assert(status.stats().accepted == buffer_slots && status.stats().buffered == buffer_slots);
+        assert(status.stats().encoded == buffer_slots && status.stats().enqueued == buffer_slots);
+        assert(status.stats().buffer_high_water == buffer_slots && status.stats().buffer_dropped > before.buffer_dropped);
         assert(status.stats().copied == 0 && status.stats().written == 0);
-        fail_sync = failure;
-        stall_sync = false;
+        fail_write = failure;
+        stall_write = false;
         until([&] {
             (void)frames.drain_releases();
-            return failure ? status.last_error() != recorder::Error::kNone : status.stats().written == 1;
+            return failure ? status.last_error() != recorder::Error::kNone : status.stats().written == buffer_slots;
         });
         // Stop never requires the capture owner to concurrently drain returns.
         runner.stop();
@@ -237,8 +277,18 @@ class RecorderComponentTest final {
         assert(frames.quiescent() && camera.outstanding() == 0);
         assert(camera.releases == camera.acquires);
         assert(detector->shutdown());
-        assert(failure ? status.stats().write_fail > 0 : status.stats().written == 1);
-        fail_sync = false;
+        assert(failure ? status.stats().write_fail > 0 : status.stats().written == buffer_slots);
+        assert(status.stats().buffered == 0);
+        recorder::RecorderStatus::SessionEvent started{}, stopped{};
+        assert(status.pop_session_event(started) && status.pop_session_event(stopped));
+        using Event = recorder::RecorderStatus::SessionEvent;
+        assert(started.kind == Event::Kind::kStarted && started.generation == 1);
+        assert(stopped.kind == Event::Kind::kStopped && stopped.generation == 1);
+        assert(stopped.reason == (failure ? Event::Reason::kError : Event::Reason::kShutdown));
+        assert(stopped.stats.buffered == 0 && stopped.stats.enqueued == buffer_slots);
+        assert(stopped.stats.written == (failure ? 0 : buffer_slots));
+        assert(!status.pop_session_event(started));
+        fail_write = false;
         std::filesystem::remove_all(path);
     }
 public:

@@ -124,6 +124,12 @@ dart/
 采集线程不等待其初始化或退出；电脑端运行 [`tools/wifi_receiver`](tools/wifi_receiver/README.md) 的 Rust 服务，
 由 FFmpeg 输出网页 H.264/HLS 和 MP4。默认关闭回传，配置示例及完整步骤见该工具说明。
 
+结构化日志带功能标签，使用固定容量后台队列，满或锁竞争时丢新行并计数。
+`--log-console on` 打开限速 30 行/秒的 stderr 镜像，`--log off` 可单独关闭文件日志。
+普通日志、录像、检测 CSV、IMU Session 和 launcher 日志不显式调用 `fsync` 或周期性 `fflush`；
+缓冲满和关闭仍会正常写入，退出等待后台排空，不保证异常断电持久性。
+运行诊断、队列统计与串口查看方式见 [调试手册](docs/DEBUG_GUIDE.md)。
+
 ## 3. 工具链与 SDK（一次性）
 
 ```bash
@@ -152,8 +158,10 @@ HAL 头文件和库只取 SDK `.config` 的 `CONFIG_BOARD_CONFIG_NAME` 对应输
 录像默认保存单文件灰度 PGM，也可选择灰度 PNG；DBV/PBM 是可选的二值导出格式。
 当前启动清单显式使用 `--rec-fps 30 --rec-format pngs`，在一个文件中保存无损灰度 PNG，
 降低写盘带宽和小文件开销。结构化日志由固定队列交给专用线程写入、同步和关闭，采集线程不等待日志存储。
-目标帧率为 60 FPS，待写帧默认超过 16,667 µs 丢弃（`rec_timed_out`），
-可用 `--rec-timeout-ms` 调整；采集线程不等待写盘，过期帧不占文件预算或输出帧号。
+默认目标帧率为 60 FPS，输入帧等待编码超过 16,667 µs 丢弃（`rec_timed_out`），
+可用 `--rec-timeout-ms` 调整。编码结果进入独立写线程的固定队列，`--rec-queue` 默认
+32 帧、范围 1..64；满时丢新帧并记 CSV `buffer_full` 和日志 `rec_buffer_dropped`，
+采集与编码线程不等待写盘。录像路径不显式调用 `fflush` 或 `fsync`。
 每轮最多 500 MB；
 多帧合并到一个文件，达到容量上限后停止录像，识别继续运行。
 `/data` 分区另设 2 GB（2,000,000,000 字节）总占用保护，计入旧录像、日志和分配开销，

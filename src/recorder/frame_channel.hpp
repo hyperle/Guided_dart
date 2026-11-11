@@ -55,7 +55,10 @@ public:
             event.decision = decision;
             switch (admission) {
             case Admission::kDownsampled: ++status_->downsampled_; break;
-            case Admission::kBusy: ++status_->busy_; break;
+            case Admission::kBusy:
+                ++status_->busy_;
+                if (decision == EventDecision::kBufferFull) ++status_->buffer_dropped_;
+                break;
             case Admission::kStopped: ++status_->stopped_; break;
             case Admission::kInvalidFrame: ++status_->invalid_; break;
             case Admission::kAccepted: break;
@@ -71,6 +74,8 @@ public:
         // Consume the sampling interval before checking readiness: no catch-up burst.
         if (!sampler_.due(lease.view().received))
             return finish(Admission::kDownsampled, EventDecision::kDownsampled);
+        if (status_->buffered_.load(std::memory_order_acquire) >= config_.queue_slots)
+            return finish(Admission::kBusy, EventDecision::kBufferFull);
         if (!idle_ || state_.load(std::memory_order_acquire) != State::kEmpty)
             return finish(Admission::kBusy, EventDecision::kBusy);
         frame_.event = event;
@@ -148,6 +153,7 @@ public:
         --event_count_;
         return true;
     }
+    void record_event(const FrameEvent& event) noexcept { enqueue_event(event); }
 
 private:
     enum class State : std::uint8_t { kEmpty, kPending, kHeld, kReturned, kReleasing };

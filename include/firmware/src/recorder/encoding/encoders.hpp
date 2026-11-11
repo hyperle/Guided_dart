@@ -21,6 +21,7 @@ class PngEncoder final {
 public:
     ~PngEncoder();
     bool prepare(std::uint32_t width, std::uint32_t height) noexcept;
+    std::size_t max_output_bytes() const noexcept { return capacity_; }
     std::span<const std::byte> encode(std::span<const std::byte> pixels, std::uint32_t stride = 0) noexcept;
 
 private:
@@ -37,6 +38,7 @@ class BinaryEncoder final {
 public:
     ~BinaryEncoder();
     bool prepare(std::uint32_t width, std::uint32_t height, std::uint8_t threshold) noexcept;
+    std::size_t max_output_bytes() const noexcept { return packed_ + 5U; }
     void reset() noexcept { has_previous_ = false; }
     std::span<const std::byte> encode(std::span<const std::byte> pixels, std::uint32_t stride = 0) noexcept;
 

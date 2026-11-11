@@ -100,9 +100,8 @@ public:
     ~EventWriter() { close(); }
     bool prepare() noexcept;
     bool open(const Session& session, RecorderError& error) noexcept;
-    void close() noexcept;
-    void write(const FrameEvent& event) noexcept;
-    void maybe_flush_events(bool force) noexcept;
+    bool close() noexcept;
+    bool write(const FrameEvent& event) noexcept;
     static std::string_view decision_text(EventDecision decision) noexcept;
 
 private:
@@ -110,7 +109,6 @@ private:
     const Config& config_;
     std::unique_ptr<char[]> event_buffer_{};
     std::FILE* event_file_ = nullptr;
-    std::chrono::steady_clock::time_point last_event_flush_{};
 };
 
 inline bool StorageSpace::query(
@@ -559,36 +557,38 @@ inline bool EventWriter::open(const Session& session, RecorderError& error) noex
     }
     if (event_buffer_)
         (void)std::setvbuf(event_file_, event_buffer_.get(), _IOFBF, kEventBufferBytes);
-    std::fprintf(
+    const int header_length = std::fprintf(
         event_file_,
-        "# recorder format=2 width=%u height=%u fps=%u frame_timeout_ms=%lld max_file_bytes=%llu "
+        "# recorder format=2 width=%u height=%u fps=%u frame_timeout_ms=%lld queue_slots=%u max_file_bytes=%llu "
         "file_limit_bytes=%llu session=%s\n"
         "input_index,source_sequence,source_pts,source_pts_timebase_validated,received_us,"
         "decision,image_index,image_file,file_offset,file_bytes\n",
         config_.width, config_.height, config_.fps,
         static_cast<long long>(config_.frame_timeout.count()),
+        config_.queue_slots,
         static_cast<unsigned long long>(config_.max_file_bytes),
         static_cast<unsigned long long>(session.file_limit_bytes()), session.directory());
-    if (std::fflush(event_file_) != 0 || ::fsync(::fileno(event_file_)) != 0) {
+    if (header_length < 0) {
         error.set_file_error(Error::kEventFile, session.event_path());
         return false;
     }
-    last_event_flush_ = std::chrono::steady_clock::now();
     return true;
 }
 
-inline void EventWriter::close() noexcept {
+inline bool EventWriter::close() noexcept {
     if (event_file_ != nullptr) {
-        maybe_flush_events(true);
-        std::fclose(event_file_);
+        const int result = std::fclose(event_file_);
         event_file_ = nullptr;
+        return result == 0;
     }
+    return true;
 }
 
-inline void EventWriter::write(const FrameEvent& event) noexcept {
+inline bool EventWriter::write(const FrameEvent& event) noexcept {
+    bool written = false;
     if (event_file_ != nullptr) {
         const auto decision = decision_text(event.decision);
-        std::fprintf(
+        written = std::fprintf(
             event_file_, "%llu,%llu,%llu,%u,%lld,%.*s,%llu,%s,%llu,%llu\n",
             static_cast<unsigned long long>(event.input_index),
             static_cast<unsigned long long>(event.source_sequence),
@@ -597,22 +597,13 @@ inline void EventWriter::write(const FrameEvent& event) noexcept {
             static_cast<long long>(event.received_us), static_cast<int>(decision.size()),
             decision.data(), static_cast<unsigned long long>(event.image_index),
             event.image_name.data(), static_cast<unsigned long long>(event.file_offset),
-            static_cast<unsigned long long>(event.file_bytes));
+            static_cast<unsigned long long>(event.file_bytes)) >= 0;
     }
+    const int system_error = errno;
     if (config_.event_sink != nullptr)
         config_.event_sink(event, config_.event_sink_context);
-    maybe_flush_events(false);
-}
-
-inline void EventWriter::maybe_flush_events(bool force) noexcept {
-    if (event_file_ == nullptr)
-        return;
-    const auto now = std::chrono::steady_clock::now();
-    if (!force && now - last_event_flush_ < config_.flush_period)
-        return;
-    (void)std::fflush(event_file_);
-    (void)::fsync(::fileno(event_file_));
-    last_event_flush_ = now;
+    if (!written) errno = system_error;
+    return written;
 }
 
 inline std::string_view EventWriter::decision_text(EventDecision decision) noexcept {
@@ -623,6 +614,8 @@ inline std::string_view EventWriter::decision_text(EventDecision decision) noexc
     case EventDecision::kStopped: return "stopped";
     case EventDecision::kInvalidFrame: return "invalid_frame";
     case EventDecision::kTimedOut: return "timed_out";
+    case EventDecision::kBufferFull: return "buffer_full";
+    case EventDecision::kWriteError: return "write_error";
     }
     return "unknown";
 }
@@ -655,7 +648,6 @@ private:
     bool write_png_stream(std::span<const std::byte> pixels) noexcept;
     static bool write_all(int fd, const void* data, std::size_t size) noexcept;
     bool write_binary(std::span<const std::byte> pixels) noexcept;
-    bool sync() noexcept;
     static constexpr std::size_t kFileBufferBytes = 256U * 1024U;
     const Config& config_;
     const Session& session_;
@@ -672,7 +664,6 @@ private:
     std::uint64_t pack_us_ = 0;
     std::uint64_t io_us_ = 0;
     std::uint64_t space_us_ = 0, open_us_ = 0, write_us_ = 0, close_us_ = 0;
-    std::chrono::steady_clock::time_point last_flush_{};
 };
 
 inline bool ImageWriter::prepare(std::size_t frame_bytes) noexcept {
@@ -721,14 +712,11 @@ inline bool ImageWriter::open(RecorderError& error) noexcept {
             return false;
         }
         bytes_written_ = kPngStreamHeaderBytes;
-        last_flush_ = std::chrono::steady_clock::now();
         (void)std::snprintf(image_name_, sizeof(image_name_), "img/recording.pngs");
         return true;
     }
-    if (config_.image_format == ImageFormat::kPng) {
-        last_flush_ = std::chrono::steady_clock::now();
+    if (config_.image_format == ImageFormat::kPng)
         return true;
-    }
     if (record_bytes() > session_.file_limit_bytes()) {
         errno = ENOSPC;
         error.set_file_error(Error::kStorage, session_.directory());
@@ -741,29 +729,20 @@ inline bool ImageWriter::open(RecorderError& error) noexcept {
     }
     (void)std::setvbuf(file_, file_buffer_.get(), _IOFBF, kFileBufferBytes);
     bytes_written_ = 0;
-    last_flush_ = std::chrono::steady_clock::now();
     return true;
 }
 
 inline bool ImageWriter::close() noexcept {
     if (png_fd_ >= 0) {
-        const bool synced = ::fsync(png_fd_) == 0;
-        const int saved = errno;
         const bool closed = ::close(png_fd_) == 0;
         png_fd_ = -1;
-        if (!synced)
-            errno = saved;
-        return synced && closed;
+        return closed;
     }
     if (file_ == nullptr)
         return true;
-    const bool synced = sync();
-    const int sync_error = errno;
     const int result = std::fclose(file_);
     file_ = nullptr;
-    if (!synced)
-        errno = sync_error;
-    return synced && result == 0;
+    return result == 0;
 }
 
 inline std::size_t ImageWriter::payload_bytes() const noexcept {
@@ -773,14 +752,6 @@ inline std::size_t ImageWriter::payload_bytes() const noexcept {
 
 inline std::size_t ImageWriter::record_bytes() const noexcept {
     return config_.variable_record_size() ? last_record_bytes_ : fixed_record_bytes_;
-}
-
-inline bool ImageWriter::sync() noexcept {
-    // fflush only drains libc. FAT updates the directory size and cluster
-    // chain on fsync; without it a reset can leave a zero-byte recording.
-    if (png_fd_ >= 0)
-        return ::fsync(png_fd_) == 0;
-    return file_ != nullptr && std::fflush(file_) == 0 && ::fsync(::fileno(file_)) == 0;
 }
 
 inline bool ImageWriter::write_all(int fd, const void* data, std::size_t size) noexcept {
@@ -822,11 +793,6 @@ inline bool ImageWriter::write_png_stream(std::span<const std::byte> encoded) no
     const auto write_end = std::chrono::steady_clock::now();
     write_us_ = static_cast<std::uint64_t>(
         std::chrono::duration_cast<std::chrono::microseconds>(write_end - space_at).count());
-    if (bytes_written_ == kPngStreamHeaderBytes || write_end - last_flush_ >= config_.flush_period) {
-        if (!sync())
-            return false;
-        last_flush_ = write_end;
-    }
     last_offset_ = bytes_written_;
     last_record_bytes_ = encoded.size();
     bytes_written_ += encoded.size();
@@ -880,9 +846,6 @@ inline bool ImageWriter::write_png(std::span<const std::byte> encoded, std::uint
     const auto write_end = std::chrono::steady_clock::now();
     write_us_ = static_cast<std::uint64_t>(
         std::chrono::duration_cast<std::chrono::microseconds>(write_end - open_end).count());
-    const bool flush = bytes_written_ == 0 || io_begin - last_flush_ >= config_.flush_period;
-    if (ok && flush)
-        ok = ::fsync(file) == 0;
     const int saved = errno;
     const int closed = ::close(file);
     if (!ok || closed != 0) {
@@ -891,8 +854,6 @@ inline bool ImageWriter::write_png(std::span<const std::byte> encoded, std::uint
         errno = failure;
         return false;
     }
-    if (flush)
-        last_flush_ = io_begin;
     close_us_ = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
                                                std::chrono::steady_clock::now() - write_end)
                                                .count());
@@ -928,11 +889,6 @@ inline bool ImageWriter::write_binary(std::span<const std::byte> encoded) noexce
     if ((header && std::fwrite(geometry, 1, header, file_) != header)
         || std::fwrite(encoded.data(), 1, encoded.size(), file_) != encoded.size())
         return false;
-    if (bytes_written_ == 0 || space_at - last_flush_ >= config_.flush_period) {
-        if (!sync())
-            return false;
-        last_flush_ = space_at;
-    }
     last_offset_ = bytes_written_;
     last_record_bytes_ = size;
     bytes_written_ += size;
@@ -965,10 +921,6 @@ inline bool ImageWriter::write_encoded(const EncodedImage& image, std::uint64_t 
         }
     } else if (std::fwrite(image.pixels.data(), 1, image.pixels.size(), file_) != image.pixels.size()) return false;
     const auto written = std::chrono::steady_clock::now();
-    if (bytes_written_ == 0 || written - last_flush_ >= config_.flush_period) {
-        if (!sync()) return false;
-        last_flush_ = written;
-    }
     last_offset_ = bytes_written_;
     last_record_bytes_ = image.size();
     bytes_written_ += image.size();

@@ -179,7 +179,7 @@ bool Session::begin_log(bool initial_seed) noexcept {
         config_.max_acceleration_step_m_s2, config_.max_angular_velocity_step_rad_s,
         config_.seed_gravity_tolerance_m_s2, config_.seed_max_angular_velocity_rad_s);
     const bool header_ok = write_log(header, header_length, sizeof(header));
-    if ((!header_ok && !log_limit_reached_.load()) || std::fflush(file_) != 0) {
+    if (!header_ok && !log_limit_reached_.load()) {
         ++io_errors_;
         end_log();
         return false;
@@ -274,10 +274,6 @@ void Session::end_log() noexcept {
             static_cast<unsigned long long>(dropped_.load()),
             static_cast<unsigned long long>(io_errors_.load()));
         if (!write_log(footer, footer_length, sizeof(footer)) && !log_limit_reached_.load())
-            ++io_errors_;
-        if (std::fflush(file_) != 0)
-            ++io_errors_;
-        if (::fsync(::fileno(file_)) != 0)
             ++io_errors_;
         if (std::fclose(file_) != 0)
             ++io_errors_;
@@ -388,7 +384,6 @@ void Session::sample_loop() noexcept {
 }
 
 void Session::writer_loop() noexcept {
-    auto next_flush = std::chrono::steady_clock::now() + std::chrono::seconds{1};
     bool attempted = file_ != nullptr || logging_enabled();
     for (;;) {
         Event event{};
@@ -431,13 +426,6 @@ void Session::writer_loop() noexcept {
         } else if (wanted && !stopping && file_ == nullptr && !attempted) {
             attempted = true;
             (void)begin_log(false);
-        }
-        if (file_ != nullptr && std::chrono::steady_clock::now() >= next_flush) {
-            if (std::fflush(file_) != 0)
-                ++io_errors_;
-            if (::fsync(::fileno(file_)) != 0)
-                ++io_errors_;
-            next_flush = std::chrono::steady_clock::now() + std::chrono::seconds{1};
         }
     }
 }

@@ -21,6 +21,7 @@
 #include "tools/video_player/csv.hpp"
 #include "tools/video_player/recording_paths.hpp"
 #include "tools/video_player/recording_types.hpp"
+#include "tools/video_player/video_stream.hpp"
 
 namespace dart::tools::video_player {
 
@@ -264,21 +265,39 @@ bool Recording::load(
     const QString& extension, QString& error) {
     *this = Recording{};
     error.clear();
-    const QDir image_dir(image_directory);
+    const QFileInfo input(image_directory);
+    const bool is_file = input.isFile();
+    if (is_file && !VideoStream::supports(input.suffix())) {
+        error = image_directory + QStringLiteral(": expected an H.264/H.265 elementary stream");
+        return false;
+    }
+    const QDir image_dir(is_file ? input.absolutePath() : image_directory);
     if (!image_dir.exists()) {
         error = image_directory + QStringLiteral(": image directory does not exist");
         return false;
     }
     const QRegularExpression filename(QStringLiteral(
         "^(?:(?:part_[0-9]{6}|b[0-9]{7}/p[0-9]{7})/)?(?:frame_)?([0-9]+)\\.(pgm|pbm|png)$"));
+    const auto accepts = [&](const QString& suffix) {
+        return extension.isEmpty() || suffix.toLower() == extension
+            || (extension == "h265" && suffix.toLower() == "hevc");
+    };
+    if (is_file && accepts(input.suffix())
+        && !VideoStream::append(input, QStringLiteral("img/") + input.fileName(), frames_, error))
+        return false;
     QDirIterator files(
         image_dir.absolutePath(), QDir::Files | QDir::NoSymLinks, QDirIterator::Subdirectories);
-    while (files.hasNext()) {
+    while (!is_file && files.hasNext()) {
         files.next();
         const QFileInfo file = files.fileInfo();
         const QString relative = image_dir.relativeFilePath(file.absoluteFilePath());
-        if (!extension.isEmpty() && file.suffix() != extension)
+        if (!accepts(file.suffix()))
             continue;
+        if (!relative.contains('/') && VideoStream::supports(file.suffix())) {
+            if (!VideoStream::append(file, QStringLiteral("img/") + relative, frames_, error))
+                return false;
+            continue;
+        }
         if (relative == "recording.dbv") {
             if (!append_binary(file, error))
                 return false;
@@ -309,7 +328,7 @@ bool Recording::load(
         return a.image_index != b.image_index ? a.image_index < b.image_index : a.path < b.path;
     });
     if (frames_.empty()) {
-        error = image_directory + QStringLiteral(": no DBV/PNG/PGM/PBM frames found");
+        error = image_directory + QStringLiteral(": no DBV/PNG/PGM/PBM/H.264/H.265 frames found");
         return false;
     }
 
@@ -331,6 +350,8 @@ bool Recording::load(
     const QRegularExpression image_name(QStringLiteral(
         "^img/((?:(?:part_[0-9]{6}|b[0-9]{7}/p[0-9]{7})/"
         ")?(?:frame_)?[0-9]+\\.(pgm|pbm|png)|recording\\.(pgm|pbm|dbv|pngs))$"));
+    const QRegularExpression video_name(
+        QStringLiteral("^img/[^/]+\\.(h264|h265|hevc)$"), QRegularExpression::CaseInsensitiveOption);
     for (const CsvRow& row : events) {
         if (!frame_identity(row, "source_sequence")) {
             error = row.location() + QStringLiteral(": invalid frame identity");
@@ -339,13 +360,14 @@ bool Recording::load(
         const QString name = row.value("image_file");
         if (name.isEmpty())
             continue; // Downsampled/busy inputs are not pictures.
-        if (!image_name.match(name).hasMatch()) {
+        const bool is_video = video_name.match(name).hasMatch();
+        if (!image_name.match(name).hasMatch() && !is_video) {
             error = row.location() + QStringLiteral(": invalid image_file: ") + name;
             return false;
         }
         QString key = name;
         if (name == "img/recording.pgm" || name == "img/recording.pbm"
-            || name == "img/recording.dbv" || name == "img/recording.pngs") {
+            || name == "img/recording.dbv" || name == "img/recording.pngs" || is_video) {
             const auto offset = unsigned_value(row.value("file_offset"));
             const auto bytes = unsigned_value(row.value("file_bytes"));
             if (!offset || !bytes || *bytes == 0) {
@@ -354,7 +376,8 @@ bool Recording::load(
             }
             key += '@' + QString::number(*offset);
         }
-        if (extension.isEmpty() || name.endsWith('.' + extension))
+        if (accepts(QFileInfo(name).suffix())
+            && (!is_file || name == QStringLiteral("img/") + input.fileName()))
             by_image[key].push_back(&row);
     }
     std::set<QString> disk_images;

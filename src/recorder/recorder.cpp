@@ -1,5 +1,5 @@
 #include "src/recorder/frame_channel.hpp"
-#include "src/recorder/storage.hpp"
+#include "src/recorder/buffered_storage.hpp"
 #include "src/recorder/encode.hpp"
 
 #include <algorithm>
@@ -22,7 +22,7 @@ public:
     Recorder(const Spec& spec, Settings settings, FrameChannel& frames,
              RecorderStatus& status, platform::WriteControl* writes) noexcept
         : Component(spec), settings_(settings), frames_(frames), status_(status), writes_(writes),
-          record_(settings_.record), encoder_(settings_.record), storage_(settings_.record) {}
+          record_(settings_.record), encoder_(settings_.record), storage_(settings_.record, frames, status, writes) {}
     ~Recorder() override { (void)shutingdowm(); }
 
     static std::expected<Settings, executor::Error> parameters(const Spec& spec, Config config) noexcept {
@@ -35,9 +35,9 @@ public:
             if (key == "enabled" && number <= 1) settings.enabled = number != 0;
             else if (key == "fps" && number <= 1'000'000) settings.record.fps = static_cast<std::uint32_t>(number);
             else if (key == "frame_timeout_ms" && number <= 60'000) settings.record.frame_timeout = std::chrono::milliseconds{number};
-            else if (key == "flush_ms") settings.record.flush_period = std::chrono::milliseconds{number};
             else if (key == "threshold" && number <= 255) settings.record.pbm_threshold = static_cast<std::uint8_t>(number);
             else if (key == "event_slots" && number <= 4096) settings.record.event_slots = static_cast<std::uint32_t>(number);
+            else if (key == "queue_slots" && number <= 64) settings.record.queue_slots = static_cast<std::uint32_t>(number);
             else if (key == "keep_sessions" && number <= 9999) settings.record.keep_sessions = static_cast<std::uint32_t>(number);
             else if (key == "max_file_bytes") settings.record.max_file_bytes = number;
             else if (key == "max_storage_bytes") settings.record.max_storage_bytes = number;
@@ -55,14 +55,15 @@ private:
             return std::unexpected(executor::Error::invalid_state);
         }
         if (!frames_.prepare(settings_.record, status_, writes_) || !encoder_.prepare() || !storage_.prepare(
-                static_cast<std::size_t>(settings_.record.width) * settings_.record.height)) {
+                static_cast<std::size_t>(settings_.record.width) * settings_.record.height,
+                encoder_.max_output_bytes())) {
             status_.set_error(Error::kNoMemory);
             return std::unexpected(executor::Error::creation_fail);
         }
         prepared_ = true;
         status_.set_error(Error::kNone);
         if (!settings_.record.variable_record_size()
-            && settings_.record.max_file_bytes < storage_.images().record_bytes()) {
+            && settings_.record.max_file_bytes < encoder_.record_bytes()) {
             status_.set_error(Error::kInvalidConfig);
             return std::unexpected(executor::Error::invalid_spec);
         }
@@ -85,21 +86,29 @@ private:
 
     std::expected<void, executor::Error> update() noexcept override {
         if (!frame_.lease.valid()) return {};
-        if (!wanted_ || !session_open_) {
+        if (!wanted_ || !session_open_ || status_.limit_reached() || status_.last_error() != Error::kNone) {
             frame_.event.decision = EventDecision::kStopped;
         } else if (record_.expired(frame_.queued_at)) {
             frame_.event.decision = EventDecision::kTimedOut;
             ++status_.timed_out_;
+        } else if (!storage_.available()) {
+            // Never advance a predictive encoder for an input we cannot retain.
+            frame_.event.decision = EventDecision::kBufferFull;
+            ++status_.buffer_dropped_;
         } else {
             const auto begin = std::chrono::steady_clock::now();
+            ++status_.encode_attempts_;
             output_ = encoder_.encode(frame_.lease.view());
-            status_.pack_total_us_.fetch_add(static_cast<std::uint64_t>(
-                std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - begin).count()),
-                std::memory_order_relaxed);
+            const auto elapsed = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() - begin).count());
+            status_.pack_total_us_.fetch_add(elapsed, std::memory_order_relaxed);
+            status_.pack_max_us_ = std::max(status_.pack_max_us_.load(), elapsed);
             if (!output_.valid()) {
                 errno = EIO;
                 write_error();
-                frame_.event.decision = EventDecision::kStopped;
+                frame_.event.decision = EventDecision::kWriteError;
+            } else {
+                ++status_.encoded_;
             }
         }
         // Encoded formats no longer read the camera pixels during storage I/O.
@@ -108,38 +117,28 @@ private:
     }
 
     std::expected<void, executor::Error> publish_outputs() noexcept override {
+        bool buffered = false;
         if (output_.valid()) {
-            frame_.event.image_index = status_.written_.load(std::memory_order_relaxed) + 1U;
-            if (storage_.images().write_encoded(output_, frame_.event.image_index)) {
-                ++status_.written_;
-                status_.bytes_ = storage_.images().bytes_written();
-                status_.io_total_us_.fetch_add(storage_.images().io_us(), std::memory_order_relaxed);
-                status_.space_total_us_.fetch_add(storage_.images().space_us(), std::memory_order_relaxed);
-                status_.open_total_us_.fetch_add(storage_.images().open_us(), std::memory_order_relaxed);
-                status_.write_total_us_.fetch_add(storage_.images().write_us(), std::memory_order_relaxed);
-                status_.close_total_us_.fetch_add(storage_.images().close_us(), std::memory_order_relaxed);
-                status_.io_max_us_ = std::max(status_.io_max_us_.load(), storage_.images().io_us());
-                frame_.event.decision = EventDecision::kAccepted;
-                frame_.event.file_offset = storage_.images().file_offset();
-                frame_.event.file_bytes = storage_.images().record_bytes();
-                (void)std::snprintf(frame_.event.image_name.data(), frame_.event.image_name.size(), "%s", storage_.images().image_name());
-                const auto remaining = storage_.session().file_limit_bytes() - storage_.images().bytes_written();
-                if (remaining == 0 || (!settings_.record.variable_record_size() && remaining < storage_.images().record_bytes()))
-                    status_.limit_ = true;
-            } else {
-                if (errno == EFBIG) status_.limit_ = true;
-                else write_error();
-                frame_.event.decision = EventDecision::kStopped;
-                frame_.event.image_index = 0;
+            buffered = storage_.submit(output_, frame_.event);
+            if (!buffered) {
+                // Capacity was checked before encode by this sole producer.
+                // An unexpected failure must stop predictive encoding rather
+                // than continue with a missing reference frame.
+                if (errno == EAGAIN) errno = EIO;
+                write_error();
+                frame_.event.decision = EventDecision::kWriteError;
             }
         }
         frames_.return_frame(std::move(frame_.lease));
-        if (frame_.event.input_index != 0 && session_open_) storage_.events().write(frame_.event);
+        if (!buffered && frame_.event.input_index != 0 && session_open_) {
+            if (frame_.event.decision == EventDecision::kStopped) ++status_.stopped_;
+            frames_.record_event(frame_.event);
+        }
         frame_ = {};
         output_ = {};
-        drain_events();
         if (session_open_ && (!wanted_ || status_.limit_reached() || status_.last_error() != Error::kNone))
-            close_session();
+            close_session(wanted_ ? RecorderStatus::SessionEvent::Reason::kShutdown
+                                  : RecorderStatus::SessionEvent::Reason::kPaused);
         frames_.complete();
         return {};
     }
@@ -162,58 +161,38 @@ private:
 
     bool open_session() noexcept {
         status_.reset_session();
-        storage_.error().reset();
         if (!encoder_.reset()) {
             errno = EIO;
             write_error();
+            status_.publish_session(RecorderStatus::SessionEvent::Kind::kStartFailed,
+                                    RecorderStatus::SessionEvent::Reason::kError);
             return false;
         }
         if (!storage_.open()) {
-            (void)storage_.images().close();
-            storage_.events().close();
-            publish_details();
+            status_.publish_session(RecorderStatus::SessionEvent::Kind::kStartFailed,
+                                    RecorderStatus::SessionEvent::Reason::kError);
             return false;
         }
         session_open_ = true;
-        status_.bytes_ = storage_.images().bytes_written();
-        publish_details();
+        ++status_.generation_;
+        status_.publish_session(RecorderStatus::SessionEvent::Kind::kStarted,
+                                RecorderStatus::SessionEvent::Reason::kRequested);
         frames_.open();
         return true;
     }
-    void close_session() noexcept {
+    void close_session(RecorderStatus::SessionEvent::Reason reason = RecorderStatus::SessionEvent::Reason::kShutdown) noexcept {
         frames_.close();
         if (!session_open_) return;
-        drain_events();
-        if (!storage_.images().close()) {
-            storage_.error().set_file_error(Error::kImageFile, storage_.session().image_path());
-            ++status_.write_fail_;
-        }
-        storage_.events().close();
+        const auto begin = std::chrono::steady_clock::now();
+        storage_.close();
+        status_.drain_us_ = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - begin).count());
         session_open_ = false;
-        publish_details();
+        if (status_.last_error() != Error::kNone) reason = RecorderStatus::SessionEvent::Reason::kError;
+        else if (status_.limit_reached()) reason = RecorderStatus::SessionEvent::Reason::kLimit;
+        status_.publish_session(RecorderStatus::SessionEvent::Kind::kStopped, reason);
     }
-    void drain_events() noexcept {
-        FrameEvent event{};
-        for (std::uint32_t i = 0; i < settings_.record.event_slots && frames_.pop_event(event); ++i)
-            if (session_open_) storage_.events().write(event);
-    }
-    void write_error() noexcept {
-        storage_.error().set_file_error(errno == ENOSPC ? Error::kStorage : Error::kImageFile, storage_.session().image_path());
-        ++status_.write_fail_;
-        publish_details();
-    }
-    void publish_details() noexcept {
-        {
-            std::lock_guard lock(status_.details_mutex_);
-            auto& details = status_.details_;
-            details.system_error = storage_.error().last_system_error();
-            (void)std::snprintf(details.error_path.data(), details.error_path.size(), "%s", storage_.error().last_error_path());
-            (void)std::snprintf(details.directory.data(), details.directory.size(), "%s", storage_.session().directory());
-            (void)std::snprintf(details.recording_path.data(), details.recording_path.size(), "%s", storage_.session().image_path());
-            details.file_limit_bytes = storage_.session().file_limit_bytes();
-        }
-        status_.set_error(storage_.error().last_error());
-    }
+    void write_error() noexcept { storage_.fail(errno); }
 
     Settings settings_;
     FrameChannel& frames_;
@@ -221,7 +200,7 @@ private:
     platform::WriteControl* writes_;
     Record record_;
     Encoder encoder_;
-    Storage storage_;
+    BufferedStorage storage_;
     FrameChannel::Frame frame_{};
     Encoder::Image output_{};
     bool prepared_ = false, session_open_ = false, attempted_ = false, wanted_ = false;

@@ -129,7 +129,6 @@ static int pump_consoles(void) {
                                 break;
                             offset += written;
                         }
-                        (void)fsync(fd);
                         close(fd);
                     }
                 }
@@ -147,7 +146,7 @@ static int pump_consoles(void) {
 }
 
 /* ------------------------------------------------------------------------- */
-/* 日志：每行 打开->写->fsync->关闭。进程不长期持有日志 fd，板端 MTP/文件管理器
+/* 日志：每行 打开->写->关闭。进程不长期持有日志 fd，板端 MTP/文件管理器
  * 才能随时读到；RT-Smart 上 printf 走控制台而不是文件。 */
 /* ------------------------------------------------------------------------- */
 static unsigned long long mono_ms(void) {
@@ -202,7 +201,6 @@ static void llog(const char* fmt, ...) {
         return;
     }
     (void)!write(fd, line, (size_t)total);
-    fsync(fd);
     close(fd);
 }
 
@@ -242,7 +240,6 @@ static void pidfile_write(const char* path, pid_t pid) {
     if (fd < 0)
         return;
     (void)!write(fd, buf, (size_t)n);
-    fsync(fd);
     close(fd);
 }
 

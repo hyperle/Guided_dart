@@ -34,6 +34,8 @@ public:
         return output_ != nullptr;
     }
 
+    std::size_t max_output_bytes() const noexcept override { return capacity_; }
+
     bool reset() noexcept override {
         if (!close() || !output_) return false;
         k_vb_pool_config input_config{};
@@ -87,7 +89,6 @@ public:
         sequence_ = 0;
         std::fprintf(stdout, "level=INFO module=recorder op=h264_start width=%u height=%u fps=%u kbps=2000 channel=%u\n",
                      width_, height_, fps_, channel_);
-        std::fflush(stdout);
         return true;
     }
 
@@ -153,7 +154,6 @@ private:
     static bool fail(const char* operation, int code) noexcept {
         std::fprintf(stderr, "level=ERROR module=recorder codec=h264 op=%s native=%d hex=0x%x\n",
                      operation, code, static_cast<unsigned>(code));
-        std::fflush(stderr);
         errno = EIO;
         return false;
     }

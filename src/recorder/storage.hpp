@@ -4,8 +4,8 @@
 
 namespace dart::recorder {
 
-// Own one recording session and its file adapters. Only the Recorder execution
-// context calls these methods; this class has no worker or camera lifecycle.
+// Own one recording session and its file adapters. BufferedStorage serializes
+// their lifecycle and gives its file worker exclusive access while recording.
 class Storage final {
 public:
     explicit Storage(const Config& config) noexcept

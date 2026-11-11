@@ -137,21 +137,24 @@ int run_application(int argc, char** argv) {
     // Parse/help/check need no window system. Construct QApplication only for the viewer.
     QCommandLineParser parser;
     parser.setApplicationDescription(QStringLiteral(
-        "Host frame viewer for compact DBV and PNG/PGM/PBM recordings and recorder CSV.\n"
-        "Accepts a directory of rec_NNNN sessions, a single session, or an image directory.\n"
+        "Host frame viewer for DBV, PNG/PGM/PBM and H.264/H.265 recordings and recorder CSV.\n"
+        "Accepts session/image directories or an H.264/H.265 elementary stream file.\n"
         "Port of k230_v1 tools/video_player; manual stepping, no timed playback."));
     parser.addHelpOption();
     parser.addOption(QCommandLineOption({"f", "pbm"}, "Show only frame_*.pbm."));
     parser.addOption(QCommandLineOption({"r", "pgm"}, "Show only frame_*.pgm."));
     parser.addOption(QCommandLineOption("png", "Show only independent PNG frames."));
     parser.addOption(QCommandLineOption("dbv", "Show only compact binary recordings."));
+    parser.addOption(QCommandLineOption("h264", "Show only H.264 elementary streams (*.h264)."));
+    parser.addOption(
+        QCommandLineOption("h265", "Show only H.265 elementary streams (*.h265, *.hevc)."));
     parser.addOption(QCommandLineOption(
         "export-png", "Export all frames as PNG without opening GUI.", "directory"));
     parser.addOption(
         QCommandLineOption("check", "Check metadata associations without opening GUI."));
     parser.addPositionalArgument(
         "recording",
-        "A directory of sessions, one session, or an image directory with frames.csv.");
+        "A session/image directory, or an H.264/H.265 elementary stream file.");
     parser.addPositionalArgument(
         "frames.csv",
         "Recorder CSV (auto: local frames.csv or session/logs/frames.csv; empty skips).",
@@ -167,7 +170,8 @@ int run_application(int argc, char** argv) {
     const auto positional = parser.positionalArguments();
     const bool valid = !positional.isEmpty() && positional.size() <= 3
                     && (int(parser.isSet("f")) + int(parser.isSet("r")) + int(parser.isSet("png"))
-                            + int(parser.isSet("dbv"))
+                            + int(parser.isSet("dbv")) + int(parser.isSet("h264"))
+                            + int(parser.isSet("h265"))
                         <= 1)
                     && !(parser.isSet("check") && parser.isSet("export-png"));
     const bool wants_help = parser.isSet("help") || parser.isSet("help-all");
@@ -194,11 +198,13 @@ int run_application(int argc, char** argv) {
     }
     Recording recording;
     QString error;
-    const QString extension = parser.isSet("f")   ? "pbm"
-                            : parser.isSet("r")   ? "pgm"
-                            : parser.isSet("png") ? "png"
-                            : parser.isSet("dbv") ? "dbv"
-                                                  : "";
+    const QString extension = parser.isSet("f")    ? "pbm"
+                            : parser.isSet("r")    ? "pgm"
+                            : parser.isSet("png")  ? "png"
+                            : parser.isSet("dbv")  ? "dbv"
+                            : parser.isSet("h264") ? "h264"
+                            : parser.isSet("h265") ? "h265"
+                                                   : "";
     if (!recording.load_directory(positional.at(0), frames_csv, detection_csv, extension, error)) {
         QTextStream(stderr) << error << '\n';
         return 1;

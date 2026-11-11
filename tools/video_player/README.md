@@ -5,14 +5,18 @@
 保留 Qt Widgets 的滑块、左右键、图像缩放、像素点击和检测叠加，按当前 v2
 的紧凑 DBV、逐帧 PNG、旧版 PGM/PBM 连续流及逐帧文件、录像 CSV 和检测 CSV 重写数据关联。与 v1 一样为手动逐帧浏览，
 不按时间自动播放。支持 Qt 5 / Qt 6，不依赖 ROS、SDK 或板端构建。
+支持 H.264/H.265（HEVC）Annex B 裸码流，可直接打开 `.h264`、`.h265`、`.hevc`
+文件，或读取录像目录中的码流，保留逐帧浏览、检测叠加和 PNG 导出。
 支持直接读取 `recording.pngs` 单文件无损灰度 PNG 容器，按 PNG 边界和 CSV 偏移关联，
 截断的最后一帧会提示并忽略；无需先提取成独立 PNG。
 
 ## 构建与打开
 
-构建需要 CMake >= 3.28、支持 C++23 的编译器、Qt Widgets 和 zlib；
-脚本使用 Ninja。本机已具备 Qt 5 开发环境，对应开发包为 `qtbase5-dev`、
-`zlib1g-dev`。显示窗口需要图形桌面，在仓库根目录运行：
+构建需要 CMake >= 3.28、支持 C++23 的编译器、Qt Widgets、zlib、pkg-config 和
+FFmpeg 开发库（libavformat、libavcodec、libavutil、libswscale）；脚本使用 Ninja。
+Debian/Ubuntu 对应开发包为 `qtbase5-dev`、`zlib1g-dev`、`pkg-config`、
+`libavformat-dev`、`libavcodec-dev`、`libavutil-dev`、`libswscale-dev`。
+显示窗口需要图形桌面，在仓库根目录运行：
 
 ```bash
 # 自动增量构建并打开；也可从其他目录调用 .script/player 的绝对路径。
@@ -22,7 +26,7 @@ bash .script/player records
 # 也可只打开一段板端原始会话目录。
 bash .script/player records/rec_0001
 
-# 默认显示 DBV/PNG/PGM/PBM；--dbv/--png 筛选格式，-r 看 PGM，-f 看 PBM。
+# 默认显示全部支持格式；--dbv/--png/--h264/--h265 筛选格式，-r 看 PGM，-f 看 PBM。
 bash .script/player -r records/rec_0001
 
 # 拷贝位置不同可显式指定两个 CSV；包含空格的路径加引号。
@@ -94,13 +98,40 @@ bash .script/player --export-png /tmp/dart-export records/rec_0001
 
 文件格式、无校验记录及差分依赖的限制见 [录像格式说明](../../include/firmware/src/recorder/README.md)。
 
+## H.264 / H.265 浏览
+
+目录入口自动识别图像目录顶层的 `.h264`、`.h265`、`.hevc` 文件，扩展名不区分大小写。
+也可以指定单个码流文件，避免载入同目录中的其他录像；CSV 仍按所在目录或原始
+`rec_NNNN/img` 布局自动发现，显式 CSV 参数和空字符串跳过参数保持不变。
+`--h265` 同时选择 `.h265` 与 `.hevc`；各格式筛选选项不能同时使用。
+此入口针对 Annex B 裸码流，不读取 MP4/MKV 容器。
+
+```bash
+bash .script/player records/rec_0001/img/recording.h264
+bash .script/player --h265 records/rec_0001
+bash .script/player /tmp/clip.hevc "" ""
+bash .script/player --export-png /tmp/video-frames /tmp/clip.h265 "" ""
+```
+
+首次打开会扫描、解码码流，建立显示顺序与压缩包字节偏移的索引，不把全部像素帧
+保存在内存中，也不生成中间图片。浏览时缓存当前图像和解码器所需的参考帧；支持
+包含 B 帧的码流，倒退或跨关键帧跳转从独立关键帧重新解码。H.265 开放 GOP 中的
+CRA 帧不当作完全独立的跳转起点，必要时从更早的 IDR/BLA 帧开始，长录像跳转可能较慢。
+颜色按码流的色彩空间和范围转换为 RGB。损坏或空码流会报错，文件在载入后被修改时
+需要重新打开。
+
+录像 CSV 仍用 `image_file + file_offset` 精确关联，并校验 `file_bytes` 与显示顺序的
+`image_index`；不会把 SPS/PPS/VPS 等参数头单独算成图像，也不会用相邻日志猜测关联。
+没有 CSV 时可以浏览和导出，但无法恢复板端的采集身份或检测结果，`--check` 仍按
+原有规则返回关联不完整。
+
 ## 图片、文字与叠加如何对应
 
 1. 对 `img/recording.dbv` 扫描共享文件头及变长记录，建立偏移和差分依赖索引；
    不依赖 CSV 解码图片，也不额外保存索引文件。顺序浏览缓存上一帧；旧版重复帧记录仍可读取。
    随机/向后跳转从最近完整帧重建，长差分链的跳转耗时会增加。对 `img/recording.pgm` / `.pbm` 扫描帧头并建立字节偏移索引，跳过像素负载；
    复位导致的不完整尾帧会提示并忽略。独立 PNG 支持 `img/bNNNNNNN/pNNNNNNN/00000001.png`，兼容旧版 `img/frame_*.pgm` / `.pbm`；按图片数字编号排序。
-   只读取和解码当前选中帧，不把整个录像载入内存。
+   图像格式只读取和解码当前选中帧；视频格式的索引建立方式见上一节，均不缓存整个录像的像素。
 2. 用 `frames.csv` 的 **`image_file + file_offset`** 精确匹配连续帧，校验 `file_bytes`、
    `decision=accepted` 和 `image_index`。独立图片用包含分组目录的完整 `image_file`；PNG 同时校验 `file_offset=0` 与 `file_bytes` 等于磁盘文件长度，冲突时停用该帧关联。
    拷贝布局中 CSV 仍可保留板端的 `img/b.../p.../编号.png`，无需修改日志或移动图片；
@@ -140,7 +171,8 @@ ctest --test-dir build/video_player --output-on-failure
 python3 tests/check_cpp_structure.py
 ```
 
-`--check` 不要求桌面环境，只检查文件列表和文字关联，不解码全部图片。
+`--check` 不要求桌面环境，检查文件列表和文字关联；图像格式不解码全部图片，
+H.264/H.265 为建立帧索引会解码整个码流。
 输出图片数、录像匹配数、检测匹配数和 CSV 有记录但磁盘缺图的数量；还会列出
 未匹配/冲突的图片。成功返回 0，关联不完整或解析失败返回 1，命令参数错误返回 2。
 若没有检测 CSV 或其中没有数据行，仅以录像关联判断完整性；不代表已经验证了检测结果。
@@ -150,9 +182,13 @@ python3 tests/check_cpp_structure.py
 
 `recording_types.cpp` 定义帧和 CSV 行数据，`csv.cpp` 负责 CSV 解析，
 `recording_paths.cpp` 解析原始会话和拷贝布局的默认路径，`image_reader.cpp` 负责逐帧解码，
-`recording.cpp` 扫描文件并关联录像/检测记录；
+`video_stream.cpp` 管理 FFmpeg 码流索引、解码和跳转，`recording.cpp` 扫描文件并关联录像/检测记录；
 `image_view.cpp` 管理显示和原图坐标映射，`player.cpp` 组合窗口与命令入口，
 `main.cpp` 仅转交入口。组件按需要提供 `.hpp` 声明，由 `.cpp` 实现并链接为静态库；
 不要求每个源文件建立对应头文件。播放器复用应用的 DBV 编解码实现。
 
 验证包括独立构建、最终链接和 Qt offscreen 回归；硬件录像格式以真实样本验证。
+`video_stream` 回归需要带 `libx264` / `libx265` 编码器的 `ffmpeg` 命令，临时生成
+包含多 GOP、B 帧的码流，与 FFmpeg 顺序解码的像素逐帧对比，并验证倒退/随机跳转、
+CSV 关联、格式筛选、无窗口导出及 GUI 切帧。正常运行播放器只需要 FFmpeg 库，不调用
+`ffmpeg` 命令；只构建播放器时可配置 `-DBUILD_TESTING=OFF`。

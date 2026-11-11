@@ -305,11 +305,12 @@ start/stop 由应用生命周期线程串行调用；stop 后应停止消费者�
 通过质量位和 integrated 区分，不能把未积分的旧状态当成新积分结果。
 `read_error` 行的姿态/样本是上一次快照，应结合 event 和 timestamp 判断年龄。
 
-文件只由日志线程写入，每秒刷新 stdio 缓冲并 fsync，退出时再次同步。固定 512 条队列在
+文件只由日志线程写入，不再设置周期刷新或显式文件同步，缓冲满时正常写出，
+日志会话关闭时由 `fclose` 写出尾部。固定 512 条队列在
 启动期分配；队列锁只保护单条快照复制，写盘期间不持锁。队列满即丢弃该事件，
 sequence 缺口、后续 dropped 列和结束汇总可定位缺失，命令也遵循此规则。
 `stats()` 提供 samples/read_errors/written/dropped/io_errors/log_bytes/log_limit_reached；written 指写入 stdio
-成功的事件数，是否全部落盘还须检查 io_errors。异常断电可能丢失未同步内容。
+成功的事件数，关闭后应检查 io_errors；异常断电时不保证数据持久性。
 当前文件在 Session 停止前保持打开（达到限额也不会关闭），板端 FatFS 共享锁可能
 阻止 USB/MTP 同时读取；复位后程序改写新文件，上一轮文件可读取。
 

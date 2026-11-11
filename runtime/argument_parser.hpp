@@ -31,6 +31,7 @@ public:
     std::uint32_t record_trigger_ms = 0;
     std::uint32_t record_duration_ms = 0;
     std::uint32_t record_fps = recorder::Config{}.fps;
+    std::uint32_t record_queue = recorder::Config{}.queue_slots;
     std::uint32_t record_timeout_ms = 0;
     std::uint32_t record_keep = 0;
     recorder::ImageFormat record_format = recorder::ImageFormat::kPgm;
@@ -38,6 +39,7 @@ public:
     char rec_dir[512] = "/data/app/records";
     char det_csv[512] = "";    /* 空 = 关闭 */
     char log_path[512] = "/data/app/logs/dart_app.log";
+    bool log_console = false;
     bool imu_on = false;
     bool imu_ignore_id = false;
     int imu_bus = -1;

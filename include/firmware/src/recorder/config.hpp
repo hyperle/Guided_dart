@@ -17,6 +17,8 @@ enum class EventDecision : std::uint8_t {
     kStopped,
     kInvalidFrame,
     kTimedOut,
+    kBufferFull,
+    kWriteError,
 };
 
 class FrameEvent {
@@ -63,7 +65,7 @@ public:
     /* Target images per second, sampled using the monotonic receipt timestamp.
      * Checked before queue availability; busy slots still drop without waiting. */
     std::uint32_t fps = 60;
-    /* Discard frames that wait this long before the writer starts them.
+    /* Discard input frames that wait this long before encoding starts.
      * Zero uses one target frame period (16,667 us at 60 FPS). */
     std::chrono::milliseconds frame_timeout{0};
     /* Total image bytes per session, including headers. Smaller caps are useful for
@@ -76,13 +78,15 @@ public:
     /* Separate bounded metadata queue for one CSV row per enqueued submission; drops
      * are counted instead of blocking capture. */
     std::uint32_t event_slots = 512;
+    /* Owned output slots, including the one currently being written. Full
+     * buffers reject new inputs before encoding; existing frames stay FIFO. */
+    std::uint32_t queue_slots = 32;
     /* Recheck free space at most this many images apart. Single-file formats
      * charge actual bytes; independent PNGs retain the conservative 2 MiB charge. */
     std::uint32_t storage_check_frames = 32;
     ImageFormat image_format = ImageFormat::kPgm;
     VideoEncoderFactory video_encoder_factory = nullptr;
     std::uint8_t pbm_threshold = 128;
-    std::chrono::milliseconds flush_period{1000};
     std::string_view output_directory = "records";
     std::uint32_t keep_sessions = 0; /* 0 = never remove earlier sessions */
     FrameEventSink event_sink = nullptr;

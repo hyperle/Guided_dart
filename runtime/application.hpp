@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdio>
 #include <utility>
 
 #include "logging/logger.hpp"
@@ -58,7 +59,11 @@ int run_application(
         writes, static_cast<float>(args->record_trigger_accel), args->record_trigger_ms,
         args->record_duration_ms};
     logging::Logger log{&writes};
-    (void)log.open(args->log_path);
+    log.set_console(args->log_console);
+    if (!log.open(args->log_path)) {
+        std::fprintf(stderr, "[log] level=ERROR op=start result=failed action=exit\n");
+        return 1;
+    }
     const platform::ImuOptions options{
         args->imu_on, args->imu_bus, args->imu_cs, args->imu_log, args->imu_ignore_id, &writes,
         args->record_auto ? &RecordingTrigger::observe : nullptr, &trigger};

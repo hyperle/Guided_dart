@@ -16,6 +16,27 @@ if(DART_CAMERA_K230)
     target_link_libraries(dart_app PRIVATE dart_application dart_board Threads::Threads)
     set_target_properties(dart_app PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/dart_app")
+
+    # Finite live-camera timing comparison. Run alone before dart_app.
+    add_executable(vision_probe vision_probe.cpp)
+    target_compile_options(vision_probe PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    target_link_libraries(vision_probe PRIVATE dart_detection dart_board dart_platform Threads::Threads)
+    set_target_properties(vision_probe PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/vision_probe")
+
+    # Exclusive sensor/receiver timing probe; restores documented HTS/VTS.
+    add_executable(camera_timing_probe camera_timing_probe.c
+        "${K230_SDK_ROOT}/src/rtsmart/mpp/userapps/src/sensor/mpi_sensor.c")
+    # The shared SDK library can be rebuilt for another board. Compile its
+    # original sensor MPI with this diagnostic's verified CSI2/SC038HGS mode.
+    set_source_files_properties(
+        "${K230_SDK_ROOT}/src/rtsmart/mpp/userapps/src/sensor/mpi_sensor.c"
+        PROPERTIES COMPILE_OPTIONS
+        "-include${CMAKE_CURRENT_SOURCE_DIR}/camera_timing_config.h;-Wno-error=overflow;-Wno-error=unused-variable")
+    target_compile_options(camera_timing_probe PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    target_link_libraries(camera_timing_probe PRIVATE dart_camera_k230 k230_rtos_app)
+    set_target_properties(camera_timing_probe PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/camera_timing_probe")
 endif()
 
 # Finite board diagnostic for initialization timing comparisons. Run alone.

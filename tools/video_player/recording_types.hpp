@@ -3,9 +3,13 @@
 #include <QMap>
 #include <QString>
 #include <QStringList>
+#include <cstddef>
+#include <memory>
 #include <optional>
 
 namespace dart::tools::video_player {
+class VideoStream;
+
 struct CsvRow {
     QMap<QString, QString> values;
     QString path;
@@ -27,6 +31,8 @@ struct Frame {
     qint64 binary_key_offset = -1;
     qint64 binary_decode_offset = -1; // Repeat frames reuse the last changed frame.
     quint32 binary_width = 0, binary_height = 0;
+    std::shared_ptr<VideoStream> video;
+    std::size_t video_frame_index = 0;
     std::optional<CsvRow> event;
     std::optional<CsvRow> detection;
     QStringList notes;
