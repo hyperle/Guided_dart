@@ -12,10 +12,10 @@
 #include <expected>
 #include <string_view>
 
-#include "camera/interface.hpp"
 #include "pwm/interface.hpp"
 #include "recorder/config.hpp"
 #include "src/control/servo.hpp"
+#include "src/detector/detect.hpp"
 
 namespace dart::app {
 
@@ -87,8 +87,6 @@ bool parse_floats(std::string_view text, std::array<float, N>& out) noexcept {
 void usage(const char* argv0) {
     std::printf("用法: %s [选项]\n\n", argv0);
     std::printf("  --seconds N      有界运行秒数，0 = 跑到 SIGINT/SIGTERM（默认 0）\n");
-    std::printf("  --exp LINES      固定曝光行数（默认 400；0 保留传感器初始曝光）\n");
-    std::printf("  --raw-layout F   packed10-lsb（默认，K230 实板验证）\n");
     std::printf("  --wifi on|off    JPEG Wi-Fi 回传开关（默认 off）\n");
     std::printf("  --wifi-config P  Wi-Fi 配置文件（默认 /data/app/wifi.conf）\n");
     std::printf("  --wifi-pause-file P  回传暂停标记（默认 /sdcard/app/control/stream.pause）\n");
@@ -115,8 +113,10 @@ void usage(const char* argv0) {
         "  --rec-dir DIR    录像根目录（默认 %.*s）\n", static_cast<int>(kDefaultRecordDir.size()),
         kDefaultRecordDir.data());
     std::printf("  --det-csv PATH   识别结果 CSV；off 关闭（默认关闭）\n");
-    std::printf("  --threshold N    灰度候选阈值 0..255（默认 50），不改变相机灰度图\n");
-    std::printf("  --min-contrast N 候选与背景最小灰度差 0..255，可小数（默认 12，0 关闭）\n");
+    std::printf("  --threshold N    录像 pbm/dbv 二值阈值 0..255（默认 50）\n");
+    std::printf("  --detect K=V     识别参数，键为 Detect::Config 字段路径，可重复，最多 %zu 项\n"
+                "                   例：--detect light.min_area=3 --detect color.green.l_min=56\n",
+                Arguments::kMaxDetectParameters);
     std::printf(
         "  --log PATH       结构化文件日志；off 关闭（默认 %.*s）\n", static_cast<int>(kDefaultLog.size()),
         kDefaultLog.data());
@@ -134,7 +134,8 @@ void usage(const char* argv0) {
 }
 
 /* 失败值是退出码；帮助返回 0，参数非法返回 2，消息已打印。 */
-std::expected<Arguments, int> parse_args(int argc, char* argv[]) {
+std::expected<Arguments, int> parse_args(
+    int argc, char* argv[], ArgumentExtension extension) {
     Arguments args;
     args.det_csv[0] = '\0';
 
@@ -149,6 +150,8 @@ std::expected<Arguments, int> parse_args(int argc, char* argv[]) {
 
         if (a == "-h" || a == "--help") {
             usage(argv[0]);
+            if (extension.usage != nullptr)
+                extension.usage();
             return std::unexpected<int>(0);
         }
         std::string_view value;
@@ -206,17 +209,30 @@ std::expected<Arguments, int> parse_args(int argc, char* argv[]) {
                 args.imu_cs = static_cast<int>(n);
             continue;
         }
-        if (a == "--min-contrast") {
+        if (a == "--detect") {
+            const auto separator = need_value(value) ? value.find('=') : std::string_view::npos;
             std::array<float, 1> number{};
-            if (!need_value(value) || !parse_floats(value, number) || number[0] < 0.0F
-                || number[0] > 255.0F) {
-                std::fprintf(stderr, "%s: --min-contrast 必须是 0..255 的有限数值\n", argv[0]);
+            if (separator == std::string_view::npos || separator == 0) {
+                std::fprintf(stderr, "%s: --detect 需要 KEY=VALUE\n", argv[0]);
                 return std::unexpected<int>(2);
             }
-            args.min_contrast = number[0];
+            const auto key = value.substr(0, separator);
+            // Validate against the real configuration, so typos fail at startup.
+            detection::Detect::Config probe{};
+            if (args.detect_count == args.detect.size()
+                || !copy_path(args.detect[args.detect_count].name,
+                              sizeof(args.detect[args.detect_count].name), key)
+                || !parse_floats(value.substr(separator + 1), number)
+                || !detection::Detect::set_parameter(probe, key, number[0])) {
+                std::fprintf(stderr, "%s: --detect %.*s 无效（未知键、数值非法或超过 %zu 项）\n",
+                             argv[0], static_cast<int>(value.size()), value.data(),
+                             Arguments::kMaxDetectParameters);
+                return std::unexpected<int>(2);
+            }
+            args.detect[args.detect_count++].value = number[0];
             continue;
         }
-        if (a == "--seconds" || a == "--exp" || a == "--rec-fps" || a == "--rec-timeout-ms"
+        if (a == "--seconds" || a == "--rec-fps" || a == "--rec-timeout-ms"
             || a == "--rec-keep" || a == "--rec-queue" || a == "--threshold" || a == "--status-ms" || a == "--acquire-ms"
             || a == "--max-acquire-errors" || a == "--rec-trigger-accel" || a == "--rec-trigger-ms"
             || a == "--rec-duration-ms" || a == "--servo-timeout-ms") {
@@ -243,9 +259,7 @@ std::expected<Arguments, int> parse_args(int argc, char* argv[]) {
                 args.record_duration_ms = static_cast<std::uint32_t>(n);
             else if (a == "--seconds")
                 args.seconds = static_cast<std::uint32_t>(n);
-            else if (a == "--exp") {
-                args.exposure_lines = static_cast<std::uint32_t>(n);
-            } else if (a == "--rec-timeout-ms") {
+            else if (a == "--rec-timeout-ms") {
                 if (n > 60'000) {
                     std::fprintf(stderr, "%s: --rec-timeout-ms 必须在 0..60000\n", argv[0]);
                     return std::unexpected<int>(2);
@@ -306,31 +320,6 @@ std::expected<Arguments, int> parse_args(int argc, char* argv[]) {
             else {
                 args.record_on = flag;
                 args.record_auto = false;
-            }
-            continue;
-        }
-        if (a == "--ae") {
-            std::fprintf(stderr, "%s: 绕过 ISP 的 RAW 路径暂不支持自动曝光\n", argv[0]);
-            return std::unexpected<int>(2);
-        }
-        if (a == "--raw-layout") {
-            if (!need_value(value)) {
-                std::fprintf(stderr, "%s: --raw-layout 缺少参数\n", argv[0]);
-                return std::unexpected<int>(2);
-            }
-            if (value == "le16-lsb")
-                args.raw10_layout = camera::Raw10Layout::kLe16Lsb;
-            else if (value == "le16-msb")
-                args.raw10_layout = camera::Raw10Layout::kLe16Msb;
-            else if (value == "mipi10")
-                args.raw10_layout = camera::Raw10Layout::kMipi;
-            else if (value == "packed10-lsb")
-                args.raw10_layout = camera::Raw10Layout::kPackedLsb;
-            else {
-                std::fprintf(
-                    stderr, "%s: --raw-layout 需要 packed10-lsb|le16-lsb|le16-msb|mipi10\n",
-                    argv[0]);
-                return std::unexpected<int>(2);
             }
             continue;
         }
@@ -405,6 +394,13 @@ std::expected<Arguments, int> parse_args(int argc, char* argv[]) {
                 return std::unexpected<int>(2);
             }
             continue;
+        }
+        if (extension.parse != nullptr) {
+            const auto handled = extension.parse(extension.context, argc, argv, i);
+            if (!handled)
+                return std::unexpected(handled.error());
+            if (*handled)
+                continue;
         }
         std::fprintf(
             stderr, "%s: 未知选项 %.*s（-h 查看用法）\n", argv[0], static_cast<int>(a.size()),

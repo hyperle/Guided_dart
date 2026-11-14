@@ -364,6 +364,25 @@ k_s32 kd_mpi_sensor_intg_time_set(k_s32 fd, k_sensor_intg_time integration) {
     assert(0);
     return FAKE_FAILURE;
 }
+/* SC132GS (ISP) controls; the SC038HGS RAW path must never reach them. */
+k_s32 kd_mpi_sensor_intg_time_get(k_s32 fd, k_sensor_intg_time* integration) {
+    (void)fd;
+    (void)integration;
+    assert(0);
+    return FAKE_FAILURE;
+}
+k_s32 kd_mpi_sensor_mode_get(k_s32 fd, k_sensor_mode* mode) {
+    (void)fd;
+    (void)mode;
+    assert(0);
+    return FAKE_FAILURE;
+}
+k_s32 kd_mpi_sensor_again_set(k_s32 fd, k_sensor_gain gain) {
+    (void)fd;
+    (void)gain;
+    assert(0);
+    return FAKE_FAILURE;
+}
 k_s32 kd_mpi_sensor_reg_read(k_s32 fd, k_u32 address, k_u32* value) {
     assert(fd == 9 && sensor_powered && address < 65536);
     if ((int)address == fail_reg_read_addr)

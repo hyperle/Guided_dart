@@ -134,7 +134,8 @@ def build(args):
     # unpacking, cutoff, cache handling, or DMA ownership.
     camera = ROOT / "include/firmware/src/camera"
     sources = ("c_api/config.c", "c_api/lease.c", "c_api/raw10.c", "k230/lifecycle.c",
-               "k230/frame.c", "k230/exposure.c", "k230/mcm.c")
+               "k230/frame.c", "k230/exposure.c", "k230/mcm.c",
+               "k230/sensor.c", "k230/sc038hgs.c")
     for source in sources:
         name = "dart_" + source.replace("/", "_")
         (board / name).write_text(f'#include "{camera / source}"\n')

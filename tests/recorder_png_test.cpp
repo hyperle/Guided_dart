@@ -128,7 +128,7 @@ class RecorderPngTest final {
         unsigned submitted = 0;
         unsigned tick = 0;
         for (unsigned i = 0; i < 3; ++i) {
-            slot.view.luma =
+            slot.view.pixels =
                 i == 1 ? std::span<const std::byte>{patterned} : std::span<const std::byte>{black};
             for (unsigned attempt = 0;; ++attempt) {
                 assert(attempt < 1000);
@@ -252,7 +252,7 @@ class RecorderPngTest final {
         unsigned tick = 0;
         for (unsigned i = 0; i < 2; ++i) {
             const auto& pixels = i == 0 ? first : second;
-            slot.view.luma = std::span<const std::byte>{pixels};
+            slot.view.pixels = std::span<const std::byte>{pixels};
             for (unsigned attempt = 0;; ++attempt) {
                 assert(attempt < 1000);
                 slot.view.sequence = ++tick;

@@ -79,6 +79,10 @@ public:
     };
 
     Operation operation = Operation::kUnknown;
+    // Owned, bounded backend diagnostics. The common layer never decodes a
+    // vendor bit layout or borrows a backend-owned message buffer.
+    std::array<char, 16> backend{};
+    std::array<char, 96> backend_detail{};
     std::int32_t native_hint = 0;
     std::uint32_t requested = 0;
     std::uint32_t observed = 0;
@@ -161,9 +165,6 @@ static_assert(std::is_standard_layout_v<CameraError>);
 static_assert(
     DART_CAMERA_E_SITE_CODE_MAX < DART_CAMERA_CODE_ERRNO_MAX,
     "site code range must remain below errno range");
-static_assert(
-    DART_CAMERA_CODE_VENDOR_MAX < -DART_CAMERA_CODE_ERRNO_MAX,
-    "vendor code range must remain below errno range");
 static_assert(
     [] {
         constexpr std::array<std::int32_t, 26> codes = {

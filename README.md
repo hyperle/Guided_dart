@@ -152,9 +152,10 @@ HAL 头文件和库只取 SDK `.config` 的 `CONFIG_BOARD_CONFIG_NAME` 对应输
 `cmake --preset cross -DK230_SDK_OUTPUT_DIR=/path/to/sdk/output/<board_defconfig>`。
 
 新版 Dart V1 固件的 SC038HGS 使用 CSI2、640 × 480 RAW10。应用通过 MCM 直采并
-按 `raw10 >> 2` 输出保留 256 级亮度的灰度 Y8，识别与录像共用同一图像，
-不依赖 ISP 标定文件。识别以 `--threshold`（默认 50）提取候选，再用候选与周围背景的
-灰度均值差（`--min-contrast`，默认 12）过滤低对比度干扰；阈值不改变相机图像。
+按 `raw10 >> 2` 输出保留 256 级亮度的灰度 Y8，供录像使用，不依赖 ISP 标定文件。
+识别已改为基于 RGB565/Lab 的颜色识别（见 [`src/detector/README.md`](src/detector/README.md)），
+灰度相机上 `--vision on` 会记录 `unsupported_format` 并关闭识别与舵机输出；
+识别参数用 `--detect KEY=VALUE` 传入。
 录像默认保存单文件灰度 PGM，也可选择灰度 PNG；DBV/PBM 是可选的二值导出格式。
 当前启动清单显式使用 `--rec-fps 30 --rec-format pngs`，在一个文件中保存无损灰度 PNG，
 降低写盘带宽和小文件开销。结构化日志由固定队列交给专用线程写入、同步和关闭，采集线程不等待日志存储。
@@ -175,6 +176,11 @@ HAL 头文件和库只取 SDK `.config` 的 `CONFIG_BOARD_CONFIG_NAME` 对应输
 开机清单使用 `--exp 400`，对应帧长 VTS=600。此前连续 PBM 版本实测录像
 55.881 FPS，在 499,995,987 字节正常停录；目标场景曝光/阈值尚未标定，详见 [实板记录](runtime/APPLICATION.md#验证状态)。
 适配细节及板端验证步骤见 [相机说明](include/firmware/src/camera/README.md#sc038hgs--dart-v1)。
+
+SC132GS 固件（CSI0 四线）下，后端走 ISP：1080×1280@120 经 ISP 缩放为 480×640，
+输出亮度平面 Y8（`pixel_aspect` 1.125），`--exp` 按传感器行（约 6.17 µs/行）设置，
+`--gain X` 设置模拟增益。实板 60 FPS 录像只有 `--rec-format h264` 能达到（约 59 FPS），
+PGM/PNGS 受写盘和 CPU 压缩限制，见 [SC132GS 说明](include/firmware/src/camera/README.md#sc132gs--dart-v1-rt-smart)。
 
 ## 4. 编译
 

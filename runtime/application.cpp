@@ -38,7 +38,10 @@ public:
         if (start_capture()) {
             start_recorder();
             start_servo();
-            wifi_started_ = args_.wifi_on && wifi_.start_controlled(
+            // The JPEG stream transmits grayscale rows only.
+            wifi_started_ = args_.wifi_on
+                && camera_->frame_info().format == camera::PixelFormat::kY8
+                && wifi_.start_controlled(
                 args_.wifi_config, camera_->frame_info().width, camera_->frame_info().height,
                 app_.wifi_factory_, args_.wifi_pause_file);
             if (args_.wifi_on)
@@ -57,7 +60,7 @@ public:
                 const auto stepped = detector_->step();
                 (void)frames_->drain_releases();
                 acquire_timing_.add(static_cast<std::uint64_t>(detector_status_.acquire_time.count()));
-                if (detector_status_.acquired_frame && args_.vision_on)
+                if (detector_status_.acquired_frame && vision_on_)
                     detect_timing_.add(static_cast<std::uint64_t>(detector_status_.detect_time.count()));
                 const auto step_us = elapsed_us(begin);
                 pipeline_timing_.add(step_us - std::min(step_us,
@@ -112,14 +115,11 @@ private:
     }
 
     bool start_capture() noexcept {
-        if (app_.camera_factory_ == nullptr) {
+        if (!app_.camera_factory_) {
             log_.line(logging::Tag::kCamera, "level=ERROR module=camera op=create result=disabled action=disable_capture\n");
             return false;
         }
-        camera::Controls controls{};
-        controls.initial_exposure_lines = args_.exposure_lines;
-        controls.raw10_layout = args_.raw10_layout;
-        auto created = app_.camera_factory_(controls);
+        auto created = app_.camera_factory_();
         if (!created) {
             camera_error("create", created.error());
             return false;
@@ -130,15 +130,24 @@ private:
             return false;
         }
         frames_.emplace();
-        log_.line(logging::Tag::kCamera, "level=INFO module=camera op=create result=ok capacity=%u frame=%ux%u\n",
-                  camera_->capacity(), camera_->frame_info().width, camera_->frame_info().height);
-        const executor::Component::Spec spec{
+        const auto& info = camera_->frame_info();
+        log_.line(logging::Tag::kCamera,
+                  "level=INFO module=camera op=create result=ok capacity=%u frame=%ux%u format=%s pixel_aspect=%.3f\n",
+                  camera_->capacity(), info.width, info.height, format_text(info.format),
+                  static_cast<double>(info.pixel_aspect));
+        // Capture still serves recording and streaming when vision cannot use this format.
+        vision_on_ = args_.vision_on && detection::Detect::Supports(info.format);
+        if (args_.vision_on && !vision_on_)
+            log_.line(logging::Tag::kVision,
+                      "level=ERROR module=vision op=prepare result=unsupported_format format=%s action=disable_vision\n",
+                      format_text(info.format));
+        executor::Component::Spec spec{
             "detector", "detector", 240.0,
-            {{"enabled", args_.vision_on ? 1.0 : 0.0},
-             {"threshold", static_cast<double>(args_.threshold)},
-             {"workspace.min_contrast", args_.min_contrast},
+            {{"enabled", vision_on_ ? 1.0 : 0.0},
              {"acquire_ms", static_cast<double>(args_.acquire_ms)},
              {"max_acquire_errors", static_cast<double>(args_.max_acquire_errors)}}};
+        for (std::size_t i = 0; i < args_.detect_count; ++i)
+            spec.parameter.insert_or_assign(args_.detect[i].name, args_.detect[i].value);
         auto component = detection::DetectorFactory::create(
             spec, *camera_, executor::Output<detection::Point>{blackboard_.target}, detector_status_,
             [this](camera::FrameLease& lease, const detection::DetectResult* result) {
@@ -159,13 +168,20 @@ private:
         capture_started_ = true;
         log_.line(logging::Tag::kCamera, "level=INFO module=camera op=start result=ok\n");
         log_.line(logging::Tag::kVision, "level=INFO module=vision op=detector_prepare result=ok max=%ux%u enabled=%d\n",
-                  camera_->frame_info().width, camera_->frame_info().height, args_.vision_on);
+                  camera_->frame_info().width, camera_->frame_info().height, vision_on_);
         return true;
     }
 
     void start_recorder() noexcept {
         if (!args_.record_on)
             return;
+        if (camera_->frame_info().format != camera::PixelFormat::kY8) {
+            // Every recorder encoder consumes grayscale rows.
+            log_.line(logging::Tag::kRecord,
+                      "level=ERROR module=recorder op=start result=unsupported_format format=%s action=disable_record\n",
+                      format_text(camera_->frame_info().format));
+            return;
+        }
         auto config = recording_config(
             args_, camera_->frame_info().width, camera_->frame_info().height);
         config.video_encoder_factory = app_.video_encoder_factory_;
@@ -184,7 +200,7 @@ private:
     }
 
     void start_servo() noexcept {
-        if (!args_.pwm_on || !args_.vision_on || app_.pwm_factory_ == nullptr)
+        if (!args_.pwm_on || !vision_on_ || app_.pwm_factory_ == nullptr)
             return;
         auto created = app_.pwm_factory_();
         if (!created || !*created) {
@@ -416,8 +432,8 @@ private:
                   static_cast<unsigned long long>(rec.copy_fail), static_cast<unsigned long long>(rec.write_fail),
                   static_cast<unsigned long long>(rec.lease_release_fail), capture_started_);
         log_.line(logging::Tag::kVision, "level=INFO module=vision op=vision_status detect_us=%.1f detect_max_us=%llu "
-                  "run_high_water=%u scope=window\n", detect_timing_.average_us(),
-                  static_cast<unsigned long long>(detect_timing_.max_us), detector_status_.run_high_water);
+                  "span_high_water=%u scope=window\n", detect_timing_.average_us(),
+                  static_cast<unsigned long long>(detect_timing_.max_us), detector_status_.span_high_water);
         log_.line(logging::Tag::kRecord, "level=INFO module=recorder op=recorder_timing pack_us=%.1f pack_max_us=%llu "
                   "buffer_copy_us=%.1f buffer_copy_max_us=%llu io_us=%.1f io_max_us=%llu scope=session\n",
                   average(rec.pack_total_us, rec.encode_attempts), static_cast<unsigned long long>(rec.pack_max_us),
@@ -495,6 +511,13 @@ private:
         }
         return "off";
     }
+    static const char* format_text(camera::PixelFormat format) noexcept {
+        switch (format) {
+        case camera::PixelFormat::kY8: return "y8";
+        case camera::PixelFormat::kRgb565: return "rgb565";
+        }
+        return "unknown";
+    }
     static const char* kind_text(detection::TargetKind kind) noexcept {
         switch (kind) {
         case detection::TargetKind::kArmor: return "armor";
@@ -514,6 +537,7 @@ private:
     recorder::Config recording_config_{};
     std::optional<recorder::FrameChannel> frames_{};
     detection::DetectorStatus detector_status_{};
+    bool vision_on_ = false;
     control::ServoStatus servo_status_{};
     executor::Tunner recorder_tunner_{}, servo_tunner_{};
     std::unique_ptr<executor::Component> detector_{};

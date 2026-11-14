@@ -1,4 +1,5 @@
 #include "src/detector/detect.hpp"
+#include "tests/detector_fixture.hpp"
 
 #include <algorithm>
 #include <array>
@@ -16,7 +17,6 @@ class DetectorComponentTest final {
     class Camera final : public camera::ICamera {
     public:
         Camera() {
-            pixels.fill(std::byte{20});
             slot.owner = this;
             slot.release = release;
         }
@@ -40,10 +40,9 @@ class DetectorComponentTest final {
             result.status = acquisition;
             if (acquisition == camera::AcquireStatus::kFrame) {
                 assert(slot.state == camera::FrameLeaseAccess::SlotState::kFree);
-                slot.view.luma = pixels;
+                slot.view = image.view(sequence + 1, static_cast<std::int64_t>(sequence + 1) * 10000);
+                slot.view.format = info.format;
                 slot.view.width = invalid_frame ? 0 : info.width;
-                slot.view.height = info.height;
-                slot.view.stride = info.width;
                 slot.view.sequence = ++sequence;
                 slot.view.received = std::chrono::microseconds{sequence * 10000};
                 slot.token = sequence;
@@ -63,31 +62,23 @@ class DetectorComponentTest final {
         }
         camera::State state() const noexcept override { return state_; }
         const camera::FrameInfo& frame_info() const noexcept override { return info; }
-        std::expected<void, camera::CameraError>
-            set_fixed_exposure_lines(std::uint32_t) noexcept override {
-            return {};
-        }
         std::uint32_t capacity() const noexcept override { return 1; }
         std::uint32_t outstanding() const noexcept override {
             return slot.state == camera::FrameLeaseAccess::SlotState::kHeld;
         }
 
-        void box(unsigned x, unsigned y, unsigned width, unsigned height) {
-            for (auto row = y; row < y + height; ++row)
-                for (auto col = x; col < x + width; ++col)
-                    pixels[row * info.width + col] = std::byte{180};
-        }
+        // A green lamp with a blue plate above it.
         void scene(bool armor = true) {
-            pixels.fill(std::byte{20});
-            box(150, 160, 8, 8);
+            image.clear();
+            image.rect(150, 160, 8, 8, kGreen);
             if (armor) {
-                box(144, 140, 2, 12);
-                box(164, 140, 2, 12);
+                image.rect(144, 140, 2, 12, kBlue);
+                image.rect(164, 140, 2, 12, kBlue);
             }
         }
 
-        std::array<std::byte, 320 * 240> pixels{};
-        camera::FrameInfo info{320, 240};
+        ColorImage image{320, 240};
+        camera::FrameInfo info = image.info();
         camera::FrameLeaseAccess::Slot slot{};
         camera::AcquireStatus acquisition = camera::AcquireStatus::kFrame;
         std::uint64_t sequence = 0;
@@ -166,14 +157,14 @@ public:
         const auto armor = board.target.read();
         assert(armor.x == 154.5F && armor.y == 145.5F);
         assert(callbacks == 1 && camera.releases == 1 && camera.outstanding() == 0);
-        assert(status.released_frame && status.run_high_water > 0);
+        assert(status.released_frame && status.span_high_water > 0);
 
         camera.scene(false);
         assert(component->step());
         const auto light = board.target.read();
         assert(light.x == 153.5F && light.y == 163.5F);
 
-        camera.pixels.fill(std::byte{20});
+        camera.image.clear();
         assert(component->step());
         expect_missing(board); // Retained tracking history is never published as a measurement.
 
@@ -220,7 +211,7 @@ public:
         assert(!detection::DetectorFactory::create(
             settings, camera, executor::Output<detection::Point>{board.target}, status));
         settings = spec();
-        settings.parameter["threshold"] = std::numeric_limits<double>::quiet_NaN();
+        settings.parameter["light.min_area"] = std::numeric_limits<double>::quiet_NaN();
         assert(!detection::DetectorFactory::create(
             settings, camera, executor::Output<detection::Point>{board.target}, status));
         settings = spec();
@@ -230,13 +221,29 @@ public:
         assert(camera.starts == 0);
 
         settings = spec();
-        settings.parameter["workspace.max_runs"] = 0;
+        settings.parameter["workspace.max_spans"] = 0;
         auto invalid = detection::DetectorFactory::create(
             settings, camera, executor::Output<detection::Point>{board.target}, status);
         assert(invalid && !(*invalid)->initialze());
         assert(status.detection_error == detection::DetectionError::kInvalidConfig);
         assert(camera.starts == 0);
         invalid->reset();
+
+        // A grayscale camera cannot feed the color detector; recording-only still works.
+        Camera gray;
+        gray.info.format = camera::PixelFormat::kY8;
+        auto unsupported = detection::DetectorFactory::create(
+            spec(), gray, executor::Output<detection::Point>{board.target}, status);
+        assert(unsupported && !(*unsupported)->initialze());
+        assert(status.detection_error == detection::DetectionError::kUnsupportedFormat);
+        assert(gray.starts == 0);
+        settings = spec();
+        settings.parameter["enabled"] = 0;
+        auto capture_only = detection::DetectorFactory::create(
+            settings, gray, executor::Output<detection::Point>{board.target}, status);
+        assert(capture_only && (*capture_only)->initialze() && (*capture_only)->step());
+        assert(status.acquired_frame && !status.detection_error);
+        assert((*capture_only)->shutdown());
 
         auto created = detection::DetectorFactory::create(
             spec(), camera, executor::Output<detection::Point>{board.target}, status);

@@ -140,8 +140,6 @@ std::string_view CameraError::operation_name(Operation operation) noexcept {
 ErrorKind CameraError::classify(std::int32_t code) noexcept {
     if (code < 0 && code >= -DART_CAMERA_CODE_ERRNO_MAX)
         return ErrorKind::kPlatform;
-    if (code <= DART_CAMERA_CODE_VENDOR_MAX)
-        return ErrorKind::kHardware;
 
     switch (code) {
     case DART_CAMERA_E_INVALID_ARGUMENT:
@@ -199,6 +197,10 @@ CameraError::Description CameraError::description() const noexcept {
 void CameraError::append_context(ErrorTextSink& sink) const noexcept {
     sink.append_field("code", static_cast<std::int64_t>(code_));
     sink.append_field("op", operation_name(context_.operation));
+    if (context_.backend[0] != '\0')
+        sink.append_field("backend", std::string_view{context_.backend.data()});
+    if (context_.backend_detail[0] != '\0')
+        sink.append_field("backend_detail", std::string_view{context_.backend_detail.data()});
     if (context_.native_hint != 0) {
         sink.append_field("native_hint", static_cast<std::int64_t>(context_.native_hint));
     }
@@ -271,14 +273,7 @@ void CameraError::append_context(ErrorTextSink& sink) const noexcept {
                 sink.append_field("block_bytes", frame.block_bytes);
             }
             break;
-        default:
-            if (code_ <= DART_CAMERA_CODE_VENDOR_MAX) {
-                const auto bits = static_cast<std::uint32_t>(code_);
-                sink.append_field("module", (bits >> 16U) & 0xffU);
-                sink.append_field("level", (bits >> 13U) & 0x7U);
-                sink.append_field("errid", bits & 0x1fffU);
-            }
-            break;
+        default: break;
         }
         break;
     default: break;

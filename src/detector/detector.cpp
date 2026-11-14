@@ -66,8 +66,8 @@ private:
         status_ = {};
         status_.vision_enabled = settings_.enabled;
         if (settings_.enabled) {
-            const auto& frame = camera_.frame_info();
-            const auto prepared = detect_.Prepare(frame.width, frame.height);
+            // Format, size and pixel aspect come from the camera; frames must match.
+            const auto prepared = detect_.Prepare(camera_.frame_info());
             if (!prepared) {
                 status_.detection_error = prepared.error();
                 return std::unexpected(executor::Error::invalid_spec);
@@ -85,7 +85,7 @@ private:
     std::expected<void, executor::Error> capture_inputs() noexcept override {
         status_ = {};
         status_.vision_enabled = settings_.enabled;
-        status_.run_high_water = detect_.run_high_water();
+        status_.span_high_water = detect_.span_high_water();
         output_ = Point::missing();
         result_.reset();
         if (const auto released = release_frame(); !released) {
@@ -122,7 +122,7 @@ private:
         const auto begin = std::chrono::steady_clock::now();
         auto detected = detect_.update(lease_.view(), track_);
         status_.detect_time = elapsed(begin);
-        status_.run_high_water = detect_.run_high_water();
+        status_.span_high_water = detect_.span_high_water();
         if (!detected) {
             status_.detection_error = detected.error();
             return {};

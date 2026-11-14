@@ -11,7 +11,7 @@
 #include <vector>
 
 #include "runtime/argument_parser.hpp"
-#include "runtime/argument_parser.hpp"
+#include "board/k230_arguments.hpp"
 
 namespace dart::tests {
 
@@ -51,7 +51,7 @@ public:
             std::vector<char*> arguments;
             for (auto& token : tokens)
                 arguments.push_back(token.data());
-            const auto parsed = app::parse_args(static_cast<int>(arguments.size()), arguments.data());
+            const auto parsed = board::Arguments::parse(static_cast<int>(arguments.size()), arguments.data());
             if (!parsed) {
                 std::fprintf(stderr, "%s:%u: dart_app startup arguments rejected\n", path, line_number);
                 return parsed.error();
@@ -64,7 +64,10 @@ public:
         char program[] = "dart_app";
         char* defaults[] = {program};
         auto parsed = app::parse_args(1, defaults);
-        assert(parsed && parsed->record_on && parsed->exposure_lines == 400);
+        assert(parsed && parsed->record_on);
+        const auto board_defaults = board::Arguments::parse(1, defaults);
+        assert(board_defaults && board_defaults->camera.initial_exposure_lines == 400);
+        assert(board_defaults->camera.raw10_layout == camera::k230::Raw10Layout::kPackedLsb);
         assert(!parsed->log_console);
         const auto console = parse({"--log", "off", "--log-console", "on"});
         assert(console && console->log_console && console->log_path[0] == '\0');
@@ -101,15 +104,22 @@ public:
         assert(!parse({"--wifi", "invalid"}));
         assert(!parse({"--wifi-config", ""}));
         assert(!parse({"--wifi-config"}));
-        assert(parsed->min_contrast == 12);
-        assert(parse({"--min-contrast", "0"})->min_contrast == 0);
-        assert(parse({"--min-contrast", "255"})->min_contrast == 255);
-        assert(parse({"--min-contrast", "12.5"})->min_contrast == 12.5F);
-        assert(!parse({"--min-contrast", "256"}));
-        assert(!parse({"--min-contrast", "-1"}));
-        assert(!parse({"--min-contrast", "nan"}));
-        assert(!parse({"--min-contrast", "inf"}));
-        assert(!parse({"--min-contrast"}));
+        assert(parsed->detect_count == 0);
+        const auto detect = parse({"--detect", "light.min_area=4", "--detect", "color.green.l_min=50",
+                                   "--detect", "armor.colors=4"});
+        assert(detect && detect->detect_count == 3);
+        assert(std::string_view{detect->detect[0].name} == "light.min_area" && detect->detect[0].value == 4);
+        assert(std::string_view{detect->detect[1].name} == "color.green.l_min" && detect->detect[1].value == 50);
+        assert(std::string_view{detect->detect[2].name} == "armor.colors" && detect->detect[2].value == 4);
+        assert(!parse({"--detect", "light.unknown=1"}));        // Unknown key.
+        assert(!parse({"--detect", "light.min_area=1.5"}));     // Integer field.
+        assert(!parse({"--detect", "armor.colors=8"}));         // Mask has three colors.
+        assert(!parse({"--detect", "color.green.a_min=-129"})); // Lab channel range.
+        assert(!parse({"--detect", "=1"}));
+        assert(!parse({"--detect", "light.min_area"}));
+        assert(!parse({"--detect", "light.min_area=nan"}));
+        assert(!parse({"--detect"}));
+        assert(!parse({"--min-contrast", "12"}));               // Grayscale option removed.
         assert(app::recording_config(*parse({"--threshold", "60"}), 640, 480).pbm_threshold == 60);
         assert(parsed->pwm_on && !parsed->aim_explicit && parsed->servo_timeout_ms == 200);
         const auto servo = parse({"--pwm", "on", "--aim", "310.5,235", "--servo-initial",
@@ -166,7 +176,6 @@ public:
         char* bad_options[] = {program, format, bad_format};
         assert(!app::parse_args(3, bad_options));
         assert(parse({"--rec-format", "pngs"})->record_format == recorder::ImageFormat::kPngStream);
-        assert(parsed->raw10_layout == camera::Raw10Layout::kPackedLsb);
         assert(!parsed->imu_on && !parsed->imu_ignore_id);
         char record[] = "--record";
         char off[] = "off";
@@ -195,34 +204,33 @@ public:
         assert(parsed && parsed->record_fps == 10);
         char ae[] = "--ae";
         char* automatic_exposure[] = {program, ae};
-        parsed = app::parse_args(2, automatic_exposure);
-        assert(!parsed);
+        assert(!board::Arguments::parse(2, automatic_exposure));
         char exp[] = "--exp";
         char exposure[] = "300";
         char preserve[] = "0";
         char* fixed_exposure[] = {program, exp, exposure};
-        parsed = app::parse_args(3, fixed_exposure);
-        assert(parsed && parsed->exposure_lines == 300);
+        auto hardware = board::Arguments::parse(3, fixed_exposure);
+        assert(hardware && hardware->camera.initial_exposure_lines == 300);
         fixed_exposure[2] = preserve;
-        parsed = app::parse_args(3, fixed_exposure);
-        assert(parsed && parsed->exposure_lines == 0);
+        hardware = board::Arguments::parse(3, fixed_exposure);
+        assert(hardware && hardware->camera.initial_exposure_lines == 0);
         char* conflicting_exposure[] = {program, ae, exp, ten};
-        assert(!app::parse_args(4, conflicting_exposure));
+        assert(!board::Arguments::parse(4, conflicting_exposure));
         char raw_layout[] = "--raw-layout";
         char msb[] = "le16-msb";
         char packed[] = "mipi10";
         char* raw_args[] = {program, raw_layout, msb};
-        parsed = app::parse_args(3, raw_args);
-        assert(parsed && parsed->raw10_layout == camera::Raw10Layout::kLe16Msb);
+        hardware = board::Arguments::parse(3, raw_args);
+        assert(hardware && hardware->camera.raw10_layout == camera::k230::Raw10Layout::kLe16Msb);
         raw_args[2] = packed;
-        parsed = app::parse_args(3, raw_args);
-        assert(parsed && parsed->raw10_layout == camera::Raw10Layout::kMipi);
+        hardware = board::Arguments::parse(3, raw_args);
+        assert(hardware && hardware->camera.raw10_layout == camera::k230::Raw10Layout::kMipi);
         char mcm_packed[] = "packed10-lsb";
         raw_args[2] = mcm_packed;
-        parsed = app::parse_args(3, raw_args);
-        assert(parsed && parsed->raw10_layout == camera::Raw10Layout::kPackedLsb);
+        hardware = board::Arguments::parse(3, raw_args);
+        assert(hardware && hardware->camera.raw10_layout == camera::k230::Raw10Layout::kPackedLsb);
         raw_args[2] = ten;
-        assert(!app::parse_args(3, raw_args));
+        assert(!board::Arguments::parse(3, raw_args));
         char imu[] = "--imu";
         char on[] = "on";
         char bus[] = "--imu-bus";

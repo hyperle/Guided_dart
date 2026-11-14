@@ -56,8 +56,8 @@ std::expected<std::unique_ptr<pwm::IPwm>, pwm::Error> create_pwm() noexcept {
 }
 
 std::expected<std::unique_ptr<camera::ICamera>, camera::CameraError>
-    create_camera(const camera::Controls& controls) noexcept {
-    auto created = camera::k230::Camera<4>::create(controls);
+    create_camera(const camera::k230::Camera<4>::Config& config) noexcept {
+    auto created = camera::k230::Camera<4>::create(config);
     if (!created)
         return std::unexpected(created.error());
     return std::unique_ptr<camera::ICamera>{std::move(created.value())};

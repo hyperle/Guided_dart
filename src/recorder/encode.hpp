@@ -48,10 +48,10 @@ public:
     }
     bool reset() noexcept { binary_.reset(); return !video_ || video_->reset(); }
     bool valid_view(const camera::FrameView& view) const noexcept {
+        // Every image encoder here consumes grayscale rows.
         return config_.width != 0 && config_.height != 0
-            && view.width == config_.width && view.height == config_.height
-            && view.stride >= view.width && view.luma.data() != nullptr
-            && static_cast<std::uint64_t>(view.height - 1U) * view.stride + view.width <= view.luma.size();
+            && view.format == camera::PixelFormat::kY8 && view.valid()
+            && view.width == config_.width && view.height == config_.height;
     }
     std::size_t record_bytes() const noexcept {
         if (config_.variable_record_size()) return 0;
@@ -69,15 +69,15 @@ public:
         if (!valid_view(view)) return {};
         if (video_) return {{}, video_->encode(view)};
         if (config_.image_format == ImageFormat::kPng || config_.image_format == ImageFormat::kPngStream)
-            return {{}, png_.encode(view.luma, view.stride)};
+            return {{}, png_.encode(view.pixels, view.stride)};
         if (config_.image_format == ImageFormat::kDbv)
-            return {{}, binary_.encode(view.luma, view.stride)};
+            return {{}, binary_.encode(view.pixels, view.stride)};
         const auto header = std::span<const std::byte>{reinterpret_cast<const std::byte*>(header_), header_bytes_};
         if (config_.image_format == ImageFormat::kPgm)
-            return {header, view.luma, view.width, view.height, view.stride, true};
+            return {header, view.pixels, view.width, view.height, view.stride, true};
         const auto row_bytes = (static_cast<std::size_t>(view.width) + 7U) / 8U;
         for (std::uint32_t y = 0; y < view.height; ++y) {
-            const auto* row = view.luma.data() + static_cast<std::size_t>(y) * view.stride;
+            const auto* row = view.row(y);
             for (std::uint32_t x = 0; x < view.width; x += 8U) {
                 unsigned value = 0;
                 for (unsigned bit = 0; bit < std::min(8U, view.width - x); ++bit)

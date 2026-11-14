@@ -62,10 +62,9 @@ public:
         return Error::kNone;
     }
     bool valid_view(const camera::FrameView& view) const noexcept {
-        return view.width == config_.width && view.height == config_.height && view.width != 0
-            && view.height != 0 && view.stride >= view.width && view.luma.data() != nullptr
-            && view.received.count() >= 0
-            && static_cast<std::uint64_t>(view.height - 1U) * view.stride + view.width <= view.luma.size();
+        return view.format == camera::PixelFormat::kY8 && view.valid()
+            && view.width == config_.width && view.height == config_.height
+            && view.received.count() >= 0;
     }
     bool expired(std::chrono::steady_clock::time_point queued_at) const noexcept {
         const auto timeout = config_.frame_timeout.count() == 0

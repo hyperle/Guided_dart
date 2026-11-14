@@ -7,31 +7,20 @@
 #include "camera/frame_lease.hpp"
 
 namespace dart::camera {
-enum class ExposureMode : std::uint32_t {
-    kFixed = 0,
-    kAuto = 1,
-};
-
-enum class Raw10Layout : std::uint32_t {
-    kLe16Lsb = 0,
-    kLe16Msb = 1,
-    kMipi = 2,
-    kPackedLsb = 3,
-};
-
-/* Basic image controls. Sensor modes and wiring belong to the implementation. */
-class Controls {
-public:
-    ExposureMode exposure_mode = ExposureMode::kFixed;
-    std::uint32_t initial_exposure_lines = 0; /* Keep the sensor's initialized exposure. */
-    Raw10Layout raw10_layout = Raw10Layout::kPackedLsb;
-};
-
-/* Actual frame geometry, available after creation for consumer allocation. */
+/* Actual output geometry and format, available after factory creation, before
+ * start(). It stays fixed until the camera is destroyed; a new mode requires a
+ * new camera. Every frame carries the same format and dimensions.
+ */
 class FrameInfo {
 public:
     std::uint32_t width = 0;
     std::uint32_t height = 0;
+    PixelFormat format = PixelFormat::kY8;
+    /* Physical width / height of one output pixel. A backend that scales the
+     * sensor view anisotropically reports it so shape tests can undo it; e.g.
+     * SC132GS 1080x1280 scaled to 480x640 gives (1080/480)/(1280/640) = 1.125.
+     */
+    float pixel_aspect = 1.0F;
 };
 
 enum class AcquireStatus : std::uint8_t {
@@ -60,6 +49,11 @@ enum class State : std::uint32_t {
     kFaulted = 3,
 };
 
+/* Backends own sensor configuration, pixel conversion and device resources.
+ * All calls and lease releases belong to the acquisition thread. A camera must
+ * outlive its leases; stop() returns BUSY while frames remain outstanding.
+ * Acquisition/release use preallocated storage, with no per-frame allocation.
+ */
 class ICamera {
 public:
     virtual ~ICamera() = default;
@@ -74,8 +68,6 @@ public:
     virtual std::expected<void, CameraError> stop() noexcept = 0;
     virtual State state() const noexcept = 0;
     virtual const FrameInfo& frame_info() const noexcept = 0;
-    virtual std::expected<void, CameraError>
-        set_fixed_exposure_lines(std::uint32_t lines) noexcept = 0;
 
     /* Lease slots fixed at creation, and how many are in use right now. A
      * producer can check these before acquiring to apply its own drop policy.

@@ -49,7 +49,10 @@ void WriteControl::request_recording(bool enabled, std::uint64_t timestamp_ns) n
 void* WriteControl::entry(void* context) noexcept {
     auto& self = *static_cast<WriteControl*>(context);
     while (self.running_.load()) {
-        self.paused_.store(dart_writes_paused(self.path_));
+        /* An unknown answer keeps the last state; start() began paused on one. */
+        const int state = dart_write_switch_state(self.path_);
+        if (state != DART_WRITE_SWITCH_UNKNOWN)
+            self.paused_.store(state == DART_WRITE_SWITCH_PRESENT);
         std::unique_lock lock(self.mutex_);
         self.wake_.wait_for(
             lock, std::chrono::milliseconds{50}, [&] { return !self.running_.load(); });

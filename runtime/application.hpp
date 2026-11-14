@@ -43,32 +43,29 @@ private:
 
 template <typename ImuRunner>
 int run_application(
-    int argc, char* argv[], platform::CameraFactory camera_factory, ImuRunner&& run_imu,
+    const Arguments& args, platform::CameraFactory camera_factory, ImuRunner&& run_imu,
     platform::PwmFactory pwm_factory = nullptr,
     streaming::TransportFactory wifi_factory = nullptr,
     recorder::VideoEncoderFactory video_encoder_factory = nullptr) noexcept {
-    auto args = parse_args(argc, argv);
-    if (!args)
-        return args.error();
-    platform::RunControl control{args->seconds};
+    platform::RunControl control{args.seconds};
     platform::WriteControl writes;
     if (!writes.start())
         return 1;
-    writes.request_recording(args->record_on && !args->record_auto);
+    writes.request_recording(args.record_on && !args.record_auto);
     RecordingTrigger trigger{
-        writes, static_cast<float>(args->record_trigger_accel), args->record_trigger_ms,
-        args->record_duration_ms};
+        writes, static_cast<float>(args.record_trigger_accel), args.record_trigger_ms,
+        args.record_duration_ms};
     logging::Logger log{&writes};
-    log.set_console(args->log_console);
-    if (!log.open(args->log_path)) {
+    log.set_console(args.log_console);
+    if (!log.open(args.log_path)) {
         std::fprintf(stderr, "[log] level=ERROR op=start result=failed action=exit\n");
         return 1;
     }
     const platform::ImuOptions options{
-        args->imu_on, args->imu_bus, args->imu_cs, args->imu_log, args->imu_ignore_id, &writes,
-        args->record_auto ? &RecordingTrigger::observe : nullptr, &trigger};
+        args.imu_on, args.imu_bus, args.imu_cs, args.imu_log, args.imu_ignore_id, &writes,
+        args.record_auto ? &RecordingTrigger::observe : nullptr, &trigger};
     const int result = std::forward<ImuRunner>(run_imu)(options, log, [&](imu::Session* session) noexcept {
-        return Application{*args, camera_factory, control, log, session, &writes,
+        return Application{args, camera_factory, control, log, session, &writes,
                            pwm_factory, wifi_factory, video_encoder_factory}.run();
     });
     platform::notify_launcher_exit();

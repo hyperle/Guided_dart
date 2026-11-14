@@ -1,6 +1,5 @@
 #define _POSIX_C_SOURCE 200809L
 
-#include "camera/c_api/raw10.h"
 #include "camera/k230/internal.h"
 
 #include <stdint.h>
@@ -72,19 +71,27 @@ static int monotonic_us(uint64_t* value) {
 static int frame_geometry_valid(
     const dart_camera_t* camera, const k_video_frame_info* info, uint64_t* length) {
     const k_video_frame* source = &info->v_frame;
+    const int isp = dart_camera_uses_isp(camera);
     const int packed = camera->config.raw10_layout == DART_CAMERA_RAW10_PACKED_LSB
                     || camera->config.raw10_layout == DART_CAMERA_RAW10_MIPI;
-    const uint32_t row_bytes = packed ? source->width / 4u * 5u : source->width * 2u;
-    /* MCM metadata is tagged YUV444 and its stride[] is not initialized by the
-     * checked SDK. Use the hardware-verified packed RAW10 row size. */
+    /* ISP: only the luma plane is read; its rows use the 16-pixel DMA pitch
+     * while stride[] reports the width. MCM metadata is tagged YUV444 and its
+     * stride[] is not initialized by the checked SDK. Both use the row pitch
+     * resolved by the sensor ops. */
+    const uint32_t row_bytes =
+        isp ? source->width : (packed ? source->width / 4u * 5u : source->width * 2u);
+    const k_pixel_format format =
+        isp ? PIXEL_FORMAT_YUV_SEMIPLANAR_420 : PIXEL_FORMAT_YVU_SEMIPLANAR_444;
     const uint32_t stride = camera->raw_stride;
     const uint64_t bytes = (uint64_t)stride * source->height;
     if (source->phys_addr[0] == 0 || source->width == 0 || source->height == 0 || stride < row_bytes
         || bytes > camera->output_pool.block_bytes || source->width != camera->config.output_width
-        || source->height != camera->config.output_height
-        || source->pixel_format != PIXEL_FORMAT_YVU_SEMIPLANAR_444) {
+        || source->height != camera->config.output_height || source->pixel_format != format) {
         return DART_CAMERA_E_FRAME_GEOMETRY_MISMATCH;
     }
+    /* The chroma plane must follow the luma rows that are read. */
+    if (isp && source->phys_addr[1] != 0 && source->phys_addr[1] < source->phys_addr[0] + bytes)
+        return DART_CAMERA_E_FRAME_GEOMETRY_MISMATCH;
     *length = bytes;
     return DART_CAMERA_OK;
 }
@@ -134,9 +141,12 @@ int dart_camera_prepare_frame_mappings(dart_camera_t* camera) {
     if (result == DART_CAMERA_OK) {
         const k_vb_blk_handle block = kd_mpi_vb_phyaddr_to_handle(info->v_frame.phys_addr[0]);
         const k_s32 pool_id = kd_mpi_vb_handle_to_pool_id(block);
+        /* MCM frames must come from the camera's own pool; the ISP channel pool
+         * is VICAP's and is adopted here. */
         if (block == VB_INVALID_HANDLE
             || kd_mpi_vb_handle_to_phyaddr(block) != info->v_frame.phys_addr[0]
-            || pool_id != camera->raw_pool_id || pool_id < 0 || pool_id >= VB_MAX_POOLS) {
+            || (!dart_camera_uses_isp(camera) && pool_id != camera->raw_pool_id) || pool_id < 0
+            || pool_id >= VB_MAX_POOLS) {
             result = DART_CAMERA_E_FRAME_POOL_MISMATCH;
         } else {
             /* The SDK's frame-info pool_id is not reliable on this build. The
@@ -164,7 +174,8 @@ int dart_camera_acquire_frame(
     if (!valid_camera(camera) || frame == NULL) {
         return DART_CAMERA_E_INVALID_ARGUMENT;
     }
-    if (camera->state != DART_CAMERA_STATE_STARTED || !camera->exposure_configured) {
+    if (camera->state != DART_CAMERA_STATE_STARTED || !camera->exposure_configured
+        || camera->sensor_ops == NULL || camera->sensor_ops->convert_gray == NULL) {
         return DART_CAMERA_E_INVALID_STATE;
     }
     if (timeout_ms > 1000u)
@@ -217,10 +228,8 @@ int dart_camera_acquire_frame(
     }
     const size_t gray_bytes = (size_t)source->width * source->height;
     uint8_t* gray = camera->gray_frames + slot * gray_bytes;
-    result = dart_camera_raw10_gray(
-        mapped, (size_t)length, source->width, source->height, camera->raw_stride,
-        camera->config.raw10_layout, camera->config.mirror, gray,
-        gray_bytes);
+    result = camera->sensor_ops->convert_gray(
+        camera, mapped, (size_t)length, gray, gray_bytes);
     if (result != DART_CAMERA_OK)
         return abandon_frame(camera, slot, result, frame);
     /* Consumers retain CPU gray pixels, so RAW DMA buffers can circulate

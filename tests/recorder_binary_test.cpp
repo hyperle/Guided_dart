@@ -182,7 +182,7 @@ class RecorderBinaryTest final {
         slot.release = release;
         slot.view.width = slot.view.stride = 9;
         slot.view.height = 2;
-        slot.view.luma = pixels;
+        slot.view.pixels = pixels;
         for (unsigned frame = 0; frame < 2;) {
             slot.view.sequence++;
             slot.view.received += std::chrono::microseconds{20'000};

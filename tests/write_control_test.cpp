@@ -58,7 +58,7 @@ class WriteControlTest final {
         std::array<std::byte, 64> pixels{};
         pixels.fill(std::byte{255});
         camera::FrameLeaseAccess::Slot slot{};
-        slot.view.luma = pixels;
+        slot.view.pixels = pixels;
         slot.view.width = slot.view.stride = 32;
         slot.view.height = 2;
         slot.view.sequence = sequence;

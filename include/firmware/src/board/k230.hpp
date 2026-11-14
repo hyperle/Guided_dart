@@ -1,5 +1,8 @@
 #pragma once
 
+#include <expected>
+
+#include "camera/k230/camera.hpp"
 #include "logging/logger.hpp"
 #include "recorder/encoding/video_encoder.hpp"
 #include "runtime/imu/session.hpp"
@@ -13,7 +16,7 @@ std::unique_ptr<recorder::IVideoEncoder> create_video_encoder() noexcept;
 std::unique_ptr<streaming::ITransport> create_wifi_transport() noexcept;
 std::expected<std::unique_ptr<pwm::IPwm>, pwm::Error> create_pwm() noexcept;
 std::expected<std::unique_ptr<camera::ICamera>, camera::CameraError>
-    create_camera(const camera::Controls& controls) noexcept;
+    create_camera(const camera::k230::Camera<4>::Config& config) noexcept;
 using ImuService = int (*)(void*, imu::Session*) noexcept;
 int with_imu_service(
     const platform::ImuOptions& options, logging::Logger& log, void* context,

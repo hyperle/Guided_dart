@@ -16,7 +16,7 @@ bool OdrConsumer::check() noexcept {
     detection::Detect detector;
     recorder::RecorderStatus recording{};
     control::ServoConfig config;
-    return !estimator.current().has_reference_frame && detector.Prepare(64, 64)
+    return !estimator.current().has_reference_frame && detector.Prepare({64, 64, camera::PixelFormat::kRgb565, 1.0F})
         && !recording.started() && config.valid()
         && pwm::valid_pulses(pwm::Pulses{config.channels[0].initial_pulse_us, config.channels[1].initial_pulse_us,
                                            config.channels[2].initial_pulse_us, config.channels[3].initial_pulse_us});

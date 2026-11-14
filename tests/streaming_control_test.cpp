@@ -93,7 +93,7 @@ public:
         camera::FrameLeaseAccess::Slot slot;
         slot.state = camera::FrameLeaseAccess::SlotState::kFree;
         slot.release = release;
-        slot.view.luma = pixels;
+        slot.view.pixels = pixels;
         slot.view.width = slot.view.height = 32;
         slot.view.stride = 40;
         streaming::Session stream;

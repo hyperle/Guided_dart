@@ -144,8 +144,8 @@ int dart_camera_set_exposure_lines(dart_camera_t*, std::uint32_t lines) {
 }
 } // extern "C"
 
-camera::Controls camera_config() {
-    camera::Controls config{};
+camera::k230::Camera<1>::Config camera_config() {
+    camera::k230::Camera<1>::Config config{};
     config.initial_exposure_lines = 2560;
     return config;
 }

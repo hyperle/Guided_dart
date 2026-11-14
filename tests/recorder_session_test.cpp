@@ -79,7 +79,7 @@ private:
         std::array<std::byte, 64> pixels{};
         pixels.fill(std::byte{255});
         dart::camera::FrameLeaseAccess::Slot slot{};
-        slot.view.luma = pixels;
+        slot.view.pixels = pixels;
         slot.view.width = slot.view.stride = 32;
         slot.view.height = 2;
         slot.view.sequence = 17;
@@ -184,7 +184,7 @@ private:
         assert(recorder.start());
         for (std::size_t i = 0; i < slots.size(); ++i) {
             auto& slot = slots[i];
-            slot.view.luma = pixels;
+            slot.view.pixels = pixels;
             slot.view.width = slot.view.stride = 9;
             slot.view.height = 2;
             slot.view.sequence = i + 1;
@@ -267,7 +267,7 @@ private:
         assert(recorder.start());
         std::array<std::byte, 1> pixels{};
         dart::camera::FrameLeaseAccess::Slot slot{};
-        slot.view.luma = pixels;
+        slot.view.pixels = pixels;
         slot.view.width = slot.view.stride = slot.view.height = 1;
         slot.release = &RecorderSessionTest::release;
         for (std::uint64_t i = 0; i < 120; ++i) {

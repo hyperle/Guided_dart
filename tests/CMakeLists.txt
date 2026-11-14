@@ -40,6 +40,10 @@ foreach(_test camera_contract camera_adapter imu_estimator imu_session argument_
     add_test(NAME ${_test} COMMAND ${_test}_test)
 endforeach()
 
+target_link_libraries(camera_adapter_test PRIVATE dart_camera_k230_adapter)
+target_link_libraries(binary_pipeline_test PRIVATE dart_camera_core)
+target_link_libraries(argument_parser_test PRIVATE dart_board_arguments)
+
 foreach(_test recorder_session recorder_binary recorder_component)
     add_executable(${_test}_test "${_test}_test.cpp")
     target_link_libraries(${_test}_test PRIVATE dart_recording)
@@ -192,6 +196,14 @@ add_test(NAME canmv_build_config
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test_canmv_build_config.py")
 add_test(NAME sc132gs_canmv_test
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test_sc132gs_test.py")
+add_test(NAME sc132gs_recording
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test_sc132gs_recording.py")
+add_test(NAME sc132gs_roi
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test_sc132gs_roi.py")
+add_test(NAME sc132gs_color_scan
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test_sc132gs_color_scan.py")
+add_test(NAME sc132gs_wb_calibrate
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test_sc132gs_wb_calibrate.py")
 add_test(NAME rtos_scripts
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test_rtos_scripts.py")
 add_test(NAME cpp_structure_rules

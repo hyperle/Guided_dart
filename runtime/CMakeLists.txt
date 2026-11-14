@@ -10,10 +10,16 @@ dart_add_cpp_library(dart_application application.cpp argument_parser.cpp record
 target_link_libraries(dart_application PUBLIC dart_detection dart_control dart_recording
     dart_imu_logging dart_pwm dart_platform dart_device_services dart_streaming Threads::Threads)
 
+# The process entry parses hardware options. Neither the application nor its
+# business components depend on this board-specific argument bundle.
+dart_add_cpp_library(dart_board_arguments
+    "${PROJECT_SOURCE_DIR}/include/firmware/src/board/k230_arguments.cpp")
+target_link_libraries(dart_board_arguments PUBLIC dart_application dart_camera_k230_adapter)
+
 if(DART_CAMERA_K230)
     add_executable(dart_app dart_entry.cpp)
     target_compile_options(dart_app PRIVATE -Wall -Wextra -Wpedantic)
-    target_link_libraries(dart_app PRIVATE dart_application dart_board Threads::Threads)
+    target_link_libraries(dart_app PRIVATE dart_application dart_board dart_board_arguments Threads::Threads)
     set_target_properties(dart_app PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/dart_app")
 

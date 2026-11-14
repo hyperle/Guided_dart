@@ -56,7 +56,7 @@ class RecorderComponentTest final {
             for (std::size_t i = 0; i < slots.size(); ++i) {
                 slots[i].owner = this;
                 slots[i].release = release;
-                slots[i].view.luma = pixels[i];
+                slots[i].view.pixels = pixels[i];
                 slots[i].view.width = slots[i].view.stride = info.width;
                 slots[i].view.height = info.height;
             }
@@ -87,7 +87,6 @@ class RecorderComponentTest final {
         }
         camera::State state() const noexcept override { return state_; }
         const camera::FrameInfo& frame_info() const noexcept override { return info; }
-        std::expected<void, camera::CameraError> set_fixed_exposure_lines(std::uint32_t) noexcept override { return {}; }
         std::uint32_t capacity() const noexcept override { return slots.size(); }
         std::uint32_t outstanding() const noexcept override {
             unsigned count = 0;
@@ -134,11 +133,11 @@ class RecorderComponentTest final {
         assert(frames.prepare(config, status));
         frames.open();
         auto first = camera.acquire({});
-        const auto* address = first->lease.view().luma.data();
+        const auto* address = first->lease.view().pixels.data();
         assert(frames.try_submit(std::move(first->lease)) == recorder::Admission::kAccepted);
         assert(!first->lease.valid() && camera.outstanding() == 1);
         auto owned = frames.take();
-        assert(owned.lease.view().luma.data() == address);
+        assert(owned.lease.view().pixels.data() == address);
         auto second = camera.acquire({});
         assert(frames.try_submit(std::move(second->lease)) == recorder::Admission::kBusy);
         assert(second->lease.valid() && second->lease.release());
@@ -220,7 +219,8 @@ class RecorderComponentTest final {
         assert(created && runner.start(std::move(*created)));
         until([&] { return status.started(); });
         detection::DetectorStatus detection_status;
-        const executor::Component::Spec detector_spec{"detector", "detector", 240.0, {}};
+        // Detection is off: the recorder consumes Y8, the color detector RGB565.
+        const executor::Component::Spec detector_spec{"detector", "detector", 240.0, {{"enabled", 0.0}}};
         auto detector_result = detection::DetectorFactory::create(detector_spec, camera,
             executor::Output<detection::Point>{board.target}, detection_status,
             [&](camera::FrameLease& lease, const detection::DetectResult*) {

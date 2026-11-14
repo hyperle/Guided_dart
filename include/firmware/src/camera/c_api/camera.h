@@ -9,7 +9,7 @@
 extern "C" {
 #endif
 
-#define DART_CAMERA_ABI_VERSION 6u
+#define DART_CAMERA_ABI_VERSION 7u
 #define DART_CAMERA_MAX_BUFFERS 10u
 /* Ceiling for config.max_outstanding_frames. A held lease keeps one grayscale
  * CPU slot busy. RAW DMA dumps are released before a lease is published.
@@ -52,7 +52,7 @@ typedef struct dart_camera_config {
     uint32_t sensor_width;
     uint32_t sensor_height;
     uint32_t sensor_fps;      /* Zero: no rate request; readback may be unknown. */
-    uint32_t output_width;    /* Both zero: follow mode; RAW backend requires native size. */
+    uint32_t output_width;    /* Both zero: sensor backend default (RAW: native size). */
     uint32_t output_height;
     uint32_t capture_buffers; /* Reserved capacity hint, 3..10; K230 MCM ring is fixed at 4. */
     uint32_t channel_buffers; /* Grayscale lease capacity bound, 3..10. */
@@ -64,6 +64,7 @@ typedef struct dart_camera_config {
     uint32_t initial_exposure_lines;
     uint32_t mirror;                 /* 0: none, 1: horizontal, 2: vertical, 3: both. */
     uint32_t raw10_layout;           /* Explicit DDR packing; verify with sensor test pattern. */
+    uint32_t analog_gain_milli;      /* Fixed mode: sensor analog gain x1000; 0 keeps init gain. */
 } dart_camera_config_t;
 
 typedef struct dart_camera_caps {
@@ -80,7 +81,8 @@ typedef struct dart_camera_caps {
 typedef struct dart_camera_frame {
     uint32_t abi_version;
     uint32_t struct_size;
-    /* Read-only linear grayscale Y8 (RAW10 >> 2), valid until successful release.
+    /* Read-only linear grayscale Y8 (RAW10 >> 2, or the ISP luma plane), valid
+     * until successful release.
      * Each lease owns a separate preallocated CPU buffer. RAW DMA memory is
      * never modified. Every row is stride bytes; width bytes are pixels.
      */
@@ -113,8 +115,8 @@ int dart_media_destroy(dart_media_t* media);
 int dart_camera_create(dart_camera_t** camera);
 int dart_camera_init(
     dart_camera_t* camera, dart_media_t* media, const dart_camera_config_t* config);
-/* Powers/initializes sensor, starts receiver and sensor, prepares RAW mappings,
- * then applies initial fixed exposure.
+/* Powers/initializes sensor, starts receiver and sensor, prepares DMA mappings,
+ * then applies the configured analog gain and initial fixed exposure.
  * Zero initial_exposure_lines preserves the sensor's initialized exposure.
  */
 int dart_camera_start(dart_camera_t* camera);

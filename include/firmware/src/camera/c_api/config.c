@@ -47,7 +47,7 @@ int dart_camera_config_validate(const dart_camera_config_t* config) {
         || config->raw10_layout > DART_CAMERA_RAW10_PACKED_LSB
         || config->exposure_mode > DART_CAMERA_EXPOSURE_AUTO
         || (config->exposure_mode == DART_CAMERA_EXPOSURE_AUTO
-            && config->initial_exposure_lines != 0u)) {
+            && (config->initial_exposure_lines != 0u || config->analog_gain_milli != 0u))) {
         return DART_CAMERA_E_CONFIG_INVALID;
     }
     return DART_CAMERA_OK;

@@ -55,7 +55,11 @@ if(DART_CAMERA_CLANGD_COMMANDS AND NOT DART_CAMERA_K230)
         "${_camera_dir}/k230/media.c"
         "${_camera_dir}/k230/frame.c"
         "${_camera_dir}/k230/mcm.c"
-        "${_camera_dir}/k230/exposure.c")
+        "${_camera_dir}/k230/exposure.c"
+        "${_camera_dir}/k230/sensor.c"
+        "${_camera_dir}/k230/sc038hgs.c"
+        "${_camera_dir}/k230/sc132gs.c"
+        "${_camera_dir}/k230/isp.c")
     target_link_libraries(dart_camera_k230_compile_commands PRIVATE k230_rtos_app)
     target_compile_features(dart_camera_k230_compile_commands PRIVATE c_std_11)
     target_compile_options(dart_camera_k230_compile_commands PRIVATE -Wall -Wextra -Wpedantic)
@@ -102,7 +106,8 @@ if(DART_CAMERA_K230)
         message(FATAL_ERROR "Missing RT-Smart linker script: ${K230_LINK_SCRIPT}")
     endif()
     _dart_camera_add_library(dart_camera_k230
-        k230/lifecycle.c k230/media.c k230/frame.c k230/exposure.c k230/mcm.c)
+        k230/lifecycle.c k230/media.c k230/frame.c k230/exposure.c k230/mcm.c k230/isp.c
+        k230/sensor.c k230/sc038hgs.c k230/sc132gs.c)
     target_link_options(dart_camera_k230 INTERFACE -Wl,--wrap=ioctl)
     target_link_libraries(dart_camera_k230 PUBLIC dart_camera_core)
     target_link_libraries(dart_camera_k230 PRIVATE k230_rtos_app
@@ -118,13 +123,15 @@ endif()
 
 dart_add_cpp_library(dart_camera_acl
     "${_camera_dir}/error.cpp" "${_camera_dir}/frame_lease.cpp"
-    "${_camera_dir}/interface.hpp" "${_camera_dir}/k230/camera.hpp")
-target_include_directories(dart_camera_acl PUBLIC "${_dart_include}")
-target_link_libraries(dart_camera_acl PUBLIC dart_camera_types dart_camera_core)
+    "${_camera_dir}/interface.hpp")
+target_link_libraries(dart_camera_acl PUBLIC dart_camera_types)
+
+# Only concrete adapter consumers instantiate Camera<N> and receive its C ABI
+# and SDK compilation settings. Public capture contracts remain backend-free.
+add_library(dart_camera_k230_adapter INTERFACE)
+target_link_libraries(dart_camera_k230_adapter INTERFACE dart_camera_acl dart_camera_core)
 if(DART_CAMERA_K230)
-    # The template adapter is compiled by its consumers. Propagate the
-    # firmware routing configuration together with its C backend dependency.
-    target_link_libraries(dart_camera_acl PUBLIC dart_camera_k230 k230_rtos_app)
+    target_link_libraries(dart_camera_k230_adapter INTERFACE dart_camera_k230 k230_rtos_app)
 endif()
 
 # ---------------------------------------------------------------------------
@@ -276,7 +283,8 @@ endif()
 
 # The composition root selects actual backends only when they are enabled.
 dart_add_cpp_library(dart_board "${_dart_src}/board/k230.cpp")
-target_link_libraries(dart_board PUBLIC dart_device_services dart_imu_logging dart_streaming)
+target_link_libraries(dart_board PUBLIC dart_device_services dart_imu_logging dart_streaming
+    dart_camera_k230_adapter)
 if(DART_CAMERA_K230)
     target_compile_definitions(dart_board PRIVATE DART_APP_VIDEO_K230=1)
     target_link_libraries(dart_board PUBLIC dart_video_encoder_k230)

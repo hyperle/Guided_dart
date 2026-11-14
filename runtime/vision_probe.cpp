@@ -23,8 +23,6 @@ public:
         std::uint32_t exposure_lines = 250;
         std::uint32_t warmup_seconds = 1;
         std::uint32_t measure_seconds = 8;
-        std::uint32_t threshold = 50;
-        float min_contrast = 12.0F;
     };
 
     int run() noexcept {
@@ -118,24 +116,27 @@ private:
                   static_cast<unsigned long long>(result.source_delta_raw.max_us));
     }
     bool run_case(const Case& item) noexcept {
-        camera::Controls controls{};
-        controls.initial_exposure_lines = settings_.exposure_lines;
-        auto created = board::create_camera(controls);
+        camera::k230::Camera<4>::Config config{};
+        config.initial_exposure_lines = settings_.exposure_lines;
+        auto created = board::create_camera(config);
         if (!created || !*created) {
             if (!created) camera_error("create", created.error());
             return false;
         }
         auto camera = std::move(*created);
+        if (item.vision && !detection::Detect::Supports(camera->frame_info().format)) {
+            // The color detector needs RGB565; a Y8 camera only measures capture.
+            log_.line("level=WARN module=vision_probe op=case_skip case=%s reason=unsupported_format\n",
+                      item.name);
+            return true;
+        }
         executor::AtomicValue<detection::Point> target{detection::Point::missing()};
         detection::DetectorStatus status{};
         Result result{};
         bool measuring = false;
         const executor::Component::Spec spec{
             "vision_probe", "detector", 240.0,
-            {{"enabled", item.vision ? 1.0 : 0.0},
-             {"threshold", static_cast<double>(settings_.threshold)},
-             {"workspace.min_contrast", settings_.min_contrast},
-             {"acquire_ms", 200.0}, {"max_acquire_errors", 8.0}}};
+            {{"enabled", item.vision ? 1.0 : 0.0}, {"acquire_ms", 200.0}, {"max_acquire_errors", 8.0}}};
         auto component = detection::DetectorFactory::create(
             spec, *camera, executor::Output<detection::Point>{target}, status,
             [&](camera::FrameLease& lease, const detection::DetectResult* detected) {

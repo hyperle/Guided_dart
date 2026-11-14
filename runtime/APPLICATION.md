@@ -1,7 +1,9 @@
 # 应用装配与组件执行
 
 `runtime/dart_entry.cpp` 是板级进程入口，通过设备工厂选择相机、PWM、IMU 和网络适配。
-`application.hpp/.cpp` 将这些接口连接到功能组件，`argument_parser.hpp/.cpp` 解析启动参数。
+`application.hpp/.cpp` 将这些接口连接到功能组件，`argument_parser.hpp/.cpp` 解析通用启动参数。
+`board/k230_arguments.hpp/.cpp` 通过参数扩展回调解析曝光行数和 RAW10 布局，
+入口绑定配置到相机工厂；通用应用不持有或解释这些硬件参数。
 `dart_application` 和 `dart_app` 目标由 `runtime/CMakeLists.txt` 声明。
 
 | 文件 | 职责 |
@@ -9,9 +11,9 @@
 | `component.hpp` | Component 生命周期、输入输出端口、配置与注册接口 |
 | `tunner.hpp` | Tunner 持有一个组件和执行线程，提供停止、回收、运行结果 |
 | `application.hpp/.cpp` | Application 组装具体组件，共享资源、通道、诊断和故障隔离 |
-| `argument_parser.hpp/.cpp` | 命令行参数校验及录像配置映射 |
+| `argument_parser.hpp/.cpp` | 通用参数校验、板级参数扩展回调及录像配置映射 |
 | `recording_trigger.hpp/.cpp` | IMU 自动录像触发策略，只发布内存请求 |
-| `dart_entry.cpp` | main() 注入板级工厂并调用 run_application() |
+| `dart_entry.cpp` | main() 解析板级参数，绑定工厂配置并调用 run_application() |
 
 ## 接线与运行
 
@@ -32,6 +34,9 @@ IMU Session -> 缓存快照 -> Blackboard.imu_state -> 控制组件
 `Tunner::finished()/error()` 可并发查询；`start/request_stop/join/stop` 由生命周期所属线程调用。
 运行错误优先于退出错误报告，组件、设备和通道在 join 完成前保持有效。
 
+入口持有相机工厂的配置上下文直到应用返回；工厂只在采集初始化时被调用。
+`Application`、识别和录像只链接公共相机库，SDK 由具体板级适配目标提供。
+
 Detector 的逐帧循环在应用线程调用 `step()`；相机创建、初始化、取帧、释放和销毁均在该线程。
 每轮取帧前后都排空录像归还的租约。录像忙时通道返回拒收，Detector 自己释放当前帧并继续。
 交接只移动 FrameLease，不复制像素；相机 RAW10 解包、编码结果和 Wi-Fi 固有的复制另计。
@@ -48,6 +53,13 @@ IMU 采样保持独立；控制读取 Session 缓存并更新 Blackboard，不�
 [launcher/startup.list](launcher/startup.list) 当前使用 PNGS、30 FPS。
 默认四路初始脉宽为 `1445,1490,1150,1475` µs，目标修正上限为 150 µs。
 未显式提供 `--aim` 时，装配层从相机实际尺寸取得图像中心。
+
+识别参数用可重复的 `--detect KEY=VALUE` 传入，键为 `Detect::Config` 字段路径
+（与 `tools/sc132gs_test.py` 的 `DETECTOR_CONFIG` 同名，颜色阈值为 `color.<green|red|blue>.<l|a|b>_<min|max>`），
+解析时即用真实配置校验，未知键或非法值直接报错退出。装配层按相机 `frame_info().format`
+决定能力：识别需要 RGB565，录像和 Wi-Fi 回传需要 Y8；不满足的功能在启动时记录
+`result=unsupported_format` 并关闭，其余功能继续。舵机输出依赖识别，随识别一起关闭。
+`--threshold` 只用于录像 DBV/PBM 二值导出；原灰度识别的 `--min-contrast` 已移除。
 
 检测 CSV 的字段与帧身份由 Application 组织，通过有界异步 CsvWriter 输出。
 应用日志中的 `module=servo op=status pulse_us` 是实际成功下发的四路值；

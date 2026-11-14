@@ -70,7 +70,7 @@ void run() {
     assert(session.start(path, 32, 32, &create_transport));
     std::vector<std::byte> pixels(32 * 40, std::byte{123});
     camera::FrameView frame;
-    frame.luma = pixels;
+    frame.pixels = pixels;
     frame.width = frame.height = 32;
     frame.stride = 40;
     frame.sequence = 1;
@@ -84,7 +84,7 @@ void run() {
     assert(opens == 1 && uploads == 0);
     const auto stats = session.stats();
     assert(stats.accepted > 5 && stats.encoded > 5 && stats.jpeg_replaced > 0);
-    frame.luma = {};
+    frame.pixels = {};
     assert(!session.try_submit(frame));
     assert(session.stats().invalid == 1);
     stalled = false;
@@ -97,7 +97,7 @@ void run() {
     // transport before destruction. No network worker retains camera pixels.
     stalled = true;
     assert(session.start(path, 32, 32, &create_transport));
-    frame.luma = pixels;
+    frame.pixels = pixels;
     frame.received = std::chrono::duration_cast<std::chrono::microseconds>(
         std::chrono::steady_clock::now().time_since_epoch());
     assert(session.try_submit(frame));

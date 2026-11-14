@@ -1,16 +1,24 @@
 # Camera ACL
 
-C++ 通过所需 `.hpp` 使用接口、帧类型和适配器，通过 `dart_camera_acl` 静态库
-取得普通实现及 C ABI 依赖。C 数据面保留 `.c` / `.h`。
-头文件按需设置，模板定义保留在头文件中；主机相机契约/适配测试与交叉应用完成最终链接。
+上层通过 `ICamera`、`FrameLease` 和只读 `FrameView` 使用相机；帧格式由 `PixelFormat` 标明。
+`dart_camera_types` 提供只读帧类型，`dart_camera_acl` 提供公共错误和租约实现，
+两者均不依赖具体后端、C 采集实现或 SDK。
+`dart_camera_k230_adapter` 供板级代码实例化 `Camera<N>`，承接 C ABI 与 SDK 编译配置；
+启用 K230 时链接实际的 `dart_camera_k230` 数据面。C 数据面保留 `.c` / `.h`。
 
 | 文件 | 类 / 职责 |
 |---|---|
 | `frame_view.hpp` | `FrameView`，L3 只读帧数据 |
-| `interface.hpp` | `ICamera`、曝光/RAW10 布局、实际尺寸与取帧契约 |
+| `interface.hpp` | `ICamera`、稳定输出尺寸、生命周期与有界取帧契约 |
 | `frame_lease.cpp` | `FrameLease` 的移动与释放语义，以及后端槽位与受限构造入口 |
-| `error.cpp` | 错误分类、上下文、原生码翻译及有界诊断文本 |
-| `k230/camera.hpp` | `Camera<N>`，K230 生命周期、曝光调整与 C ABI 适配 |
+| `error.cpp` | 公共错误分类、上下文及有界诊断文本 |
+| `k230/camera.hpp` | `Camera<N>` 及其 `Config`，K230 生命周期、曝光与 C ABI 适配 |
+| `k230/error.hpp`、`k230/error_codes.h` | K230 原生错误码、SDK 位域翻译 |
+| `k230/sensor.h`、`k230/sensor.c` | 内部 C 传感器操作表和选择入口 |
+| `k230/exposure.c` | 曝光状态/范围检查及操作表分派 |
+| `k230/sc038hgs.c` | SC038HGS 模式约束、曝光寄存器和 RAW10 灰度转换 |
+| `k230/sc132gs.c` | SC132GS 默认模式/输出尺寸、经驱动 MPI 的曝光与模拟增益、亮度平面拷贝 |
+| `k230/isp.c` | ISP 流水线的 VICAP 设备与 YUV420SP 通道配置 |
 
 曝光设置通过 `Camera<N>::set_fixed_exposure_lines()` 完成：检查状态、查询后端
 行数范围并钳位，后端负责曝光编码和帧长调整。请求值、范围和实际指令仅在诊断
@@ -19,7 +27,10 @@ C++ 通过所需 `.hpp` 使用接口、帧类型和适配器，通过 `dart_came
 ```cpp
 #include "camera/k230/camera.hpp"
 
-auto created = dart::camera::k230::Camera<4>::create();
+using Camera = dart::camera::k230::Camera<4>;
+Camera::Config config{};
+config.initial_exposure_lines = 400;
+auto created = Camera::create(config);
 if (!created) {
     const auto& error = created.error(); // 直接持有错误值，无需解引用错误指针。
     // 根据 error.kind() / error.code() 决定恢复动作。
@@ -28,19 +39,38 @@ if (!created) {
 
 相机操作返回 `std::expected<T, CameraError>`。错误保存定长错误码、分类和上下文，
 可平凡复制，不使用继承、虚函数或动态分配。原生错误码以及传感器模式、帧几何、
-缓存、曝光和释放失败的专用诊断字段集中保留在 `error.cpp`。
+缓存、曝光和释放失败的专用诊断字段由公共错误值持有；K230 原生码的
+module/level/errid 位域由适配层解释，写入错误值自有的定长诊断缓冲。
 租约析构或移动覆盖时若释放失败，槽位用 `std::optional<CameraError>` 保存错误；
 相机下一次受保护操作先重试释放，再继续工作。无帧和容量耗尽仍是正常取帧结果。
 
-L4 只依赖 `camera/frame_view.hpp` 与 `dart_camera_types`，应用组合根选择具体相机。
-业务采集流程注入 `ICamera`，不请求采集模式、分辨率、帧率、CSI 或缓冲池配置。
-`frame_info()` 只读回实际输出尺寸，供消费者预分配；逐帧尺寸和 stride 来自 `FrameView`。
-`Controls` 提供曝光与 RAW10 DDR 布局；K230 工厂从固件可用模式中选择，CSI 来自
-`CONFIG_MPP_SENSOR_DEFAULT_CSI`。`dart_camera_acl` 向模板消费者传播 `k230_rtos_app` 的 SDK 编译配置，
-C 后端也直接消费它，不能依赖 C 后端的 PRIVATE 配置向上传递。
+业务采集组件只依赖 `ICamera` 与公共相机库；算法和只读消费者按需使用
+`FrameView` 与 `dart_camera_types`。每帧携带 `format`、真实宽、高和以字节计的 stride，
+`valid()` 统一检查几何与缓冲长度，`row(y)` 取行首。`kY8` 每像素 1 字节灰度；
+`kRgb565` 每像素一个小端 16 位字，R 在高 5 位（CanMV/OpenMV 内存布局）。
+`frame_info()` 在工厂创建完成、启动采集前可用，给出尺寸、格式和 `pixel_aspect`
+（单像素物理宽/高，ISP 非等比缩放时由后端给出，如 SC132GS 1080×1280→480×640 为 1.125）；
+这些值在相机实例存续期间保持稳定。消费者按格式取舍：颜色识别只接受 `kRgb565`，
+录像各编码器与 Wi-Fi JPEG 回传只接受 `kY8`，格式不符时由应用在启动阶段记录并关闭对应功能。
+当前 K230 后端只输出 `kY8`：SC038HGS 为 RAW10 解包，SC132GS 为 ISP 输出的亮度平面；
+SC132GS 的 RGB565 ISP 输出尚未接入，因此该相机上颜色识别仍按格式关闭。
+租约持有期间像素有效，释放与相机操作归属采集线程，取帧/释放使用预分配存储。
+
+曝光行数和 RAW10 DDR 布局属于 `camera::k230::Camera<N>::Config`，不出现在 `ICamera`
+或通用应用参数中。`board/k230_arguments.hpp/.cpp` 解析原有 `--exp`、`--raw-layout`
+和 `--ae` 选项；入口绑定配置到 `platform::CameraFactory` 的上下文，并持有它直到
+`Application::run()` 返回。应用只调用工厂，不解释硬件配置。
+具体类保留 `set_fixed_exposure_lines()`；公共采集接口不要求所有硬件提供按行曝光。
+
+K230 工厂从固件可用模式中选择，CSI 来自 `CONFIG_MPP_SENSOR_DEFAULT_CSI`。
+只有具体适配目标传播 `k230_rtos_app` 的 SDK 编译配置，C 后端也直接消费它。
 RISC-V 模板适配器缺少此宏时编译失败，避免把 CSI2 板卡静默当作 CSI0 探测。
+传感器操作表选择各型号的模式校验、曝光和像素转换；MPP、VB 池和 DMA 生命周期留在
+K230 采集实现。当前注册 SC038HGS（MCM RAW10）和 SC132GS（ISP YUV420SP），
+SC038HGS 的模式约束保持不变。
+新增同平台传感器需提供实际驱动、操作实现及注册；其它平台可直接实现 `ICamera`。
 硬件探测失败返回错误，应用停用采集并保留独立服务。
-代码通过主机回归和交叉链接验证；下面的硬件说明仍需真实板端验证。
+本次接口重构仅落盘，未运行主机测试、交叉构建或板端验证。
 
 ## SC038HGS / Dart V1
 
@@ -65,7 +95,7 @@ MCM 固定四槽环形数组，配置缓冲数固定为 4，不随 CPU 租约容
 [`k230/mcm_abi.json`](k230/mcm_abi.json) 持有，正式构建与独立 RAW 探针共用。
 更新 SDK 时必须重新核查私有接口，再更新这份清单。
 
-`Controls::raw10_layout` / `--raw-layout` 默认 `packed10-lsb`：每 4 个 RAW10 像素
+`Camera<N>::Config::raw10_layout` / `--raw-layout` 默认 `packed10-lsb`：每 4 个 RAW10 像素
 按低位连续打包为小端 40 位字。这与 CSI 线上 MIPI RAW10 的排列不同。
 2026-10-20 实板渐变图全部 307,200 像素符合连续规律，8 帧短时到达约 96 FPS。
 当前 K230 后端只接受这个已验证布局；通用解包工具仍保留三种候选格式供其它数据分析。
@@ -73,8 +103,7 @@ MCM 固定四槽环形数组，配置缓冲数固定为 4，不随 CPU 租约容
 `c_api/raw10.c` 通过 `dart_camera_raw10_gray()` 执行 `raw10 >> 2`，输出线性灰度 Y8。
 不做黑电平校正、gamma 或阈值二值化；每个公开租约拥有独立的预分配 CPU 灰度缓冲。
 RAW dump 在转换完成后立即归还，录像持有灰度缓冲不会占用 DMA 环。
-识别器和录像使用同一帧。`--threshold` 仅控制候选提取，`--min-contrast` 控制候选与
-背景的最小亮度差；两者均不修改相机像素。默认 PGM 和可选 PNG 保留灰度，
+颜色识别不接受该灰度帧（见上）。默认 PGM 和可选 PNG 保留灰度，
 显式选择 DBV/PBM 时才在录像器内按 `--threshold` 导出二值图。软件镜像在解包时完成。
 C ABI 已升至 6，移除了相机二值阈值配置；相机消费者与 CanMV 解释器需一起重新编译。
 
@@ -89,10 +118,37 @@ C ABI 已升至 6，移除了相机二值阈值配置；相机消费者与 CanMV
 板端先验证 RAW10 排列、首帧、灰度图和稳定录像，再标定像素时钟、黑电平、
 亮度响应与缓存一致性；主机模拟和交叉编译不能验证这些硬件行为。
 
+## SC132GS / Dart V1 (RT-Smart)
+
+The SC132GS image routes the sensor to CSI0 (4 lanes). The SDK probe prefers the
+highest frame rate (640×480@240), so an automatic request re-probes the sensor's
+default mode, 1080×1280@120. The backend mirrors the board-verified CanMV setup:
+`VICAP_WORK_OFFLINE_MODE` with four VICAP-owned RAW input buffers; every ISP block
+except AE, AWB/WB, 3DNR, AF and HDR; one YUV420SP channel at 480×640 with no crop
+window, so the ISP scales the whole view (`pixel_aspect` 1.125). Outputs at the
+native 1080 width are rejected: on CanMV they stalled the ISP and wedged stop().
+This SDK ignores a caller-supplied channel pool, so the channel pool is VICAP's;
+start() adopts it from the first frame and maps each block's luma plane (rows at a
+16-pixel pitch). Each frame's luma is copied into the lease slot and the dump is
+released at once, as on the RAW path. Mirror and AUTO exposure are rejected.
+
+Exposure lines go through `kd_mpi_sensor_intg_time_set` (one line is 1/(120×1350) s,
+about 6.17 µs; at most 1342 lines) and are read back; `--gain X` sets the analog
+gain (1..28.5) through `kd_mpi_sensor_again_set`. Frame timing is unchanged.
+
+Board results, 2026-11-14 (RTOS_K230D_Dart_V1_SC132GS image, `dart_app`):
+capture held 120.0 fps for minutes with clean stop and repeated restarts. With
+`--exp 400` and the initialized gain the luma range was 71..93; `--exp 1300
+--gain 8` gave mean 142 (p1..p99 103..178) indoors. Recording to `/data`: PGM
+reached ~16 fps (about 50–64 ms per 307 KB write), PNGS ~24 fps (~25 ms zlib per
+frame); H.264 at `--rec-fps 60` wrote 10531 frames in 178.9 s (59.0 fps) in one
+session, decoding with zero errors. Orientation, focus and color were not checked
+against a known target.
+
 ## Exposure
 
 The C++ and C exposure APIs use integer sensor lines; ABI version 5 rejects
-configurations with the old microsecond semantics. `Controls::initial_exposure_lines`
+configurations with the old microsecond semantics. `Camera<N>::Config::initial_exposure_lines`
 defaults to zero (preserve initialization), while the application defaults to 400.
 Startup and later adjustments use the same setter and line range, 4..65509.
 The C++ adapter clamps requests; the C backend rejects values outside that range.
@@ -143,11 +199,10 @@ factory (`dart::camera::k230::Camera<N>::create`), which sizes the lease slots s
 removes the per-frame allocation; `capacity()` and `outstanding()` let a producer
 apply its own bounded-drop policy before calling `acquire()`.
 
-A lease must be released before the camera is destroyed. Destroying the camera
-first does not free the frame — the data plane refuses to stop while a lease is
-active — so such a lease is detached and a later release reports a stale lease
-instead of reaching into a destroyed object. The SDK handles are retained for an
-explicit retry rather than dropped silently.
+A lease must be released before the camera is destroyed. Its slot is owned by
+the camera, so detachment does not extend slot lifetime. Accessing a lease after
+camera destruction violates the lifetime contract. The C data plane refuses to
+stop with active leases and retains handles when cleanup cannot complete.
 
 Startup/shutdown may allocate/free. Shutdown order is release frame, camera
 deinit, camera destroy, media destroy. Failed cleanup retains handles and pool
@@ -187,7 +242,7 @@ cmake -S . -B /tmp/dart-camera-cross \
   -DK230_SDK_ROOT=/mnt/mydata/kRTOSSDK \
   -DDART_CAMERA_K230=ON
 cmake --build /tmp/dart-camera-cross \
-  --target dart_camera_k230 dart_camera_acl
+  --target dart_app
 ```
 
 `K230_MPP_LIB_DIR` and `K230_LINK_SCRIPT` are explicit override points for other

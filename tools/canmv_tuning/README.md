@@ -76,10 +76,10 @@ Detect/Track 分工要求 `_dart_detect.TRACK_FEATURE_VERSION >= 1`。
 
 | Python 参数 | RT-Smart 对应项 | 单位/语义 |
 |---|---|---|
-| `EXPOSURE_LINES` | `--exp` / `Controls::initial_exposure_lines` | 整行；0 保留初始化值，否则 4..65509 |
+| `EXPOSURE_LINES` | `--exp` / `Camera<N>::Config::initial_exposure_lines` | 整行；0 保留初始化值，否则 4..65509 |
 | `GRAY_THRESHOLD` | `--threshold` / `RoiDetector::Config::threshold` | 0..255；灰度候选下限，包含等号，不修改图像 |
 | `DETECTOR_CONFIG["workspace.min_contrast"]` | `--min-contrast` | 候选均值减背景均值的下限，默认 12 个灰度级 |
-| `MIRROR` | `Controls::mirror` | 0 无、1 左右、2 上下、3 两者；软件镜像 |
+| `MIRROR` | `dart_camera_config_t::mirror` | 0 无、1 左右、2 上下、3 两者；软件镜像 |
 | `SERVO_INITIAL_US` | `--servo-initial` / `Channel::initial_pulse_us` | 四路机械零点的绝对脉宽，µs，允许小数 |
 | `SERVO_MAX_DELTA_US` | `--servo-max-delta` / `Config::max_delta_us` | 单个 µs 数值；原生应用合成增量的绝对值上限，默认 500 |
 | `SERVO_MIN_US` / `SERVO_MAX_US` | 仅 Python 零点校验 | 不再导出为原生应用的 min/max 参数 |
@@ -133,7 +133,7 @@ IDE 正常停止会执行 `finally`；强制终止解释器、硬复位或断电
 
 这里提供 `_dart_raw.Camera`，直接编译本仓库现有的 C 相机后端：
 `SC038HGS CSI2 / 640x480 → ONLY_MCM RAW10 packed10-lsb → 原生解包为灰度 Y8（RAW10 >> 2）`。
-曝光复用 `k230/exposure.c`：Group 0 同步提交 `lines*16` 与
+曝光经 `k230/exposure.c` 分派到 `k230/sc038hgs.c`：Group 0 同步提交 `lines*16` 与
 `VTS=max(600, lines+11)`，保留增益和保留位，并读回核对。
 不使用曝光微秒换算、自动曝光、ISP 或缩放。
 

@@ -1,5 +1,6 @@
-# Detector is the only execution component; calculations live in its headers.
-dart_add_cpp_library(dart_detection detector/detector.cpp)
+# Detector is the only execution component; calculation classes have their own sources.
+dart_add_cpp_library(dart_detection
+    detector/color.cpp detector/target.cpp detector/track.cpp detector/detect.cpp detector/detector.cpp)
 target_link_libraries(dart_detection PUBLIC dart_camera_acl Threads::Threads)
 
 dart_add_cpp_library(dart_recording recorder/recorder.cpp recorder/buffered_storage.cpp)

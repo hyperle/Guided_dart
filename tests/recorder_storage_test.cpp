@@ -349,7 +349,7 @@ private:
         assert(rec.start());
         std::array<std::byte, 8> pixels{};
         camera::FrameLeaseAccess::Slot slot{};
-        slot.view.luma = pixels;
+        slot.view.pixels = pixels;
         slot.view.width = slot.view.stride = 8;
         slot.view.height = 1;
         slot.release = release;

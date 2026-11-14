@@ -14,6 +14,8 @@ CAMERA_DIR="${REPO_ROOT}/include/firmware/src/camera"
     "${CAMERA_DIR}/c_api/raw10.c" "${CAMERA_DIR}/k230/mcm.c" \
     "${CAMERA_DIR}/k230/media.c" "${CAMERA_DIR}/k230/frame.c" \
     "${CAMERA_DIR}/k230/lifecycle.c" "${CAMERA_DIR}/k230/exposure.c" \
+    "${CAMERA_DIR}/k230/sensor.c" "${CAMERA_DIR}/k230/sc038hgs.c" \
+    "${CAMERA_DIR}/k230/sc132gs.c" "${CAMERA_DIR}/k230/isp.c" \
     -Wl,--wrap=open -Wl,--wrap=close -Wl,--wrap=mmap -Wl,--wrap=munmap \
     -o "${TEST_DIR}/camera_pool_test"
 "${TEST_DIR}/camera_pool_test"

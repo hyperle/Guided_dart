@@ -16,9 +16,9 @@ public:
     enum class SlotState : std::uint8_t {
         kFree,
         kHeld,
-        /* The camera was destroyed while this lease was still held. The lease can no
-         * longer be released; doing so reports a stale lease instead of calling into
-         * a dead object.
+        /* A backend detached this slot while its storage still exists. This
+         * state does not extend the camera/slot lifetime: leases must always
+         * be released before their owning camera is destroyed.
          */
         kDetached,
     };
@@ -31,13 +31,6 @@ public:
         FrameView view{};
         void* owner = nullptr;
         std::uint64_t token = 0;
-        const std::byte* data = nullptr;
-        std::uint32_t width = 0;
-        std::uint32_t height = 0;
-        std::uint32_t stride = 0;
-        std::uint32_t flags = 0;
-        std::uint64_t source_pts = 0;
-        std::uint64_t received_us = 0;
         ReleaseFunction release = nullptr;
         /* Set when a lease is destroyed without a successful release, so the owning
          * camera can retry it and report it instead of losing it.

@@ -87,9 +87,9 @@ bool Session::try_submit(const camera::FrameView& frame) noexcept {
     }
     if (!accepting_.load())
         return false;
-    if (frame.width != width_ || frame.height != height_ || frame.stride < frame.width
-        || frame.luma.size() < static_cast<std::uint64_t>(height_ - 1) * frame.stride + width_
-        || frame.received.count() < 0) {
+    // The JPEG path transmits grayscale rows only.
+    if (frame.format != camera::PixelFormat::kY8 || !frame.valid() || frame.width != width_
+        || frame.height != height_ || frame.received.count() < 0) {
         ++counts_[kInvalid];
         return false;
     }
@@ -110,7 +110,7 @@ bool Session::try_submit(const camera::FrameView& frame) noexcept {
     for (std::uint32_t row = 0; row < height_; ++row)
         std::memcpy(
             slot.pixels.get() + static_cast<std::size_t>(row) * width_,
-            frame.luma.data() + static_cast<std::size_t>(row) * frame.stride, width_);
+            frame.row(row), width_);
     slot.sequence = frame.sequence;
     slot.received_us = static_cast<std::uint64_t>(frame.received.count());
     raw_pending_ = index;

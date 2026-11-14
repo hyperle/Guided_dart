@@ -82,10 +82,6 @@ class ServiceIsolationTest final {
         }
         camera::State state() const noexcept override { return state_; }
         const camera::FrameInfo& frame_info() const noexcept override { return info_; }
-        std::expected<void, camera::CameraError>
-            set_fixed_exposure_lines(std::uint32_t) noexcept override {
-            return {};
-        }
         std::uint32_t capacity() const noexcept override { return 4; }
         std::uint32_t outstanding() const noexcept override { return 0; }
 
@@ -95,7 +91,7 @@ class ServiceIsolationTest final {
     };
 
     static std::expected<std::unique_ptr<camera::ICamera>, camera::CameraError>
-        create(const camera::Controls&) noexcept {
+        create(const void*) noexcept {
         ++creates_;
         if (mode_ == Failure::kCreate)
             return std::unexpected(failure(camera::Operation::kInitialize));

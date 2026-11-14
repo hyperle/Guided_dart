@@ -93,15 +93,15 @@ public:
     }
 
     std::span<const std::byte> encode(const camera::FrameView& view) noexcept override {
-        if (!started_ || view.width != width_ || view.height != height_ || view.stride < width_
-            || view.luma.size() < static_cast<std::size_t>(height_ - 1U) * view.stride + width_) {
+        if (!started_ || view.format != camera::PixelFormat::kY8 || !view.valid()
+            || view.width != width_ || view.height != height_) {
             (void)fail("input_frame", EINVAL);
             return {};
         }
         auto* y = static_cast<std::byte*>(input_);
         for (std::uint32_t row = 0; row < height_; ++row)
             std::memcpy(y + static_cast<std::size_t>(row) * stride_,
-                        view.luma.data() + static_cast<std::size_t>(row) * view.stride, width_);
+                        view.row(row), width_);
         k_video_frame_info frame{};
         frame.pool_id = input_pool_;
         frame.mod_id = K_ID_VENC;
